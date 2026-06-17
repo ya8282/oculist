@@ -5,7 +5,7 @@
 
   // ── Settings (persisted) ──────────────────────────────────────────────────────
 
-  var settings = { effect: 'pulse', position: 'tr', theme: 'dark' };
+  var settings = { effect: 'hud', position: 'tr', theme: 'dark' };
   try {
     var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
     ['effect', 'position', 'theme'].forEach(function (k) { if (k in saved) settings[k] = saved[k]; });
@@ -80,30 +80,144 @@
     }
   }
 
-  // ── Effects (CSP-Compliant via Web Animations API) ────────────────────────────
+  function animateHUD(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
 
-  function animatePulse(rect) {
-    var cx = rect.left + window.scrollX + rect.width / 2;
-    var cy = rect.top + window.scrollY + rect.height / 2;
-    var pad = Math.max(rect.width / 2, 14);
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
 
-    var fill = document.createElement('div');
-    fill.className = 'oc-beacon';
-    fill.style.cssText = [
+    var hud = document.createElement('div');
+    hud.className = 'oc-beacon';
+    hud.style.cssText = [
       'position:absolute',
-      'left:' + (cx - pad) + 'px', 'top:' + (cy - pad) + 'px',
-      'width:' + (pad * 2) + 'px', 'height:' + (pad * 2) + 'px',
-      'background:#fef08a', 'border-radius:4px',
+      'left:' + x + 'px', 'top:' + y + 'px',
+      'width:' + w + 'px', 'height:' + h + 'px',
       'pointer-events:none', 'z-index:2147483643',
     ].join(';');
-    document.body.appendChild(fill);
+    document.documentElement.appendChild(hud);
 
-    var fillAnim = fill.animate([
-      { opacity: 0.7 },
-      { opacity: 0.5, offset: 0.4 },
+    var corners = ['tl', 'tr', 'bl', 'br'];
+    var cornerSize = Math.max(14, Math.min(w, h, 20));
+    var strokeWidth = 3.5;
+    var color = '#fbbf24';
+
+    var bgFlash = document.createElement('div');
+    bgFlash.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'background:' + color, 'opacity:0.35', 'border-radius:2px', 'pointer-events:none'
+    ].join(';');
+    hud.appendChild(bgFlash);
+
+    bgFlash.animate([
+      { opacity: 0.6, transform: 'scale(1.15)' },
+      { opacity: 0.15, transform: 'scale(1)', offset: 0.25 },
       { opacity: 0 }
     ], {
-      duration: 2200,
+      duration: 1200,
+      easing: 'ease-out',
+      fill: 'forwards'
+    });
+
+    corners.forEach(function (pos) {
+      var c = document.createElement('div');
+      c.style.cssText = [
+        'position:absolute',
+        'width:' + cornerSize + 'px', 'height:' + cornerSize + 'px',
+        'border-color:' + color,
+        'border-style:solid',
+        'border-width:0',
+        'filter:drop-shadow(0 0 6px ' + color + ') drop-shadow(0 0 12px ' + color + ')',
+        'pointer-events:none',
+      ].join(';');
+
+      var startX = 0, startY = 0;
+      var offset = 22;
+      if (pos === 'tl') {
+        c.style.top = '0'; c.style.left = '0';
+        c.style.borderTopWidth = strokeWidth + 'px';
+        c.style.borderLeftWidth = strokeWidth + 'px';
+        startX = -offset; startY = -offset;
+      } else if (pos === 'tr') {
+        c.style.top = '0'; c.style.right = '0';
+        c.style.borderTopWidth = strokeWidth + 'px';
+        c.style.borderRightWidth = strokeWidth + 'px';
+        startX = offset; startY = -offset;
+      } else if (pos === 'bl') {
+        c.style.bottom = '0'; c.style.left = '0';
+        c.style.borderBottomWidth = strokeWidth + 'px';
+        c.style.borderLeftWidth = strokeWidth + 'px';
+        startX = -offset; startY = offset;
+      } else if (pos === 'br') {
+        c.style.bottom = '0'; c.style.right = '0';
+        c.style.borderBottomWidth = strokeWidth + 'px';
+        c.style.borderRightWidth = strokeWidth + 'px';
+        startX = offset; startY = offset;
+      }
+      hud.appendChild(c);
+
+      c.animate([
+        { opacity: 0, transform: 'translate(' + startX + 'px, ' + startY + 'px) scale(2)' },
+        { opacity: 1, transform: 'translate(0, 0) scale(1)', offset: 0.15 },
+        { opacity: 1, transform: 'translate(0, 0) scale(1)', offset: 0.8 },
+        { opacity: 0, transform: 'scale(0.7)' }
+      ], {
+        duration: 1600,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'forwards'
+      });
+    });
+
+    var scan = document.createElement('div');
+    scan.style.cssText = [
+      'position:absolute', 'left:-6px', 'right:-6px',
+      'height:4px', 'background:linear-gradient(90deg, transparent, #fff, ' + color + ', transparent)',
+      'box-shadow:0 0 15px ' + color + ', 0 0 30px ' + color,
+      'opacity:0.95', 'pointer-events:none'
+    ].join(';');
+    hud.appendChild(scan);
+
+    scan.animate([
+      { top: '-8px', opacity: 0 },
+      { top: '-8px', opacity: 1, offset: 0.05 },
+      { top: (h + 8) + 'px', opacity: 1, offset: 0.55 },
+      { top: (h + 8) + 'px', opacity: 0 }
+    ], {
+      duration: 1600,
+      easing: 'ease-in-out',
+      fill: 'forwards'
+    });
+
+    setTimeout(function() {
+      hud.remove();
+    }, 1700);
+  }
+
+  function animateIris(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var w = Math.max(rect.width + 50, 90);
+    var h = Math.max(rect.height + 30, 50);
+
+    var overlay = document.createElement('div');
+    overlay.className = 'oc-beacon';
+    overlay.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'pointer-events:none', 'z-index:2147483641',
+      'background:radial-gradient(ellipse ' + (w * 2.8) + 'px ' + (h * 2.8) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(0, 0, 0, 0.72) 80%)'
+    ].join(';');
+    document.documentElement.appendChild(overlay);
+
+    overlay.animate([
+      { opacity: 0 },
+      { opacity: 1, offset: 0.15 },
+      { opacity: 1, offset: 0.8 },
+      { opacity: 0 }
+    ], {
+      duration: 2000,
       easing: 'ease-out',
       fill: 'forwards'
     });
@@ -111,112 +225,122 @@
     var ring = document.createElement('div');
     ring.className = 'oc-beacon';
     ring.style.cssText = [
-      'position:absolute',
-      'left:' + (cx - pad) + 'px', 'top:' + (cy - pad) + 'px',
-      'width:' + (pad * 2) + 'px', 'height:' + (pad * 2) + 'px',
-      'border:3px solid #fff', 'border-radius:4px',
-      'pointer-events:none', 'z-index:2147483644',
-    ].join(';');
-    document.body.appendChild(ring);
-
-    var ringAnim = ring.animate([
-      { opacity: 1, boxShadow: '0 0 0 0px rgba(245,158,11,1), 0 0 0 0px rgba(255,255,255,0)' },
-      { opacity: 1, boxShadow: '0 0 0 14px rgba(245,158,11,0.85), 0 0 0 4px rgba(255,255,255,1)', offset: 0.18 },
-      { opacity: 0.85, boxShadow: '0 0 0 14px rgba(245,158,11,0.4), 0 0 0 4px rgba(255,255,255,0.5)', offset: 0.60 },
-      { opacity: 0, boxShadow: '0 0 0 44px rgba(245,158,11,0), 0 0 0 44px rgba(255,255,255,0)' }
-    ], {
-      duration: 2200,
-      easing: 'ease-out',
-      fill: 'forwards'
-    });
-
-    Promise.all([fillAnim.finished, ringAnim.finished]).then(function () {
-      fill.remove();
-      ring.remove();
-    }).catch(function () {
-      fill.remove();
-      ring.remove();
-    });
-  }
-
-  function animateSpotlight(rect) {
-    var cx = rect.left + rect.width  / 2;
-    var cy = rect.top  + rect.height / 2;
-    var rx = Math.max(rect.width  + 100, 140);
-    var ry = Math.max(rect.height + 80,   80);
-
-    var el = document.createElement('div');
-    el.className = 'oc-beacon';
-    el.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'position:fixed',
+      'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
+      'width:' + w + 'px', 'height:' + h + 'px',
+      'border:2.5px solid #38bdf8',
+      'border-radius:50%',
+      'box-shadow:0 0 20px #38bdf8, inset 0 0 20px #38bdf8',
       'pointer-events:none', 'z-index:2147483642',
-      'background:radial-gradient(ellipse ' + rx + 'px ' + ry + 'px at ' + cx + 'px ' + cy + 'px,' +
-        'transparent 0%,transparent 50%,rgba(0,0,0,0.85) 90%)'
     ].join(';');
-    document.body.appendChild(el);
+    document.documentElement.appendChild(ring);
 
-    var anim = el.animate([
-      { opacity: 0 },
-      { opacity: 1, offset: 0.10 },
-      { opacity: 0.9, offset: 0.75 },
-      { opacity: 0 }
+    ring.animate([
+      { opacity: 0, transform: 'scale(4)' },
+      { opacity: 1, transform: 'scale(1)', offset: 0.2 },
+      { opacity: 0.85, transform: 'scale(0.95)', offset: 0.8 },
+      { opacity: 0, transform: 'scale(0.75)' }
     ], {
-      duration: 2500,
+      duration: 2000,
+      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      fill: 'forwards'
+    });
+
+    setTimeout(function() {
+      overlay.remove();
+      ring.remove();
+    }, 2100);
+  }
+
+  function animateSweep(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 8) + 'px', 'top:' + (y - 5) + 'px',
+      'width:' + (w + 16) + 'px', 'height:' + (h + 10) + 'px',
+      'overflow:hidden',
+      'pointer-events:none', 'z-index:2147483643',
+    ].join(';');
+    document.documentElement.appendChild(container);
+
+    var trail = document.createElement('div');
+    trail.style.cssText = [
+      'position:absolute', 'top:0', 'bottom:0', 'left:8px',
+      'width:' + w + 'px',
+      'background:linear-gradient(90deg, rgba(245, 158, 11, 0.75) 0%, rgba(251, 191, 36, 0.1) 85%, transparent 100%)',
+      'transform-origin:left',
+      'pointer-events:none'
+    ].join(';');
+    container.appendChild(trail);
+
+    trail.animate([
+      { transform: 'scaleX(0)', opacity: 0 },
+      { transform: 'scaleX(1)', opacity: 1, offset: 0.25 },
+      { transform: 'scaleX(1)', opacity: 0.9, offset: 0.75 },
+      { transform: 'scaleX(1)', opacity: 0 }
+    ], {
+      duration: 1400,
+      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      fill: 'forwards'
+    });
+
+    var line = document.createElement('div');
+    line.style.cssText = [
+      'position:absolute', 'top:0', 'bottom:0', 'left:8px',
+      'width:5px', 'background:#ffffff',
+      'border-left:1.5px solid #f59e0b',
+      'box-shadow:0 0 15px #f59e0b, 0 0 30px #f59e0b, 0 0 50px #f59e0b',
+      'pointer-events:none'
+    ].join(';');
+    container.appendChild(line);
+
+    line.animate([
+      { transform: 'translateX(0px)', opacity: 0 },
+      { transform: 'translateX(0px)', opacity: 1, offset: 0.05 },
+      { transform: 'translateX(' + w + 'px)', opacity: 1, offset: 0.8 },
+      { transform: 'translateX(' + w + 'px)', opacity: 0 }
+    ], {
+      duration: 1400,
+      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      fill: 'forwards'
+    });
+
+    var pop = document.createElement('div');
+    pop.style.cssText = [
+      'position:absolute',
+      'left:' + (w/2) + 'px', 'top:' + (h/2) + 'px',
+      'width:12px', 'height:10px',
+      'border-radius:50%', 'background:#fbbf24',
+      'box-shadow:0 0 25px #fbbf24, 0 0 50px #fbbf24',
+      'opacity:0', 'pointer-events:none'
+    ].join(';');
+    container.appendChild(pop);
+
+    pop.animate([
+      { transform: 'scale(1)', opacity: 0.90 },
+      { transform: 'scale(12)', opacity: 0 }
+    ], {
+      duration: 600,
       easing: 'ease-out',
       fill: 'forwards'
     });
 
-    anim.finished.then(function () {
-      el.remove();
-    }).catch(function () {
-      el.remove();
-    });
-  }
-
-  function animateRing(rect) {
-    var cx = rect.left + window.scrollX + rect.width  / 2;
-    var cy = rect.top + window.scrollY + rect.height / 2;
-    var maxR = Math.round(Math.min(Math.min(window.innerWidth, window.innerHeight) * 0.7, 700));
-
-    var configs = [
-      { r: maxR, duration: 2800 },
-      { r: maxR * 0.55, duration: 3500 }
-    ];
-
-    configs.forEach(function (cfg) {
-      var r = cfg.r;
-      var el = document.createElement('div');
-      el.className = 'oc-beacon';
-      el.style.cssText = [
-        'position:absolute',
-        'left:' + cx + 'px', 'top:' + cy + 'px',
-        'width:0', 'height:0', 'border-radius:50%',
-        'pointer-events:none', 'z-index:2147483642',
-      ].join(';');
-      document.body.appendChild(el);
-
-      var anim = el.animate([
-        { opacity: 1, boxShadow: '0 0 0 0px rgba(56,189,248,.9)' },
-        { opacity: 0.85, boxShadow: '0 0 0 ' + (r * 0.25) + 'px rgba(56,189,248,.65)', offset: 0.20 },
-        { opacity: 0.5,  boxShadow: '0 0 0 ' + (r * 0.72) + 'px rgba(56,189,248,.2)', offset: 0.65 },
-        { opacity: 0,    boxShadow: '0 0 0 ' + r + 'px rgba(56,189,248,0)' }
-      ], {
-        duration: cfg.duration,
-        easing: 'ease-out',
-        fill: 'forwards'
-      });
-
-      anim.finished.then(function () {
-        el.remove();
-      }).catch(function () {
-        el.remove();
-      });
-    });
+    setTimeout(function() {
+      container.remove();
+    }, 1500);
   }
 
   function animate(rect) {
-    ({ pulse: animatePulse, spotlight: animateSpotlight, ring: animateRing }
-      [settings.effect] || animatePulse)(rect);
+    ({ hud: animateHUD, iris: animateIris, sweep: animateSweep }
+      [settings.effect] || animateHUD)(rect);
   }
 
   // ── Match scanning ────────────────────────────────────────────────────────────
@@ -243,15 +367,19 @@
     var normalizedTerm = term.toLowerCase();
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode: function (node) {
-        var parent = node.parentElement;
-        if (!parent || SKIP_TAGS[parent.tagName]) {
+        try {
+          var parent = node.parentElement;
+          if (!parent || SKIP_TAGS[parent.tagName]) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          var style = window.getComputedStyle(parent);
+          if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        } catch (e) {
           return NodeFilter.FILTER_REJECT;
         }
-        var style = window.getComputedStyle(parent);
-        if (style.display === 'none' || style.visibility === 'hidden') {
-          return NodeFilter.FILTER_REJECT;
-        }
-        return NodeFilter.FILTER_ACCEPT;
       }
     });
 
@@ -466,9 +594,9 @@
     ].join(';');
 
     settingsPanel.appendChild(makeSettingsRow('Effect', makeOptionGroup([
-      { value: 'pulse',     label: 'Pulse'     },
-      { value: 'spotlight', label: 'Spotlight' },
-      { value: 'ring',      label: 'Ring'      },
+      { value: 'hud',   label: 'Tactical HUD' },
+      { value: 'iris',  label: 'Cinematic'   },
+      { value: 'sweep', label: 'Laser Sweep' },
     ], settings.effect, function (v) {
       settings.effect = v; saveSettings();
     })));
@@ -514,30 +642,44 @@
   // ── Favicon Management ────────────────────────────────────────────────────────
 
   function setSunglassesFavicon() {
-    originalFavicons = [];
-    var links = document.querySelectorAll("link[rel*='icon']");
-    for (var i = 0; i < links.length; i++) {
-      originalFavicons.push({ el: links[i], parent: links[i].parentNode, nextSibling: links[i].nextSibling });
-      links[i].remove();
-    }
+    try {
+      originalFavicons = [];
+      var links = document.querySelectorAll("link[rel*='icon']");
+      for (var i = 0; i < links.length; i++) {
+        if (links[i] && links[i].parentNode) {
+          originalFavicons.push({ el: links[i], parent: links[i].parentNode, nextSibling: links[i].nextSibling });
+          links[i].remove();
+        }
+      }
 
-    var link = document.createElement('link');
-    link.id = 'oc-favicon';
-    link.rel = 'icon';
-    link.type = 'image/svg+xml';
-    link.href = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">🕶️</text></svg>');
-    document.head.appendChild(link);
+      var link = document.createElement('link');
+      link.id = 'oc-favicon';
+      link.rel = 'icon';
+      link.type = 'image/svg+xml';
+      link.href = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">🕶️</text></svg>');
+      if (document.head) {
+        document.head.appendChild(link);
+      }
+    } catch (e) {
+      console.warn('Oculist: Failed to set custom favicon.', e);
+    }
   }
 
   function restoreFavicons() {
-    var fav = document.getElementById('oc-favicon');
-    if (fav) fav.remove();
+    try {
+      var fav = document.getElementById('oc-favicon');
+      if (fav) fav.remove();
 
-    originalFavicons.forEach(function (item) {
-      if (item.el && item.parent) {
-        item.parent.insertBefore(item.el, item.nextSibling);
-      }
-    });
+      originalFavicons.forEach(function (item) {
+        if (item.el && item.parent) {
+          try {
+            item.parent.insertBefore(item.el, item.nextSibling);
+          } catch (err) {}
+        }
+      });
+    } catch (e) {
+      console.warn('Oculist: Failed to restore original favicons.', e);
+    }
     originalFavicons = [];
   }
 
