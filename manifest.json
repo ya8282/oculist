@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Oculist - High-Visibility Finder",
+  "version": "1.0.0",
+  "description": "Locate search matches instantly with animated visual beacons and CSS Custom Highlight API.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "action": {
+    "default_icon": "icon.svg",
+    "default_title": "Toggle Oculist Finder"
+  },
+  "icons": {
+    "16": "icon.svg",
+    "32": "icon.svg",
+    "48": "icon.svg",
+    "128": "icon.svg"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "MacCtrl+Shift+F"
+      }
+    }
+  }
+}

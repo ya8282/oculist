@@ -6,13 +6,13 @@
   // ── Settings (persisted) ──────────────────────────────────────────────────────
 
   var settings = { effect: 'hud', position: 'tr', theme: 'dark' };
-  try {
-    var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
-    ['effect', 'position', 'theme'].forEach(function (k) { if (k in saved) settings[k] = saved[k]; });
-  } catch (e) {}
 
   function saveSettings() {
-    try { localStorage.setItem('oc-settings', JSON.stringify(settings)); } catch (e) {}
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+      chrome.storage.sync.set({ 'oc-settings': settings });
+    } else {
+      try { localStorage.setItem('oc-settings', JSON.stringify(settings)); } catch (e) {}
+    }
   }
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -79,6 +79,8 @@
       beacons[i].remove();
     }
   }
+
+  // ── Effects (CSP-Compliant via Web Animations API & Document Root Mount) ───
 
   function animateHUD(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
@@ -275,7 +277,7 @@
     trail.style.cssText = [
       'position:absolute', 'top:0', 'bottom:0', 'left:8px',
       'width:' + w + 'px',
-      'background:linear-gradient(90deg, rgba(245, 158, 11, 0.75) 0%, rgba(251, 191, 36, 0.1) 85%, transparent 100%)',
+      'background:linear-gradient(90deg, rgba(245, 158, 11, 0.75) 0%, rgba(251, 191, 36, 0.15) 85%, transparent 100%)',
       'transform-origin:left',
       'pointer-events:none'
     ].join(';');
@@ -446,6 +448,7 @@
     highlightActiveRange(true);
   }
 
+  // Display the active match with the high-visibility visual animation
   function highlightActiveRange(shouldAnimate) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
 
@@ -816,9 +819,32 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
-  document.addEventListener('keydown', keydownHandler, true);
-  setSunglassesFavicon();
-  injectHighlightStyles();
-  buildUI();
+  function boot() {
+    document.addEventListener('keydown', keydownHandler, true);
+    setSunglassesFavicon();
+    injectHighlightStyles();
+    buildUI();
+  }
+
+  // Load settings via chrome.storage.sync with fallback to localStorage
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+    chrome.storage.sync.get('oc-settings', function (data) {
+      if (data && data['oc-settings']) {
+        var saved = data['oc-settings'];
+        ['effect', 'position', 'theme'].forEach(function (k) {
+          if (k in saved) settings[k] = saved[k];
+        });
+      }
+      boot();
+    });
+  } else {
+    try {
+      var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
+      ['effect', 'position', 'theme'].forEach(function (k) {
+        if (k in saved) settings[k] = saved[k];
+      });
+    } catch (e) {}
+    boot();
+  }
 
 })();
