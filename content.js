@@ -45,7 +45,7 @@
   var activeIndex      = -1;
   var lastTerm         = '';
   var originalFavicons = [];
-  var wrap, bar, input, countEl, prevBtn, nextBtn, gearBtn, closeBtn, settingsPanel;
+  var wrap, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
@@ -67,7 +67,7 @@
     document.removeEventListener('keydown', keydownHandler, true);
     delete window.__ocDestroy;
     
-    wrap = bar = input = countEl = prevBtn = nextBtn = gearBtn = closeBtn = settingsPanel = null;
+    wrap = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = [];
   };
 
@@ -371,7 +371,7 @@
       acceptNode: function (node) {
         try {
           var parent = node.parentElement;
-          if (!parent || SKIP_TAGS[parent.tagName]) {
+          if (!parent || SKIP_TAGS[parent.tagName] || parent.closest('#oc-wrap') || parent.closest('.oc-beacon')) {
             return NodeFilter.FILTER_REJECT;
           }
           var style = window.getComputedStyle(parent);
@@ -421,7 +421,7 @@
   // ── Navigation ────────────────────────────────────────────────────────────────
 
   function findNext(backwards) {
-    var term = input.value.trim();
+    var term = input.value;
     if (!term) {
       countEl.textContent = '';
       setNavEnabled(false);
@@ -499,6 +499,13 @@
         btn.style.cursor  = enabled ? 'pointer' : 'default';
       }
     });
+
+    var hasMatches = searchRanges.length > 0;
+    if (replayBtn) {
+      replayBtn.disabled      = !hasMatches;
+      replayBtn.style.opacity = hasMatches ? '1' : '0.3';
+      replayBtn.style.cursor  = hasMatches ? 'pointer' : 'default';
+    }
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────────
@@ -694,7 +701,7 @@
     input.style.borderColor  = t.inputBorder;
     input.style.color        = t.inputText;
     countEl.style.color      = t.subtle;
-    [prevBtn, nextBtn, closeBtn].forEach(function (btn) {
+    [prevBtn, nextBtn, replayBtn, closeBtn].forEach(function (btn) {
       if (btn) btn.style.color = t.subtle;
     });
     if (gearBtn) gearBtn.style.color = settingsPanel ? t.accent : t.subtle;
@@ -750,7 +757,7 @@
     input.addEventListener('input', function () {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function () {
-        var term = input.value.trim();
+        var term = input.value;
         lastTerm = term;
         performSearch(term);
         if (searchRanges.length > 0) {
@@ -769,6 +776,9 @@
     nextBtn = makeIconBtn('▼', 'Next  Enter');
     nextBtn.addEventListener('click', function () { findNext(false); });
 
+    replayBtn = makeIconBtn('↻', 'Replay Effect');
+    replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
+
     gearBtn = makeIconBtn('⚙', 'Options');
     gearBtn.style.fontSize = '15px';
     gearBtn.addEventListener('click', toggleSettings);
@@ -782,6 +792,7 @@
     bar.appendChild(countEl);
     bar.appendChild(prevBtn);
     bar.appendChild(nextBtn);
+    bar.appendChild(replayBtn);
     bar.appendChild(gearBtn);
     bar.appendChild(closeBtn);
     wrap.appendChild(bar);
