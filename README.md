@@ -1,6 +1,6 @@
 # oculist
 
-A high-performance Chrome bookmarklet that provides a non-disruptive, highly visual find-in-page experience. It maps search matches instantly and fires animated beacons to help you instantly spot text occurrences without interfering with host-page styles, layouts, or security policies.
+This is a Chrome bookmarklet that provides a high-visibility find-in-page experience. When performing searches with the search bar it activates, it instantly locates the matches and fires animated beacons to help you instantly spot text occurrences without interfering with host-page styles, layouts, or security policies.
 
 ## How it Works
 
@@ -12,7 +12,7 @@ A high-performance Chrome bookmarklet that provides a non-disruptive, highly vis
 
 ## Core Refined Architecture
 
-Unlike typical search overlays, `oculist` is designed to run safely on complex, modern web applications:
+Unlike typical search overlays, oculist is designed to run safely on complex, modern web applications:
 
 * **CSS Custom Highlight API:** Instead of injecting wrapper tags or modifying the DOM structure—which can break React/Vue Single Page Applications (SPAs) and trigger expensive layout reflows—`oculist` registers matches directly with Chrome's native highlight rendering engine.
 * **Web Animations API:** All search beacon animations are executed programmatically via JavaScript. This avoids injecting stylesheet `@keyframes`, making the bookmarklet fully compatible with secure websites enforcing strict Content Security Policies (CSPs) that block inline style elements (such as GitHub, Twitter, and Google).
@@ -21,7 +21,7 @@ Unlike typical search overlays, `oculist` is designed to run safely on complex, 
 
 ## Installation
 
-_Coming in Phase 3 — bookmarklet compiler and URL will be pasted here._
+TODO
 
 ## Known Limitations
 
