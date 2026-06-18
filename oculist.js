@@ -5,10 +5,19 @@
 
   // ── Settings (persisted) ──────────────────────────────────────────────────────
 
-  var settings = { effect: 'hud', position: 'tr', theme: 'dark' };
+  var settings = {
+    effect: 'hud',
+    position: 'tr',
+    theme: 'dark',
+    matchColor: '#fef08a',
+    activeColor: '#f59e0b',
+    beaconColor: '#fbbf24'
+  };
   try {
     var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
-    ['effect', 'position', 'theme'].forEach(function (k) { if (k in saved) settings[k] = saved[k]; });
+    ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor'].forEach(function (k) {
+      if (k in saved) settings[k] = saved[k];
+    });
   } catch (e) {}
 
   function saveSettings() {
@@ -101,7 +110,7 @@
     var corners = ['tl', 'tr', 'bl', 'br'];
     var cornerSize = Math.max(14, Math.min(w, h, 20));
     var strokeWidth = 3.5;
-    var color = '#fbbf24';
+    var color = settings.beaconColor || '#fbbf24';
 
     var bgFlash = document.createElement('div');
     bgFlash.style.cssText = [
@@ -222,15 +231,17 @@
       fill: 'forwards'
     });
 
+    var color = settings.beaconColor || '#38bdf8';
+
     var ring = document.createElement('div');
     ring.className = 'oc-beacon';
     ring.style.cssText = [
       'position:fixed',
       'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
       'width:' + w + 'px', 'height:' + h + 'px',
-      'border:2.5px solid #38bdf8',
+      'border:2.5px solid ' + color,
       'border-radius:50%',
-      'box-shadow:0 0 20px #38bdf8, inset 0 0 20px #38bdf8',
+      'box-shadow:0 0 20px ' + color + ', inset 0 0 20px ' + color,
       'pointer-events:none', 'z-index:2147483642',
     ].join(';');
     document.documentElement.appendChild(ring);
@@ -260,6 +271,8 @@
     var w = rect.width;
     var h = rect.height;
 
+    var color = settings.beaconColor || '#fbbf24';
+
     var container = document.createElement('div');
     container.className = 'oc-beacon';
     container.style.cssText = [
@@ -275,7 +288,7 @@
     trail.style.cssText = [
       'position:absolute', 'top:0', 'bottom:0', 'left:8px',
       'width:' + w + 'px',
-      'background:linear-gradient(90deg, rgba(245, 158, 11, 0.75) 0%, rgba(251, 191, 36, 0.1) 85%, transparent 100%)',
+      'background:linear-gradient(90deg, ' + hexToRgba(color, 0.75) + ' 0%, ' + hexToRgba(color, 0.15) + ' 85%, transparent 100%)',
       'transform-origin:left',
       'pointer-events:none'
     ].join(';');
@@ -296,8 +309,8 @@
     line.style.cssText = [
       'position:absolute', 'top:0', 'bottom:0', 'left:8px',
       'width:5px', 'background:#ffffff',
-      'border-left:1.5px solid #f59e0b',
-      'box-shadow:0 0 15px #f59e0b, 0 0 30px #f59e0b, 0 0 50px #f59e0b',
+      'border-left:1.5px solid ' + color,
+      'box-shadow:0 0 15px ' + color + ', 0 0 30px ' + color + ', 0 0 50px ' + color,
       'pointer-events:none'
     ].join(';');
     container.appendChild(line);
@@ -318,8 +331,8 @@
       'position:absolute',
       'left:' + (w/2) + 'px', 'top:' + (h/2) + 'px',
       'width:12px', 'height:10px',
-      'border-radius:50%', 'background:#fbbf24',
-      'box-shadow:0 0 25px #fbbf24, 0 0 50px #fbbf24',
+      'border-radius:50%', 'background:' + color,
+      'box-shadow:0 0 25px ' + color + ', 0 0 50px ' + color,
       'opacity:0', 'pointer-events:none'
     ].join(';');
     container.appendChild(pop);
@@ -631,7 +644,65 @@
       gearBtn.style.color = T().accent;
     })));
 
+    var pickerGroup = document.createElement('span');
+    pickerGroup.style.cssText = 'display:inline-flex;gap:8px;align-items:center';
+
+    var lblMatch = document.createElement('span');
+    lblMatch.textContent = 'Match:';
+    lblMatch.style.cssText = 'font-size:11px;color:' + t.subtle + ';font-family:system-ui,sans-serif';
+    var pickerMatch = makeColorPicker(settings.matchColor, 'Normal Match Color', function (v) {
+      settings.matchColor = v;
+      saveSettings();
+      injectHighlightStyles();
+    });
+
+    var lblActive = document.createElement('span');
+    lblActive.textContent = 'Active:';
+    lblActive.style.cssText = 'font-size:11px;color:' + t.subtle + ';font-family:system-ui,sans-serif';
+    var pickerActive = makeColorPicker(settings.activeColor, 'Active Match Color', function (v) {
+      settings.activeColor = v;
+      saveSettings();
+      injectHighlightStyles();
+    });
+
+    var lblBeacon = document.createElement('span');
+    lblBeacon.textContent = 'Beacon:';
+    lblBeacon.style.cssText = 'font-size:11px;color:' + t.subtle + ';font-family:system-ui,sans-serif';
+    var pickerBeacon = makeColorPicker(settings.beaconColor, 'Beacon Animation Color', function (v) {
+      settings.beaconColor = v;
+      saveSettings();
+    });
+
+    pickerGroup.appendChild(lblMatch);
+    pickerGroup.appendChild(pickerMatch);
+    pickerGroup.appendChild(lblActive);
+    pickerGroup.appendChild(pickerActive);
+    pickerGroup.appendChild(lblBeacon);
+    pickerGroup.appendChild(pickerBeacon);
+
+    settingsPanel.appendChild(makeSettingsRow('Colors', pickerGroup));
+
     wrap.appendChild(settingsPanel);
+  }
+
+  function makeColorPicker(val, title, onChange) {
+    var t = T();
+    var input = document.createElement('input');
+    input.type = 'color';
+    input.value = val;
+    input.title = title;
+    input.style.cssText = [
+      'cursor:pointer', 'border:1px solid ' + t.divider,
+      'background:transparent', 'width:24px', 'height:22px',
+      'padding:0', 'border-radius:4px', 'outline:none',
+      'box-sizing:border-box', 'vertical-align:middle'
+    ].join(';');
+    
+    input.addEventListener('keydown', function (e) { e.stopPropagation(); });
+    input.addEventListener('input', function () {
+      onChange(input.value);
+    });
+    return input;
   }
 
   // ── Apply position / theme to live elements ───────────────────────────────────
@@ -797,30 +868,62 @@
     input.focus();
   }
 
+  function getContrastColor(hex) {
+    if (!hex) return '#1a1a2e';
+    var c = hex.substring(1);
+    if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+    var rgb = parseInt(c, 16);
+    var r = (rgb >> 16) & 0xff;
+    var g = (rgb >> 8) & 0xff;
+    var b = (rgb >> 0) & 0xff;
+    var luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return luma < 128 ? '#ffffff' : '#1a1a2e';
+  }
+
+  function hexToRgba(hex, alpha) {
+    if (!hex) return 'rgba(245, 158, 11, ' + alpha + ')';
+    var c = hex.substring(1);
+    if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+    var rgb = parseInt(c, 16);
+    var r = (rgb >> 16) & 0xff;
+    var g = (rgb >> 8) & 0xff;
+    var b = (rgb >> 0) & 0xff;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+
   function injectHighlightStyles() {
     var styleId = 'oc-highlight-styles';
-    if (document.getElementById(styleId)) return;
+    var el = document.getElementById(styleId);
+
+    var matchColor = settings.matchColor || '#fef08a';
+    var activeColor = settings.activeColor || '#f59e0b';
+    var matchTextColor = getContrastColor(matchColor);
+    var activeTextColor = getContrastColor(activeColor);
 
     var css = [
-      '::highlight(oculist-match) { background-color: #fef08a !important; color: #1a1a2e !important; }',
-      '::highlight(oculist-active-match) { background-color: #f59e0b !important; color: #1a1a2e !important; }'
+      '::highlight(oculist-match) { background-color: ' + matchColor + ' !important; color: ' + matchTextColor + ' !important; }',
+      '::highlight(oculist-active-match) { background-color: ' + activeColor + ' !important; color: ' + activeTextColor + ' !important; }'
     ].join('\n');
 
-    try {
-      var s = document.createElement('style');
-      s.id = styleId;
-      s.textContent = css;
-      document.head.appendChild(s);
-    } catch (e) {
-      console.warn('Oculist: Normal style injection failed, trying adoptedStyleSheets...', e);
+    if (el) {
+      el.textContent = css;
+    } else {
       try {
-        if (document.adoptedStyleSheets) {
-          var sheet = new CSSStyleSheet();
-          sheet.replaceSync(css);
-          document.adoptedStyleSheets = [].concat(document.adoptedStyleSheets, [sheet]);
+        var s = document.createElement('style');
+        s.id = styleId;
+        s.textContent = css;
+        document.head.appendChild(s);
+      } catch (e) {
+        console.warn('Oculist: Normal style injection failed, trying adoptedStyleSheets...', e);
+        try {
+          if (document.adoptedStyleSheets) {
+            var sheet = new CSSStyleSheet();
+            sheet.replaceSync(css);
+            document.adoptedStyleSheets = [].concat(document.adoptedStyleSheets, [sheet]);
+          }
+        } catch (err) {
+          console.error('Oculist: Failed to inject highlight styles due to strict CSP.', err);
         }
-      } catch (err) {
-        console.error('Oculist: Failed to inject highlight styles due to strict CSP.', err);
       }
     }
   }
