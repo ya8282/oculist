@@ -125,10 +125,10 @@
     sheath.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(1.5)', opacity: 0.6, offset: 0.1 },
-      { transform: 'scaleY(1)', opacity: 0.4, offset: 0.6 },
+      { transform: 'scaleY(1)', opacity: 0.4, offset: 0.8 },
       { transform: 'scaleY(0)', opacity: 0 }
     ], {
-      duration: 650,
+      duration: 2000,
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
@@ -148,10 +148,10 @@
     core.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(2.2)', opacity: 1, offset: 0.15 },
-      { transform: 'scaleY(1.2)', opacity: 0.85, offset: 0.65 },
+      { transform: 'scaleY(1.2)', opacity: 0.85, offset: 0.8 },
       { transform: 'scaleY(0)', opacity: 0 }
     ], {
-      duration: 650,
+      duration: 2000,
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
@@ -173,10 +173,10 @@
     flash.animate([
       { transform: 'scale(0.2)', opacity: 0 },
       { transform: 'scale(1.3)', opacity: 1, offset: 0.15 },
-      { transform: 'scale(1)', opacity: 0.9, offset: 0.5 },
+      { transform: 'scale(1)', opacity: 0.9, offset: 0.8 },
       { transform: 'scale(1.5) scaleY(0)', opacity: 0 }
     ], {
-      duration: 650,
+      duration: 2000,
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
@@ -206,7 +206,7 @@
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(1.5)', opacity: 1 },
         { transform: 'translate(-50%, -50%) translate(' + dx + 'px, ' + dy + 'px) scale(0)', opacity: 0 }
       ], {
-        duration: 500 + Math.random() * 300,
+        duration: 1500 + Math.random() * 500,
         easing: 'cubic-bezier(0.1, 0.8, 0.2, 1)',
         fill: 'forwards'
       });
@@ -214,7 +214,7 @@
 
     setTimeout(function() {
       laserContainer.remove();
-    }, 900);
+    }, 2100);
   }
 
   function animateIris(rect) {
@@ -313,10 +313,10 @@
       ring.animate([
         { transform: 'scale(0.5)', opacity: 0 },
         { transform: 'scale(1)', opacity: 1, offset: 0.1 },
-        { transform: 'scale(12)', opacity: 0 }
+        { transform: 'scale(15)', opacity: 0 }
       ], {
-        duration: 750,
-        delay: r * 100,
+        duration: 1600,
+        delay: r * 150,
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
       });
@@ -348,7 +348,7 @@
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.3) + 'px, 0) scaleX(2.0)', opacity: 1, offset: 0.2 },
         { transform: 'rotate(' + angle + 'rad) translate(' + travel + 'px, 0) scaleX(5.0)', opacity: 0 }
       ], {
-        duration: 600 + Math.random() * 250,
+        duration: 1500 + Math.random() * 450,
         easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
         fill: 'forwards'
       });
@@ -356,7 +356,7 @@
 
     setTimeout(function() {
       container.remove();
-    }, 1100);
+    }, 2100);
   }
 
   function animate(rect) {
