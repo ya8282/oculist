@@ -48,6 +48,25 @@
   };
   function P() { return POS_DATA[settings.position] || POS_DATA.tr; }
 
+  // ── Plugins & Effects Registry ────────────────────────────────────────────────
+
+  var effectsRegistry = {
+    hud: { label: 'Anime Laser', run: animateAnimeLaser },
+    iris: { label: 'Cinematic', run: animateIris },
+    sweep: { label: 'Warp Drive', run: animateWarpDrive }
+  };
+
+  window.Oculist = window.Oculist || {};
+  window.Oculist.registerEffect = function (id, label, drawFunction) {
+    if (typeof id !== 'string' || typeof drawFunction !== 'function') return;
+    effectsRegistry[id] = { label: label, run: drawFunction };
+    if (settingsPanel) {
+      settingsPanel.remove();
+      settingsPanel = null;
+      buildSettingsPanel();
+    }
+  };
+
   // ── State ─────────────────────────────────────────────────────────────────────
 
   var searchRanges     = [];
@@ -360,8 +379,10 @@
   }
 
   function animate(rect) {
-    ({ hud: animateAnimeLaser, iris: animateIris, sweep: animateWarpDrive }
-      [settings.effect] || animateAnimeLaser)(rect);
+    var effectObj = effectsRegistry[settings.effect] || effectsRegistry.hud;
+    if (effectObj && typeof effectObj.run === 'function') {
+      effectObj.run(rect);
+    }
   }
 
   // ── Match scanning ────────────────────────────────────────────────────────────
@@ -686,13 +707,20 @@
     col1.className = 'oc-settings-col';
     col1.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
 
-    col1.appendChild(makeSettingsField('Highlight Effect', 'Choose match visual transition', makeOptionGroup([
-      { value: 'hud',   label: 'Anime Laser' },
-      { value: 'iris',  label: 'Cinematic'   },
-      { value: 'sweep', label: 'Warp Drive'  },
-    ], settings.effect, function (v) {
-      settings.effect = v; saveSettings();
-    })));
+    var effectOptions = [];
+    for (var key in effectsRegistry) {
+      if (effectsRegistry.hasOwnProperty(key)) {
+        effectOptions.push({ value: key, label: effectsRegistry[key].label });
+      }
+    }
+
+    col1.appendChild(makeSettingsField('Highlight Effect', 'Choose match visual transition', makeOptionGroup(
+      effectOptions,
+      settings.effect,
+      function (v) {
+        settings.effect = v; saveSettings();
+      }
+    )));
 
     col1.appendChild(makeSettingsField('Visual Theme', 'Sleek interface color palette', makeOptionGroup([
       { value: 'dark',  label: 'Dark'  },
