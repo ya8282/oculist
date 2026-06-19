@@ -663,7 +663,13 @@
 
     // Right: Reset Button
     var resetBtn = document.createElement('button');
-    resetBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;display:inline-block;vertical-align:-1px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="16 3 21 3 21 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="8 21 3 21 3 16"/></svg>Reset';
+    var resetSvgMarkup = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;display:inline-block;vertical-align:-1px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="16 3 21 3 21 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="8 21 3 21 3 16"/></svg>';
+    try {
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(resetSvgMarkup, 'image/svg+xml');
+      resetBtn.appendChild(doc.documentElement);
+    } catch (err) {}
+    resetBtn.appendChild(document.createTextNode('Reset'));
     resetBtn.style.cssText = [
       'background:none', 'border:none', 'color:var(--subtle)',
       'font-size:9.5px', 'font-family:system-ui,sans-serif', 'font-weight:600',
@@ -903,7 +909,14 @@
   function makeIconBtn(iconName, title, size) {
     var t = T();
     var btn = document.createElement('button');
-    btn.innerHTML = getSvgIcon(iconName, size);
+    var svgMarkup = getSvgIcon(iconName, size);
+    if (svgMarkup) {
+      try {
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(svgMarkup, 'image/svg+xml');
+        btn.appendChild(doc.documentElement);
+      } catch (err) {}
+    }
     btn.title = title;
     btn.style.cssText = [
       'background:none', 'border:none', 'color:' + t.subtle,
