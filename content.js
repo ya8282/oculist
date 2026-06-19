@@ -90,9 +90,6 @@
     var s = document.getElementById('oc-highlight-styles');
     if (s) s.remove();
     
-    document.removeEventListener('keydown', keydownHandler, true);
-    delete window.__ocDestroy;
-    
     wrap = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = [];
   };
@@ -554,9 +551,14 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
       e.preventDefault();
       e.stopPropagation();
-      if (!wrap) buildUI();
-      input.focus();
-      input.select();
+      if (typeof window.__ocToggle === 'function') {
+        if (wrap) {
+          input.focus();
+          input.select();
+        } else {
+          window.__ocToggle();
+        }
+      }
       return;
     }
     if (!wrap) return;
@@ -1168,9 +1170,20 @@
 
   function boot() {
     document.addEventListener('keydown', keydownHandler, true);
-    setSunglassesFavicon();
-    injectHighlightStyles();
-    buildUI();
+    
+    window.__ocToggle = function () {
+      if (wrap) {
+        window.__ocDestroy();
+      } else {
+        setSunglassesFavicon();
+        injectHighlightStyles();
+        buildUI();
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }
+    };
   }
 
   // Load settings via chrome.storage.sync with fallback to localStorage
