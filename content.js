@@ -551,20 +551,9 @@
   }
 
   function setNavEnabled(enabled) {
-    [prevBtn, nextBtn].forEach(function (btn) {
-      if (btn) {
-        btn.disabled      = !enabled;
-        btn.style.setProperty('opacity', enabled ? '1' : '0.5', 'important');
-        btn.style.setProperty('cursor', enabled ? 'pointer' : 'default', 'important');
-      }
-    });
-
-    var hasMatches = searchRanges.length > 0;
-    if (replayBtn) {
-      replayBtn.disabled      = !hasMatches;
-      replayBtn.style.setProperty('opacity', hasMatches ? '1' : '0.5', 'important');
-      replayBtn.style.setProperty('cursor', hasMatches ? 'pointer' : 'default', 'important');
-    }
+    if (prevBtn) prevBtn.disabled = !enabled;
+    if (nextBtn) nextBtn.disabled = !enabled;
+    if (replayBtn) replayBtn.disabled = !(searchRanges.length > 0);
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────────
@@ -600,10 +589,10 @@
     if (settingsPanel) {
       settingsPanel.remove();
       settingsPanel = null;
-      gearBtn.style.color = T().subtle;
+      if (gearBtn) gearBtn.classList.remove('active');
     } else {
       buildSettingsPanel();
-      gearBtn.style.color = T().accent;
+      if (gearBtn) gearBtn.classList.add('active');
     }
   }
 
@@ -631,18 +620,18 @@
 
   function makeSettingsField(labelText, descText, controlEl) {
     var field = document.createElement('div');
-    field.style.cssText = 'display:flex !important;flex-direction:column !important;gap:5px !important;width:100% !important;box-sizing:border-box !important;';
+    field.className = 'oc-settings-field';
 
     var meta = document.createElement('div');
-    meta.style.cssText = 'display:flex !important;flex-direction:column !important;gap:1px !important;margin-bottom:2px !important;';
+    meta.className = 'oc-settings-meta';
 
     var lbl = document.createElement('span');
+    lbl.className = 'oc-settings-label';
     lbl.textContent = labelText;
-    lbl.style.cssText = 'font-size:11px !important;color:var(--text) !important;font-family:system-ui,sans-serif !important;font-weight:600 !important;letter-spacing:0.01em !important;';
 
     var desc = document.createElement('span');
+    desc.className = 'oc-settings-desc';
     desc.textContent = descText;
-    desc.style.cssText = 'font-size:9px !important;color:var(--subtle) !important;font-family:system-ui,sans-serif !important;font-weight:400 !important;';
 
     meta.appendChild(lbl);
     meta.appendChild(desc);
@@ -653,34 +642,26 @@
   }
 
   function buildSettingsPanel() {
-    var t = T();
     var p = P();
 
     settingsPanel = document.createElement('div');
     settingsPanel.id = 'oc-settings-panel';
-    settingsPanel.style.cssText = [
-      'background:' + t.panelBg + ' !important',
-      (p.isBottom ? 'border-bottom:1px solid var(--divider)' : 'border-top:1px solid var(--divider)') + ' !important',
-      'padding:14px 16px !important',
-      'display:flex !important', 'flex-direction:column !important', 'gap:14px !important',
-      'box-sizing:border-box !important', 'width:100% !important',
-    ].join(';');
 
     // Title / Header in Settings panel
     var header = document.createElement('div');
-    header.style.cssText = 'display:flex !important;align-items:center !important;justify-content:space-between !important;border-bottom:1px solid var(--divider) !important;padding-bottom:8px !important;margin-bottom:2px !important;';
+    header.className = 'oc-settings-header';
     
     // Left: Title + Subtitle
     var titleContainer = document.createElement('div');
-    titleContainer.style.cssText = 'display:flex !important;flex-direction:column !important;gap:1px !important;';
+    titleContainer.className = 'oc-settings-title-container';
 
     var title = document.createElement('span');
+    title.className = 'oc-settings-title';
     title.textContent = 'OCULIST PREFERENCES';
-    title.style.cssText = 'font-size:10px !important;color:var(--text) !important;font-family:system-ui,-apple-system,sans-serif !important;font-weight:700 !important;letter-spacing:0.05em !important;';
     
     var subtitle = document.createElement('span');
+    subtitle.className = 'oc-settings-subtitle';
     subtitle.textContent = 'Configure search behavior & effects';
-    subtitle.style.cssText = 'font-size:9px !important;color:var(--subtle) !important;font-family:system-ui,-apple-system,sans-serif !important;font-weight:400 !important;';
 
     titleContainer.appendChild(title);
     titleContainer.appendChild(subtitle);
@@ -688,48 +669,15 @@
 
     // Right: Reset Button
     var resetBtn = document.createElement('button');
+    resetBtn.className = 'oc-settings-reset-btn';
     var resetSvgMarkup = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;display:inline-block;vertical-align:-1px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="16 3 21 3 21 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="8 21 3 21 3 16"/></svg>';
     try {
       var parser = new DOMParser();
       var doc = parser.parseFromString(resetSvgMarkup, 'image/svg+xml');
       var svgEl = doc.documentElement;
-      svgEl.style.setProperty('color', 'inherit', 'important');
-      svgEl.style.setProperty('stroke', 'currentColor', 'important');
-      svgEl.style.setProperty('fill', 'none', 'important');
-      var strokeWidth = svgEl.getAttribute('stroke-width') || '2.5';
-      svgEl.style.setProperty('stroke-width', strokeWidth, 'important');
-      svgEl.style.setProperty('stroke-linecap', 'round', 'important');
-      svgEl.style.setProperty('stroke-linejoin', 'round', 'important');
-      
-      var children = svgEl.querySelectorAll('*');
-      for (var i = 0; i < children.length; i++) {
-        children[i].style.setProperty('color', 'inherit', 'important');
-        children[i].style.setProperty('stroke', 'currentColor', 'important');
-        children[i].style.setProperty('fill', 'none', 'important');
-        var childStrokeWidth = children[i].getAttribute('stroke-width') || strokeWidth;
-        children[i].style.setProperty('stroke-width', childStrokeWidth, 'important');
-        children[i].style.setProperty('stroke-linecap', 'round', 'important');
-        children[i].style.setProperty('stroke-linejoin', 'round', 'important');
-      }
       resetBtn.appendChild(svgEl);
     } catch (err) {}
     resetBtn.appendChild(document.createTextNode('Reset'));
-    resetBtn.style.cssText = [
-      'background:none !important', 'border:none !important', 'color:var(--text) !important',
-      'font-size:9.5px !important', 'font-family:system-ui,sans-serif !important', 'font-weight:600 !important',
-      'cursor:pointer !important', 'padding:3px 6px !important', 'border-radius:4px !important',
-      'display:inline-flex !important', 'align-items:center !important',
-      'transition:color 150ms, background-color 150ms !important',
-      'box-shadow:none !important', 'margin:0 !important', 'width:auto !important', 'height:auto !important'
-    ].join(';');
-    resetBtn.addEventListener('mouseenter', function () {
-      resetBtn.style.setProperty('color', 'var(--accent)', 'important');
-      resetBtn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', 'important');
-    });
-    resetBtn.addEventListener('mouseleave', function () {
-      resetBtn.style.setProperty('color', 'var(--text)', 'important');
-      resetBtn.style.setProperty('background-color', 'transparent', 'important');
-    });
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
       settings.position = 'tr';
@@ -738,7 +686,6 @@
       settings.activeColor = '#f59e0b';
       settings.beaconColor = '#fbbf24';
       saveSettings();
-      applyBarTheme();
       applyWrapPosition();
       injectHighlightStyles();
       settingsPanel.remove();
@@ -751,12 +698,10 @@
     // Grid Container
     var grid = document.createElement('div');
     grid.className = 'oc-settings-grid';
-    grid.style.cssText = 'display:grid !important;grid-template-columns:1fr 1fr !important;gap:12px 18px !important;width:100% !important;box-sizing:border-box !important;';
 
     // Col 1: Effect & Theme
     var col1 = document.createElement('div');
     col1.className = 'oc-settings-col';
-    col1.style.cssText = 'display:flex !important;flex-direction:column !important;gap:12px !important;';
 
     var effectOptions = [];
     for (var key in effectsRegistry) {
@@ -778,17 +723,14 @@
       { value: 'light', label: 'Light' },
     ], settings.theme, function (v) {
       settings.theme = v; saveSettings();
-      applyBarTheme();
       injectHighlightStyles();
       settingsPanel.remove(); settingsPanel = null;
       buildSettingsPanel();
-      gearBtn.style.color = T().accent;
     })));
 
     // Col 2: Position & Colors
     var col2 = document.createElement('div');
     col2.className = 'oc-settings-col';
-    col2.style.cssText = 'display:flex !important;flex-direction:column !important;gap:12px !important;';
 
     col2.appendChild(makeSettingsField('Panel Position', 'Screen quadrant placement', makeOptionGroup([
       { value: 'tl', label: '↖', title: 'Top left'     },
@@ -803,7 +745,7 @@
     })));
 
     var pickerGroup = document.createElement('div');
-    pickerGroup.style.cssText = 'display:inline-flex !important;gap:6px !important;align-items:center !important;';
+    pickerGroup.className = 'oc-settings-picker-group';
 
     var items = [
       { label: 'Match', val: settings.matchColor, title: 'Normal Match Color', cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
@@ -850,7 +792,7 @@
     var input = document.createElement('input');
     input.type = 'color';
     input.value = val;
-    input.style.cssText = 'position:absolute !important;top:0 !important;left:0 !important;width:100% !important;height:100% !important;opacity:0 !important;cursor:pointer !important;padding:0 !important;border:none !important;';
+    input.className = 'oc-color-input';
     
     input.addEventListener('keydown', function (e) { e.stopPropagation(); });
     input.addEventListener('input', function () {
@@ -870,13 +812,14 @@
 
   function applyWrapPosition() {
     var p = P();
-    wrap.style.setProperty('top', p.top, 'important');
-    wrap.style.setProperty('right', p.right, 'important');
-    wrap.style.setProperty('bottom', p.bottom, 'important');
-    wrap.style.setProperty('left', p.left, 'important');
-    wrap.style.setProperty('flex-direction', p.isBottom ? 'column-reverse' : 'column', 'important');
-    wrap.style.setProperty('border-radius', p.radius, 'important');
-    wrap.style.setProperty('border', '1px solid var(--divider)', 'important');
+    wrap.style.top = p.top;
+    wrap.style.right = p.right;
+    wrap.style.bottom = p.bottom;
+    wrap.style.left = p.left;
+    wrap.style.flexDirection = p.isBottom ? 'column-reverse' : 'column';
+    wrap.style.borderRadius = p.radius;
+    wrap.classList.toggle('is-top', !p.isBottom);
+    wrap.classList.toggle('is-bottom', p.isBottom);
   }
 
   // ── Favicon Management ────────────────────────────────────────────────────────
@@ -923,20 +866,6 @@
     originalFavicons = [];
   }
 
-  function applyBarTheme() {
-    var t = T();
-    bar.style.setProperty('background', t.bg, 'important');
-    bar.style.setProperty('color', t.text, 'important');
-    input.style.setProperty('background', t.inputBg, 'important');
-    input.style.setProperty('border-color', t.inputBorder, 'important');
-    input.style.setProperty('color', t.inputText, 'important');
-    countEl.style.setProperty('color', t.text, 'important');
-    [prevBtn, nextBtn, replayBtn, closeBtn].forEach(function (btn) {
-      if (btn) btn.style.setProperty('color', t.text, 'important');
-    });
-    if (gearBtn) gearBtn.style.setProperty('color', settingsPanel ? t.accent : t.text, 'important');
-  }
-
   // ── UI build ──────────────────────────────────────────────────────────────────
 
   function getSvgIcon(name, size) {
@@ -952,7 +881,6 @@
   }
 
   function makeIconBtn(iconName, title, size) {
-    var t = T();
     var btn = document.createElement('button');
     var svgMarkup = getSvgIcon(iconName, size);
     if (svgMarkup) {
@@ -960,88 +888,25 @@
         var parser = new DOMParser();
         var doc = parser.parseFromString(svgMarkup, 'image/svg+xml');
         var svgEl = doc.documentElement;
-        
-        // Force inline high-contrast stroke, fill, and color on the SVG itself
-        svgEl.style.setProperty('color', 'inherit', 'important');
-        svgEl.style.setProperty('stroke', 'currentColor', 'important');
-        svgEl.style.setProperty('fill', 'none', 'important');
-        var strokeWidth = svgEl.getAttribute('stroke-width') || '2.5';
-        svgEl.style.setProperty('stroke-width', strokeWidth, 'important');
-        svgEl.style.setProperty('stroke-linecap', 'round', 'important');
-        svgEl.style.setProperty('stroke-linejoin', 'round', 'important');
-        
-        // Recursively apply to all descendant nodes of the SVG
-        var children = svgEl.querySelectorAll('*');
-        for (var i = 0; i < children.length; i++) {
-          children[i].style.setProperty('color', 'inherit', 'important');
-          children[i].style.setProperty('stroke', 'currentColor', 'important');
-          children[i].style.setProperty('fill', 'none', 'important');
-          var childStrokeWidth = children[i].getAttribute('stroke-width') || strokeWidth;
-          children[i].style.setProperty('stroke-width', childStrokeWidth, 'important');
-          children[i].style.setProperty('stroke-linecap', 'round', 'important');
-          children[i].style.setProperty('stroke-linejoin', 'round', 'important');
-        }
-        
         btn.appendChild(svgEl);
       } catch (err) {}
     }
     btn.title = title;
-    btn.style.cssText = [
-      'background:none !important', 'border:none !important', 'color:' + t.text + ' !important',
-      'cursor:pointer !important', 'padding:6px !important', 'font-size:0 !important',
-      'border-radius:4px !important', 'display:inline-flex !important', 'align-items:center !important', 'justify-content:center !important',
-      'transition:color 150ms, background-color 150ms, transform 150ms !important'
-    ].join(';');
-    btn.addEventListener('mouseenter', function () {
-      btn.style.setProperty('color', T().accent, 'important');
-      btn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', 'important');
-      btn.style.setProperty('transform', 'scale(1.05)', 'important');
-    });
-    btn.addEventListener('mouseleave', function () {
-      btn.style.setProperty('color', (btn === gearBtn && settingsPanel) ? T().accent : T().text, 'important');
-      btn.style.setProperty('background-color', 'transparent', 'important');
-      btn.style.setProperty('transform', 'none', 'important');
-    });
-    btn.addEventListener('mousedown', function () {
-      btn.style.setProperty('transform', 'scale(0.95)', 'important');
-    });
-    btn.addEventListener('mouseup', function () {
-      btn.style.setProperty('transform', 'scale(1.05)', 'important');
-    });
     return btn;
   }
 
   function buildUI() {
-    var t = T();
-
     wrap = document.createElement('div');
     wrap.id = 'oc-wrap';
-    wrap.style.cssText = [
-      'position:fixed !important', 'z-index:2147483647 !important', 'display:flex !important', 'overflow:hidden !important',
-      'box-shadow:0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05) !important',
-      'backdrop-filter:blur(16px) !important', '-webkit-backdrop-filter:blur(16px) !important',
-      'transition:border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms !important'
-    ].join(';');
     applyWrapPosition();
 
     bar = document.createElement('div');
-    bar.style.cssText = [
-      'display:flex !important', 'align-items:center !important', 'gap:6px !important',
-      'padding:6px 10px !important',
-      'font:14px/1 system-ui,-apple-system,sans-serif !important',
-      'background:' + t.bg + ' !important', 'color:' + t.text + ' !important',
-    ].join(';');
+    bar.className = 'oc-bar';
 
     input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Find…';
-    input.style.cssText = [
-      'border:1px solid ' + t.inputBorder + ' !important', 'border-radius:6px !important',
-      'background:' + t.inputBg + ' !important', 'color:' + t.inputText + ' !important',
-      'padding:4px 8px !important', 'font-size:14px !important', 'width:200px !important',
-      'outline:none !important', 'font-family:system-ui,-apple-system,sans-serif !important',
-      'transition:border-color 150ms, box-shadow 150ms !important'
-    ].join(';');
+    input.className = 'oc-input';
     input.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         try { e.preventDefault(); } catch (err) {}
@@ -1051,14 +916,6 @@
         return;
       }
       e.stopPropagation();
-    });
-    input.addEventListener('focus', function () {
-      input.style.setProperty('border-color', 'var(--accent)', 'important');
-      input.style.setProperty('box-shadow', '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2), 'important');
-    });
-    input.addEventListener('blur', function () {
-      input.style.setProperty('border-color', T().inputBorder, 'important');
-      input.style.setProperty('box-shadow', 'none', 'important');
     });
 
     input.addEventListener('input', function () {
@@ -1075,7 +932,7 @@
     });
 
     countEl = document.createElement('span');
-    countEl.style.cssText = 'color:' + t.subtle + ';font-size:12px;min-width:58px;text-align:right;font-family:system-ui,-apple-system,sans-serif;margin-right:2px;';
+    countEl.className = 'oc-count';
 
     prevBtn = makeIconBtn('up', 'Previous  Shift+Enter');
     prevBtn.addEventListener('click', function () { findNext(true); });
@@ -1103,7 +960,6 @@
     bar.appendChild(closeBtn);
     wrap.appendChild(bar);
     document.body.appendChild(wrap);
-    applyBarTheme();
     input.focus();
   }
 
@@ -1145,6 +1001,15 @@
       '::highlight(oculist-match) { background-color: ' + matchColor + ' !important; color: ' + matchTextColor + ' !important; }',
       '::highlight(oculist-active-match) { background-color: ' + activeColor + ' !important; color: ' + activeTextColor + ' !important; }',
       '#oc-wrap {',
+      '  position: fixed;',
+      '  z-index: 2147483647;',
+      '  display: flex;',
+      '  overflow: hidden;',
+      '  box-shadow: 0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05);',
+      '  backdrop-filter: blur(16px) saturate(180%);',
+      '  -webkit-backdrop-filter: blur(16px) saturate(180%);',
+      '  transition: border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms;',
+      '  border: 1px solid var(--divider);',
       '  --bg: ' + t.bg + ';',
       '  --text: ' + t.text + ';',
       '  --subtle: ' + t.subtle + ';',
@@ -1156,9 +1021,48 @@
       '  --divider: ' + t.divider + ';',
       '  --btn-active-bg: ' + (settings.theme === 'dark' ? '#27272a' : '#ffffff') + ';',
       '  --btn-active-text: ' + (settings.theme === 'dark' ? '#fafafa' : '#09090b') + ';',
+      '  --btn-hover-bg: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+      '  --accent-alpha: ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2) + ';',
       '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;',
-      '  backdrop-filter: blur(16px) saturate(180%);',
-      '  -webkit-backdrop-filter: blur(16px) saturate(180%);',
+      '}',
+      '#oc-wrap .oc-bar {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  gap: 6px;',
+      '  padding: 6px 10px;',
+      '  font: 14px/1 system-ui, -apple-system, sans-serif;',
+      '  background: var(--bg);',
+      '  color: var(--text);',
+      '}',
+      '#oc-wrap input.oc-input {',
+      '  border: 1px solid var(--input-border);',
+      '  border-radius: 6px;',
+      '  background: var(--input-bg);',
+      '  color: var(--input-text);',
+      '  padding: 4px 8px;',
+      '  font-size: 14px;',
+      '  width: 200px;',
+      '  outline: none;',
+      '  font-family: system-ui, -apple-system, sans-serif;',
+      '  transition: border-color 150ms, box-shadow 150ms;',
+      '  box-sizing: border-box;',
+      '  margin: 0;',
+      '  height: auto;',
+      '}',
+      '#oc-wrap input.oc-input:focus {',
+      '  border-color: var(--accent);',
+      '  box-shadow: 0 0 0 2px var(--accent-alpha);',
+      '}',
+      '#oc-wrap .oc-count {',
+      '  color: var(--text);',
+      '  opacity: 0.7;',
+      '  font-size: 12px;',
+      '  min-width: 58px;',
+      '  text-align: right;',
+      '  font-family: system-ui, -apple-system, sans-serif;',
+      '  margin-right: 2px;',
+      '  user-select: none;',
+      '  white-space: nowrap;',
       '}',
       '#oc-wrap svg, #oc-wrap svg * {',
       '  color: inherit !important;',
@@ -1172,116 +1076,237 @@
       '  stroke-width: 2.5 !important;',
       '}',
       '#oc-wrap button {',
-      '  color: var(--text) !important;',
-      '  background: none !important;',
-      '  border: none !important;',
-      '  padding: 6px !important;',
-      '  font-size: 0 !important;',
-      '  border-radius: 4px !important;',
-      '  display: inline-flex !important;',
-      '  align-items: center !important;',
-      '  justify-content: center !important;',
-      '  transition: color 150ms, background-color 150ms, transform 150ms !important;',
-      '  box-shadow: none !important;',
-      '  margin: 0 !important;',
-      '  width: auto !important;',
-      '  height: auto !important;',
-      '  min-width: 0 !important;',
-      '  min-height: 0 !important;',
-      '  max-width: none !important;',
-      '  max-height: none !important;',
-      '  line-height: 1 !important;',
-      '  text-transform: none !important;',
-      '  text-decoration: none !important;',
+      '  color: var(--text);',
+      '  background: none;',
+      '  border: none;',
+      '  padding: 6px;',
+      '  font-size: 0;',
+      '  border-radius: 4px;',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  justify-content: center;',
+      '  transition: color 150ms, background-color 150ms, transform 150ms;',
+      '  box-shadow: none;',
+      '  margin: 0;',
+      '  width: auto;',
+      '  height: auto;',
+      '  min-width: 0;',
+      '  min-height: 0;',
+      '  max-width: none;',
+      '  max-height: none;',
+      '  line-height: 1;',
+      '  text-transform: none;',
+      '  text-decoration: none;',
+      '  cursor: pointer;',
       '}',
       '#oc-wrap button:hover {',
-      '  color: var(--accent) !important;',
-      '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ' !important;',
-      '  transform: scale(1.05) !important;',
+      '  color: var(--accent);',
+      '  background-color: var(--btn-hover-bg);',
+      '  transform: scale(1.05);',
       '}',
       '#oc-wrap button:active {',
-      '  transform: scale(0.95) !important;',
+      '  transform: scale(0.95);',
+      '}',
+      '#oc-wrap button.active {',
+      '  color: var(--accent);',
       '}',
       '#oc-wrap button:disabled {',
-      '  opacity: 0.5 !important;',
-      '  cursor: default !important;',
-      '  transform: none !important;',
-      '  background: none !important;',
+      '  opacity: 0.5;',
+      '  cursor: default;',
+      '  transform: none;',
+      '  background: none;',
+      '}',
+      '#oc-settings-panel {',
+      '  background: var(--panel-bg);',
+      '  padding: 14px 16px;',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: 14px;',
+      '  box-sizing: border-box;',
+      '  width: 100%;',
+      '}',
+      '#oc-wrap.is-bottom #oc-settings-panel {',
+      '  border-bottom: 1px solid var(--divider);',
+      '}',
+      '#oc-wrap.is-top #oc-settings-panel {',
+      '  border-top: 1px solid var(--divider);',
+      '}',
+      '#oc-wrap .oc-settings-header {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  justify-content: space-between;',
+      '  border-bottom: 1px solid var(--divider);',
+      '  padding-bottom: 8px;',
+      '  margin-bottom: 2px;',
+      '}',
+      '#oc-wrap .oc-settings-title-container {',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: 1px;',
+      '}',
+      '#oc-wrap .oc-settings-title {',
+      '  font-size: 10px;',
+      '  color: var(--text);',
+      '  font-family: system-ui, -apple-system, sans-serif;',
+      '  font-weight: 700;',
+      '  letter-spacing: 0.05em;',
+      '}',
+      '#oc-wrap .oc-settings-subtitle {',
+      '  font-size: 9px;',
+      '  color: var(--subtle);',
+      '  font-family: system-ui, -apple-system, sans-serif;',
+      '  font-weight: 400;',
+      '}',
+      '#oc-wrap .oc-settings-reset-btn {',
+      '  background: none;',
+      '  border: none;',
+      '  color: var(--text);',
+      '  font-size: 9.5px;',
+      '  font-family: system-ui, sans-serif;',
+      '  font-weight: 600;',
+      '  cursor: pointer;',
+      '  padding: 3px 6px;',
+      '  border-radius: 4px;',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  transition: color 150ms, background-color 150ms;',
+      '  box-shadow: none;',
+      '  margin: 0;',
+      '  width: auto;',
+      '  height: auto;',
+      '}',
+      '#oc-wrap .oc-settings-reset-btn:hover {',
+      '  color: var(--accent);',
+      '  background-color: var(--btn-hover-bg);',
+      '}',
+      '#oc-wrap .oc-settings-grid {',
+      '  display: grid;',
+      '  grid-template-columns: 1fr 1fr;',
+      '  gap: 12px 18px;',
+      '  width: 100%;',
+      '  box-sizing: border-box;',
+      '}',
+      '#oc-wrap .oc-settings-col {',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: 12px;',
+      '}',
+      '#oc-wrap .oc-settings-field {',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: 5px;',
+      '  width: 100%;',
+      '  box-sizing: border-box;',
+      '}',
+      '#oc-wrap .oc-settings-meta {',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: 1px;',
+      '  margin-bottom: 2px;',
+      '}',
+      '#oc-wrap .oc-settings-label {',
+      '  font-size: 11px;',
+      '  color: var(--text);',
+      '  font-family: system-ui, sans-serif;',
+      '  font-weight: 600;',
+      '  letter-spacing: 0.01em;',
+      '}',
+      '#oc-wrap .oc-settings-desc {',
+      '  font-size: 9px;',
+      '  color: var(--subtle);',
+      '  font-family: system-ui, sans-serif;',
+      '  font-weight: 400;',
+      '}',
+      '#oc-wrap .oc-settings-picker-group {',
+      '  display: inline-flex;',
+      '  gap: 6px;',
+      '  align-items: center;',
       '}',
       '#oc-wrap .oc-toggle-group {',
-      '  display: inline-flex !important;',
-      '  padding: 3px !important;',
-      '  background: var(--input-bg) !important;',
-      '  border-radius: 6px !important;',
-      '  border: 1px solid var(--input-border) !important;',
-      '  width: 100% !important;',
-      '  box-sizing: border-box !important;',
+      '  display: inline-flex;',
+      '  padding: 3px;',
+      '  background: var(--input-bg);',
+      '  border-radius: 6px;',
+      '  border: 1px solid var(--input-border);',
+      '  width: 100%;',
+      '  box-sizing: border-box;',
       '}',
       '#oc-wrap .oc-toggle-btn {',
-      '  flex: 1 !important;',
-      '  border: none !important;',
-      '  background: transparent !important;',
-      '  color: var(--text) !important;',
-      '  opacity: 0.8 !important;',
-      '  padding: 4px 6px !important;',
-      '  border-radius: 4px !important;',
-      '  font-size: 10px !important;',
-      '  font-weight: 600 !important;',
-      '  cursor: pointer !important;',
-      '  font-family: inherit !important;',
-      '  text-align: center !important;',
-      '  white-space: nowrap !important;',
-      '  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1) !important;',
-      '  box-shadow: none !important;',
-      '  margin: 0 !important;',
-      '  height: auto !important;',
-      '  line-height: 1.2 !important;',
+      '  flex: 1;',
+      '  border: none;',
+      '  background: transparent;',
+      '  color: var(--text);',
+      '  opacity: 0.8;',
+      '  padding: 4px 6px;',
+      '  border-radius: 4px;',
+      '  font-size: 10px;',
+      '  font-weight: 600;',
+      '  cursor: pointer;',
+      '  font-family: inherit;',
+      '  text-align: center;',
+      '  white-space: nowrap;',
+      '  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);',
+      '  box-shadow: none;',
+      '  margin: 0;',
+      '  height: auto;',
+      '  line-height: 1.2;',
       '}',
       '#oc-wrap .oc-toggle-btn:hover {',
-      '  color: var(--accent) !important;',
-      '  opacity: 1 !important;',
-      '  background: rgba(120, 120, 120, 0.12) !important;',
+      '  color: var(--accent);',
+      '  opacity: 1;',
+      '  background: rgba(120, 120, 120, 0.12);',
       '}',
       '#oc-wrap .oc-toggle-btn.active {',
-      '  background: var(--btn-active-bg) !important;',
-      '  color: var(--btn-active-text) !important;',
-      '  opacity: 1 !important;',
-      '  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06) !important;',
+      '  background: var(--btn-active-bg);',
+      '  color: var(--btn-active-text);',
+      '  opacity: 1;',
+      '  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06);',
       '}',
       '#oc-wrap .oc-color-badge {',
-      '  position: relative !important;',
-      '  display: inline-flex !important;',
-      '  align-items: center !important;',
-      '  justify-content: center !important;',
-      '  flex: 1 !important;',
-      '  gap: 5px !important;',
-      '  padding: 4px 6px !important;',
-      '  background: var(--input-bg) !important;',
-      '  border: 1px solid var(--input-border) !important;',
-      '  border-radius: 6px !important;',
-      '  cursor: pointer !important;',
-      '  box-sizing: border-box !important;',
-      '  transition: border-color 150ms, transform 150ms, box-shadow 150ms !important;',
+      '  position: relative;',
+      '  display: inline-flex;',
+      '  align-items: center;',
+      '  justify-content: center;',
+      '  flex: 1;',
+      '  gap: 5px;',
+      '  padding: 4px 6px;',
+      '  background: var(--input-bg);',
+      '  border: 1px solid var(--input-border);',
+      '  border-radius: 6px;',
+      '  cursor: pointer;',
+      '  box-sizing: border-box;',
+      '  transition: border-color 150ms, transform 150ms, box-shadow 150ms;',
       '}',
       '#oc-wrap .oc-color-badge:hover {',
-      '  border-color: var(--subtle) !important;',
-      '  transform: translateY(-1px) !important;',
-      '  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;',
+      '  border-color: var(--subtle);',
+      '  transform: translateY(-1px);',
+      '  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);',
       '}',
       '#oc-wrap .oc-color-badge-swatch {',
-      '  width: 10px !important;',
-      '  height: 10px !important;',
-      '  border-radius: 50% !important;',
-      '  border: 1px solid rgba(0, 0, 0, 0.15) !important;',
-      '  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) !important;',
-      '  flex-shrink: 0 !important;',
+      '  width: 10px;',
+      '  height: 10px;',
+      '  border-radius: 50%;',
+      '  border: 1px solid rgba(0, 0, 0, 0.15);',
+      '  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);',
+      '  flex-shrink: 0;',
       '}',
       '#oc-wrap .oc-color-badge-text {',
-      '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;',
-      '  font-size: 8.5px !important;',
-      '  font-weight: 600 !important;',
-      '  color: var(--text) !important;',
-      '  letter-spacing: 0.02em !important;',
+      '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;',
+      '  font-size: 8.5px;',
+      '  font-weight: 600;',
+      '  color: var(--text);',
+      '  letter-spacing: 0.02em;',
+      '}',
+      '#oc-wrap .oc-color-badge input.oc-color-input {',
+      '  position: absolute;',
+      '  top: 0;',
+      '  left: 0;',
+      '  width: 100%;',
+      '  height: 100%;',
+      '  opacity: 0;',
+      '  cursor: pointer;',
+      '  padding: 0;',
+      '  border: none;',
       '}'
     ].join('\n');
 
