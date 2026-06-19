@@ -71,6 +71,8 @@
   var activeIndex      = -1;
   var lastTerm         = '';
   var originalFavicons = [];
+  var firstEnter       = false;
+  var debounceTimer    = null;
   var wrap, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
@@ -83,6 +85,11 @@
       }
     } catch (e) {}
 
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+
     restoreFavicons();
     cancelBeacons();
     if (wrap) wrap.remove();
@@ -91,7 +98,7 @@
     if (s) s.remove();
     
     wrap = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = [];
+    lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = []; firstEnter = false;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -396,6 +403,7 @@
 
     searchRanges = [];
     activeIndex = -1;
+    firstEnter = false;
 
     if (!term) {
       countEl.textContent = '';
@@ -438,6 +446,7 @@
     }
 
     if (searchRanges.length > 0) {
+      firstEnter = true;
       try {
         if (typeof Highlight !== 'undefined' && CSS.highlights) {
           var matchHighlight = new Highlight();
@@ -458,6 +467,10 @@
   // ── Navigation ────────────────────────────────────────────────────────────────
 
   function findNext(backwards) {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
     var term = input.value;
     if (!term) {
       countEl.textContent = '';
@@ -476,10 +489,19 @@
       return;
     }
 
-    if (backwards) {
-      activeIndex = (activeIndex <= 0) ? searchRanges.length - 1 : activeIndex - 1;
+    if (firstEnter) {
+      firstEnter = false;
+      if (backwards) {
+        activeIndex = searchRanges.length - 1;
+      } else {
+        activeIndex = 0;
+      }
     } else {
-      activeIndex = (activeIndex >= searchRanges.length - 1) ? 0 : activeIndex + 1;
+      if (backwards) {
+        activeIndex = (activeIndex <= 0) ? searchRanges.length - 1 : activeIndex - 1;
+      } else {
+        activeIndex = (activeIndex >= searchRanges.length - 1) ? 0 : activeIndex + 1;
+      }
     }
 
     highlightActiveRange(true);
@@ -532,16 +554,16 @@
     [prevBtn, nextBtn].forEach(function (btn) {
       if (btn) {
         btn.disabled      = !enabled;
-        btn.style.opacity = enabled ? '1' : '0.3';
-        btn.style.cursor  = enabled ? 'pointer' : 'default';
+        btn.style.setProperty('opacity', enabled ? '1' : '0.3', 'important');
+        btn.style.setProperty('cursor', enabled ? 'pointer' : 'default', 'important');
       }
     });
 
     var hasMatches = searchRanges.length > 0;
     if (replayBtn) {
       replayBtn.disabled      = !hasMatches;
-      replayBtn.style.opacity = hasMatches ? '1' : '0.3';
-      replayBtn.style.cursor  = hasMatches ? 'pointer' : 'default';
+      replayBtn.style.setProperty('opacity', hasMatches ? '1' : '0.3', 'important');
+      replayBtn.style.setProperty('cursor', hasMatches ? 'pointer' : 'default', 'important');
     }
   }
 
@@ -609,18 +631,18 @@
 
   function makeSettingsField(labelText, descText, controlEl) {
     var field = document.createElement('div');
-    field.style.cssText = 'display:flex;flex-direction:column;gap:5px;width:100%;box-sizing:border-box';
+    field.style.cssText = 'display:flex !important;flex-direction:column !important;gap:5px !important;width:100% !important;box-sizing:border-box !important;';
 
     var meta = document.createElement('div');
-    meta.style.cssText = 'display:flex;flex-direction:column;gap:1px;margin-bottom:2px;';
+    meta.style.cssText = 'display:flex !important;flex-direction:column !important;gap:1px !important;margin-bottom:2px !important;';
 
     var lbl = document.createElement('span');
     lbl.textContent = labelText;
-    lbl.style.cssText = 'font-size:11px;color:var(--text);font-family:system-ui,sans-serif;font-weight:600;letter-spacing:0.01em;';
+    lbl.style.cssText = 'font-size:11px !important;color:var(--text) !important;font-family:system-ui,sans-serif !important;font-weight:600 !important;letter-spacing:0.01em !important;';
 
     var desc = document.createElement('span');
     desc.textContent = descText;
-    desc.style.cssText = 'font-size:9px;color:var(--subtle);font-family:system-ui,sans-serif;font-weight:400;';
+    desc.style.cssText = 'font-size:9px !important;color:var(--subtle) !important;font-family:system-ui,sans-serif !important;font-weight:400 !important;';
 
     meta.appendChild(lbl);
     meta.appendChild(desc);
@@ -637,28 +659,28 @@
     settingsPanel = document.createElement('div');
     settingsPanel.id = 'oc-settings-panel';
     settingsPanel.style.cssText = [
-      'background:' + t.panelBg,
-      p.isBottom ? 'border-bottom:1px solid var(--divider)' : 'border-top:1px solid var(--divider)',
-      'padding:14px 16px',
-      'display:flex', 'flex-direction:column', 'gap:14px',
-      'box-sizing:border-box', 'width:100%',
+      'background:' + t.panelBg + ' !important',
+      (p.isBottom ? 'border-bottom:1px solid var(--divider)' : 'border-top:1px solid var(--divider)') + ' !important',
+      'padding:14px 16px !important',
+      'display:flex !important', 'flex-direction:column !important', 'gap:14px !important',
+      'box-sizing:border-box !important', 'width:100% !important',
     ].join(';');
 
     // Title / Header in Settings panel
     var header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--divider);padding-bottom:8px;margin-bottom:2px;';
+    header.style.cssText = 'display:flex !important;align-items:center !important;justify-content:space-between !important;border-bottom:1px solid var(--divider) !important;padding-bottom:8px !important;margin-bottom:2px !important;';
     
     // Left: Title + Subtitle
     var titleContainer = document.createElement('div');
-    titleContainer.style.cssText = 'display:flex;flex-direction:column;gap:1px;';
+    titleContainer.style.cssText = 'display:flex !important;flex-direction:column !important;gap:1px !important;';
 
     var title = document.createElement('span');
     title.textContent = 'OCULIST PREFERENCES';
-    title.style.cssText = 'font-size:10px;color:var(--text);font-family:system-ui,-apple-system,sans-serif;font-weight:700;letter-spacing:0.05em;';
+    title.style.cssText = 'font-size:10px !important;color:var(--text) !important;font-family:system-ui,-apple-system,sans-serif !important;font-weight:700 !important;letter-spacing:0.05em !important;';
     
     var subtitle = document.createElement('span');
     subtitle.textContent = 'Configure search behavior & effects';
-    subtitle.style.cssText = 'font-size:9px;color:var(--subtle);font-family:system-ui,-apple-system,sans-serif;font-weight:400;';
+    subtitle.style.cssText = 'font-size:9px !important;color:var(--subtle) !important;font-family:system-ui,-apple-system,sans-serif !important;font-weight:400 !important;';
 
     titleContainer.appendChild(title);
     titleContainer.appendChild(subtitle);
@@ -674,19 +696,20 @@
     } catch (err) {}
     resetBtn.appendChild(document.createTextNode('Reset'));
     resetBtn.style.cssText = [
-      'background:none', 'border:none', 'color:var(--subtle)',
-      'font-size:9.5px', 'font-family:system-ui,sans-serif', 'font-weight:600',
-      'cursor:pointer', 'padding:3px 6px', 'border-radius:4px',
-      'display:inline-flex', 'align-items:center',
-      'transition:color 150ms, background-color 150ms'
+      'background:none !important', 'border:none !important', 'color:var(--subtle) !important',
+      'font-size:9.5px !important', 'font-family:system-ui,sans-serif !important', 'font-weight:600 !important',
+      'cursor:pointer !important', 'padding:3px 6px !important', 'border-radius:4px !important',
+      'display:inline-flex !important', 'align-items:center !important',
+      'transition:color 150ms, background-color 150ms !important',
+      'box-shadow:none !important', 'margin:0 !important', 'width:auto !important', 'height:auto !important'
     ].join(';');
     resetBtn.addEventListener('mouseenter', function () {
-      resetBtn.style.color = 'var(--accent)';
-      resetBtn.style.backgroundColor = settings.theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
+      resetBtn.style.setProperty('color', 'var(--accent)', 'important');
+      resetBtn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', 'important');
     });
     resetBtn.addEventListener('mouseleave', function () {
-      resetBtn.style.color = 'var(--subtle)';
-      resetBtn.style.backgroundColor = 'transparent';
+      resetBtn.style.setProperty('color', 'var(--subtle)', 'important');
+      resetBtn.style.setProperty('background-color', 'transparent', 'important');
     });
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
@@ -709,12 +732,12 @@
     // Grid Container
     var grid = document.createElement('div');
     grid.className = 'oc-settings-grid';
-    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;width:100%;box-sizing:border-box;';
+    grid.style.cssText = 'display:grid !important;grid-template-columns:1fr 1fr !important;gap:12px 18px !important;width:100% !important;box-sizing:border-box !important;';
 
     // Col 1: Effect & Theme
     var col1 = document.createElement('div');
     col1.className = 'oc-settings-col';
-    col1.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+    col1.style.cssText = 'display:flex !important;flex-direction:column !important;gap:12px !important;';
 
     var effectOptions = [];
     for (var key in effectsRegistry) {
@@ -746,7 +769,7 @@
     // Col 2: Position & Colors
     var col2 = document.createElement('div');
     col2.className = 'oc-settings-col';
-    col2.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+    col2.style.cssText = 'display:flex !important;flex-direction:column !important;gap:12px !important;';
 
     col2.appendChild(makeSettingsField('Panel Position', 'Screen quadrant placement', makeOptionGroup([
       { value: 'tl', label: '↖', title: 'Top left'     },
@@ -761,7 +784,7 @@
     })));
 
     var pickerGroup = document.createElement('div');
-    pickerGroup.style.cssText = 'display:inline-flex;gap:6px;align-items:center';
+    pickerGroup.style.cssText = 'display:inline-flex !important;gap:6px !important;align-items:center !important;';
 
     var items = [
       { label: 'Match', val: settings.matchColor, title: 'Normal Match Color', cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
@@ -808,7 +831,7 @@
     var input = document.createElement('input');
     input.type = 'color';
     input.value = val;
-    input.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;padding:0;border:none;';
+    input.style.cssText = 'position:absolute !important;top:0 !important;left:0 !important;width:100% !important;height:100% !important;opacity:0 !important;cursor:pointer !important;padding:0 !important;border:none !important;';
     
     input.addEventListener('keydown', function (e) { e.stopPropagation(); });
     input.addEventListener('input', function () {
@@ -828,13 +851,13 @@
 
   function applyWrapPosition() {
     var p = P();
-    wrap.style.top           = p.top;
-    wrap.style.right         = p.right;
-    wrap.style.bottom        = p.bottom;
-    wrap.style.left          = p.left;
-    wrap.style.flexDirection = p.isBottom ? 'column-reverse' : 'column';
-    wrap.style.borderRadius  = p.radius;
-    wrap.style.border        = '1px solid var(--divider)';
+    wrap.style.setProperty('top', p.top, 'important');
+    wrap.style.setProperty('right', p.right, 'important');
+    wrap.style.setProperty('bottom', p.bottom, 'important');
+    wrap.style.setProperty('left', p.left, 'important');
+    wrap.style.setProperty('flex-direction', p.isBottom ? 'column-reverse' : 'column', 'important');
+    wrap.style.setProperty('border-radius', p.radius, 'important');
+    wrap.style.setProperty('border', '1px solid var(--divider)', 'important');
   }
 
   // ── Favicon Management ────────────────────────────────────────────────────────
@@ -883,16 +906,16 @@
 
   function applyBarTheme() {
     var t = T();
-    bar.style.background     = t.bg;
-    bar.style.color          = t.text;
-    input.style.background   = t.inputBg;
-    input.style.borderColor  = t.inputBorder;
-    input.style.color        = t.inputText;
-    countEl.style.color      = t.subtle;
+    bar.style.setProperty('background', t.bg, 'important');
+    bar.style.setProperty('color', t.text, 'important');
+    input.style.setProperty('background', t.inputBg, 'important');
+    input.style.setProperty('border-color', t.inputBorder, 'important');
+    input.style.setProperty('color', t.inputText, 'important');
+    countEl.style.setProperty('color', t.subtle, 'important');
     [prevBtn, nextBtn, replayBtn, closeBtn].forEach(function (btn) {
-      if (btn) btn.style.color = t.subtle;
+      if (btn) btn.style.setProperty('color', t.subtle, 'important');
     });
-    if (gearBtn) gearBtn.style.color = settingsPanel ? t.accent : t.subtle;
+    if (gearBtn) gearBtn.style.setProperty('color', settingsPanel ? t.accent : t.subtle, 'important');
   }
 
   // ── UI build ──────────────────────────────────────────────────────────────────
@@ -900,11 +923,11 @@
   function getSvgIcon(name, size) {
     size = size || 13;
     var svgs = {
-      up: '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
-      down: '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
-      replay: '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8"/><polyline points="21 3 21 8 16 8"/></svg>',
-      gear: '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-      close: '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+      up: '<svg data-icon="up" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
+      down: '<svg data-icon="down" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+      replay: '<svg data-icon="replay" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8"/><polyline points="21 3 21 8 16 8"/></svg>',
+      gear: '<svg data-icon="gear" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+      close: '<svg data-icon="close" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
     };
     return svgs[name] || '';
   }
@@ -922,26 +945,26 @@
     }
     btn.title = title;
     btn.style.cssText = [
-      'background:none', 'border:none', 'color:' + t.subtle,
-      'cursor:pointer', 'padding:6px', 'font-size:0',
-      'border-radius:4px', 'display:inline-flex', 'align-items:center', 'justify-content:center',
-      'transition:color 150ms, background-color 150ms, transform 150ms'
+      'background:none !important', 'border:none !important', 'color:' + t.subtle + ' !important',
+      'cursor:pointer !important', 'padding:6px !important', 'font-size:0 !important',
+      'border-radius:4px !important', 'display:inline-flex !important', 'align-items:center !important', 'justify-content:center !important',
+      'transition:color 150ms, background-color 150ms, transform 150ms !important'
     ].join(';');
     btn.addEventListener('mouseenter', function () {
-      btn.style.color = T().text;
-      btn.style.backgroundColor = settings.theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-      btn.style.transform = 'scale(1.05)';
+      btn.style.setProperty('color', T().text, 'important');
+      btn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', 'important');
+      btn.style.setProperty('transform', 'scale(1.05)', 'important');
     });
     btn.addEventListener('mouseleave', function () {
-      btn.style.color = (btn === gearBtn && settingsPanel) ? T().accent : T().subtle;
-      btn.style.backgroundColor = 'transparent';
-      btn.style.transform = 'none';
+      btn.style.setProperty('color', (btn === gearBtn && settingsPanel) ? T().accent : T().subtle, 'important');
+      btn.style.setProperty('background-color', 'transparent', 'important');
+      btn.style.setProperty('transform', 'none', 'important');
     });
     btn.addEventListener('mousedown', function () {
-      btn.style.transform = 'scale(0.95)';
+      btn.style.setProperty('transform', 'scale(0.95)', 'important');
     });
     btn.addEventListener('mouseup', function () {
-      btn.style.transform = 'scale(1.05)';
+      btn.style.setProperty('transform', 'scale(1.05)', 'important');
     });
     return btn;
   }
@@ -952,30 +975,30 @@
     wrap = document.createElement('div');
     wrap.id = 'oc-wrap';
     wrap.style.cssText = [
-      'position:fixed', 'z-index:2147483647', 'display:flex', 'overflow:hidden',
-      'box-shadow:0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05)',
-      'backdrop-filter:blur(16px)', '-webkit-backdrop-filter:blur(16px)',
-      'transition:border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms'
+      'position:fixed !important', 'z-index:2147483647 !important', 'display:flex !important', 'overflow:hidden !important',
+      'box-shadow:0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05) !important',
+      'backdrop-filter:blur(16px) !important', '-webkit-backdrop-filter:blur(16px) !important',
+      'transition:border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms !important'
     ].join(';');
     applyWrapPosition();
 
     bar = document.createElement('div');
     bar.style.cssText = [
-      'display:flex', 'align-items:center', 'gap:6px',
-      'padding:6px 10px',
-      'font:14px/1 system-ui,-apple-system,sans-serif',
-      'background:' + t.bg, 'color:' + t.text,
+      'display:flex !important', 'align-items:center !important', 'gap:6px !important',
+      'padding:6px 10px !important',
+      'font:14px/1 system-ui,-apple-system,sans-serif !important',
+      'background:' + t.bg + ' !important', 'color:' + t.text + ' !important',
     ].join(';');
 
     input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Find…';
     input.style.cssText = [
-      'border:1px solid ' + t.inputBorder, 'border-radius:6px',
-      'background:' + t.inputBg, 'color:' + t.inputText,
-      'padding:4px 8px', 'font-size:14px', 'width:200px',
-      'outline:none', 'font-family:system-ui,-apple-system,sans-serif',
-      'transition:border-color 150ms, box-shadow 150ms'
+      'border:1px solid ' + t.inputBorder + ' !important', 'border-radius:6px !important',
+      'background:' + t.inputBg + ' !important', 'color:' + t.inputText + ' !important',
+      'padding:4px 8px !important', 'font-size:14px !important', 'width:200px !important',
+      'outline:none !important', 'font-family:system-ui,-apple-system,sans-serif !important',
+      'transition:border-color 150ms, box-shadow 150ms !important'
     ].join(';');
     input.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -988,15 +1011,14 @@
       e.stopPropagation();
     });
     input.addEventListener('focus', function () {
-      input.style.borderColor = 'var(--accent)';
-      input.style.boxShadow = '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2);
+      input.style.setProperty('border-color', 'var(--accent)', 'important');
+      input.style.setProperty('box-shadow', '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2), 'important');
     });
     input.addEventListener('blur', function () {
-      input.style.borderColor = T().inputBorder;
-      input.style.boxShadow = 'none';
+      input.style.setProperty('border-color', T().inputBorder, 'important');
+      input.style.setProperty('box-shadow', 'none', 'important');
     });
 
-    var debounceTimer;
     input.addEventListener('input', function () {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function () {
@@ -1095,73 +1117,112 @@
       '  backdrop-filter: blur(16px) saturate(180%);',
       '  -webkit-backdrop-filter: blur(16px) saturate(180%);',
       '}',
+      '#oc-wrap svg, #oc-wrap svg * {',
+      '  fill: none !important;',
+      '  stroke: currentColor !important;',
+      '  stroke-width: inherit !important;',
+      '  stroke-linecap: round !important;',
+      '  stroke-linejoin: round !important;',
+      '}',
+      '#oc-wrap svg {',
+      '  stroke-width: 2.5 !important;',
+      '}',
+      '#oc-wrap svg[data-icon="gear"] {',
+      '  stroke-width: 2 !important;',
+      '}',
+      '#oc-wrap button {',
+      '  background: none !important;',
+      '  border: none !important;',
+      '  padding: 6px !important;',
+      '  font-size: 0 !important;',
+      '  border-radius: 4px !important;',
+      '  display: inline-flex !important;',
+      '  align-items: center !important;',
+      '  justify-content: center !important;',
+      '  transition: color 150ms, background-color 150ms, transform 150ms !important;',
+      '  box-shadow: none !important;',
+      '  margin: 0 !important;',
+      '  width: auto !important;',
+      '  height: auto !important;',
+      '  min-width: 0 !important;',
+      '  min-height: 0 !important;',
+      '  max-width: none !important;',
+      '  max-height: none !important;',
+      '  line-height: 1 !important;',
+      '  text-transform: none !important;',
+      '  text-decoration: none !important;',
+      '}',
       '.oc-toggle-group {',
-      '  display: inline-flex;',
-      '  padding: 3px;',
-      '  background: var(--input-bg);',
-      '  border-radius: 6px;',
-      '  border: 1px solid var(--input-border);',
-      '  width: 100%;',
-      '  box-sizing: border-box;',
+      '  display: inline-flex !important;',
+      '  padding: 3px !important;',
+      '  background: var(--input-bg) !important;',
+      '  border-radius: 6px !important;',
+      '  border: 1px solid var(--input-border) !important;',
+      '  width: 100% !important;',
+      '  box-sizing: border-box !important;',
       '}',
       '.oc-toggle-btn {',
-      '  flex: 1;',
-      '  border: none;',
-      '  background: transparent;',
-      '  color: var(--subtle);',
-      '  padding: 4px 6px;',
-      '  border-radius: 4px;',
-      '  font-size: 10px;',
-      '  font-weight: 600;',
-      '  cursor: pointer;',
-      '  font-family: inherit;',
-      '  text-align: center;',
-      '  white-space: nowrap;',
-      '  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);',
+      '  flex: 1 !important;',
+      '  border: none !important;',
+      '  background: transparent !important;',
+      '  color: var(--subtle) !important;',
+      '  padding: 4px 6px !important;',
+      '  border-radius: 4px !important;',
+      '  font-size: 10px !important;',
+      '  font-weight: 600 !important;',
+      '  cursor: pointer !important;',
+      '  font-family: inherit !important;',
+      '  text-align: center !important;',
+      '  white-space: nowrap !important;',
+      '  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1) !important;',
+      '  box-shadow: none !important;',
+      '  margin: 0 !important;',
+      '  height: auto !important;',
+      '  line-height: 1.2 !important;',
       '}',
       '.oc-toggle-btn:hover {',
-      '  color: var(--text);',
-      '  background: rgba(120, 120, 120, 0.08);',
+      '  color: var(--text) !important;',
+      '  background: rgba(120, 120, 120, 0.08) !important;',
       '}',
       '.oc-toggle-btn.active {',
-      '  background: var(--btn-active-bg);',
-      '  color: var(--btn-active-text);',
-      '  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06);',
+      '  background: var(--btn-active-bg) !important;',
+      '  color: var(--btn-active-text) !important;',
+      '  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06) !important;',
       '}',
       '.oc-color-badge {',
-      '  position: relative;',
-      '  display: inline-flex;',
-      '  align-items: center;',
-      '  justify-content: center;',
-      '  flex: 1;',
-      '  gap: 5px;',
-      '  padding: 4px 6px;',
-      '  background: var(--input-bg);',
-      '  border: 1px solid var(--input-border);',
-      '  border-radius: 6px;',
-      '  cursor: pointer;',
-      '  box-sizing: border-box;',
-      '  transition: border-color 150ms, transform 150ms, box-shadow 150ms;',
+      '  position: relative !important;',
+      '  display: inline-flex !important;',
+      '  align-items: center !important;',
+      '  justify-content: center !important;',
+      '  flex: 1 !important;',
+      '  gap: 5px !important;',
+      '  padding: 4px 6px !important;',
+      '  background: var(--input-bg) !important;',
+      '  border: 1px solid var(--input-border) !important;',
+      '  border-radius: 6px !important;',
+      '  cursor: pointer !important;',
+      '  box-sizing: border-box !important;',
+      '  transition: border-color 150ms, transform 150ms, box-shadow 150ms !important;',
       '}',
       '.oc-color-badge:hover {',
-      '  border-color: var(--subtle);',
-      '  transform: translateY(-1px);',
-      '  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);',
+      '  border-color: var(--subtle) !important;',
+      '  transform: translateY(-1px) !important;',
+      '  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;',
       '}',
       '.oc-color-badge-swatch {',
-      '  width: 10px;',
-      '  height: 10px;',
-      '  border-radius: 50%;',
-      '  border: 1px solid rgba(0, 0, 0, 0.15);',
-      '  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);',
-      '  flex-shrink: 0;',
+      '  width: 10px !important;',
+      '  height: 10px !important;',
+      '  border-radius: 50% !important;',
+      '  border: 1px solid rgba(0, 0, 0, 0.15) !important;',
+      '  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) !important;',
+      '  flex-shrink: 0 !important;',
       '}',
       '.oc-color-badge-text {',
-      '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;',
-      '  font-size: 8.5px;',
-      '  font-weight: 600;',
-      '  color: var(--text);',
-      '  letter-spacing: 0.02em;',
+      '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;',
+      '  font-size: 8.5px !important;',
+      '  font-weight: 600 !important;',
+      '  color: var(--text) !important;',
+      '  letter-spacing: 0.02em !important;',
       '}'
     ].join('\n');
 
