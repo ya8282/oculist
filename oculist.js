@@ -551,7 +551,7 @@
 
   function keydownHandler(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-      e.preventDefault();
+      try { e.preventDefault(); } catch (err) {}
       e.stopPropagation();
       if (!wrap) buildUI();
       input.focus();
@@ -563,7 +563,7 @@
     
     if (e.key === 'Enter') {
       if (wrap.contains(document.activeElement)) {
-        e.preventDefault();
+        try { e.preventDefault(); } catch (err) {}
         findNext(e.shiftKey);
       }
     }
