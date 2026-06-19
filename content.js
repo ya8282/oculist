@@ -671,12 +671,7 @@
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
     var resetSvgMarkup = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;display:inline-block;vertical-align:-1px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="16 3 21 3 21 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="8 21 3 21 3 16"/></svg>';
-    try {
-      var parser = new DOMParser();
-      var doc = parser.parseFromString(resetSvgMarkup, 'image/svg+xml');
-      var svgEl = doc.documentElement;
-      resetBtn.appendChild(svgEl);
-    } catch (err) {}
+    resetBtn.innerHTML = resetSvgMarkup;
     resetBtn.appendChild(document.createTextNode('Reset'));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
@@ -832,8 +827,9 @@
     wrap.style.left = p.left;
     wrap.style.flexDirection = p.isBottom ? 'column-reverse' : 'column';
     wrap.style.borderRadius = p.radius;
-    wrap.style.background = 'var(--oc-bg)';
-    wrap.style.border = '1px solid var(--oc-divider)';
+    var t = T();
+    wrap.style.background = t.bg;
+    wrap.style.border = '1px solid ' + t.divider;
     wrap.style.boxShadow = '0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05)';
     wrap.style.backdropFilter = 'blur(16px) saturate(180%)';
     wrap.style.webkitBackdropFilter = 'blur(16px) saturate(180%)';
@@ -904,12 +900,7 @@
     var btn = document.createElement('button');
     var svgMarkup = getSvgIcon(iconName, size);
     if (svgMarkup) {
-      try {
-        var parser = new DOMParser();
-        var doc = parser.parseFromString(svgMarkup, 'image/svg+xml');
-        var svgEl = doc.documentElement;
-        btn.appendChild(svgEl);
-      } catch (err) {}
+      btn.innerHTML = svgMarkup;
     }
     btn.title = title;
     return btn;
@@ -1068,6 +1059,15 @@
         '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;',
         '}',
         '.oc-bar {',
+        '  --oc-bg: ' + t.bg + ';',
+        '  --oc-text: ' + t.text + ';',
+        '  --oc-subtle: ' + t.subtle + ';',
+        '  --oc-input-bg: ' + t.inputBg + ';',
+        '  --oc-input-border: ' + t.inputBorder + ';',
+        '  --oc-input-text: ' + t.inputText + ';',
+        '  --oc-accent: ' + t.accent + ';',
+        '  --oc-panel-bg: ' + t.panelBg + ';',
+        '  --oc-divider: ' + t.divider + ';',
         '  display: flex;',
         '  align-items: center;',
         '  gap: 6px;',
@@ -1124,6 +1124,12 @@
         '  min-width: 13px;',
         '  min-height: 13px;',
         '  flex-shrink: 0;',
+        '  stroke: var(--oc-text);',
+        '  fill: none;',
+        '}',
+        '.oc-bar button svg path, .oc-bar button svg polyline, .oc-bar button svg circle {',
+        '  stroke: var(--oc-text);',
+        '  fill: none;',
         '}',
         'button:hover:not(:disabled) svg, button:hover:not(:disabled) svg * {',
         '  stroke: var(--oc-accent);',
