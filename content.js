@@ -1169,7 +1169,7 @@
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
   function boot() {
-    document.addEventListener('keydown', keydownHandler, true);
+    document.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
     
     window.__ocToggle = function () {
       if (wrap) {

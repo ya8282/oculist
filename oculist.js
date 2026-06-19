@@ -92,7 +92,7 @@
     var s = document.getElementById('oc-highlight-styles');
     if (s) s.remove();
     
-    document.removeEventListener('keydown', keydownHandler, true);
+    document.removeEventListener('keydown', keydownHandler, { capture: true, passive: false });
     delete window.__ocDestroy;
     
     wrap = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
@@ -1165,7 +1165,7 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
-  document.addEventListener('keydown', keydownHandler, true);
+  document.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
   setSunglassesFavicon();
   injectHighlightStyles();
   buildUI();
