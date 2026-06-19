@@ -961,7 +961,16 @@
       'outline:none', 'font-family:system-ui,-apple-system,sans-serif',
       'transition:border-color 150ms, box-shadow 150ms'
     ].join(';');
-    input.addEventListener('keydown', function (e) { e.stopPropagation(); });
+    input.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        try { e.preventDefault(); } catch (err) {}
+        input.focus();
+        input.select();
+        e.stopPropagation();
+        return;
+      }
+      e.stopPropagation();
+    });
     input.addEventListener('focus', function () {
       input.style.borderColor = 'var(--accent)';
       input.style.boxShadow = '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2);
