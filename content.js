@@ -26,14 +26,14 @@
 
   var THEMES = {
     dark: {
-      bg: 'rgba(9, 9, 11, 0.94)', text: '#fafafa', subtle: '#a1a1aa',
-      inputBg: 'rgba(24, 24, 27, 0.75)', inputBorder: '#27272a', inputText: '#fafafa',
-      accent: '#f59e0b', panelBg: 'rgba(9, 9, 11, 0.97)', divider: '#27272a',
+      bg: 'rgba(9, 9, 11, 0.94)', text: '#fafafa', subtle: '#fafafa',
+      inputBg: 'rgba(24, 24, 27, 0.75)', inputBorder: '#3f3f46', inputText: '#fafafa',
+      accent: '#f59e0b', panelBg: 'rgba(9, 9, 11, 0.97)', divider: '#3f3f46',
     },
     light: {
-      bg: 'rgba(255, 255, 255, 0.94)', text: '#09090b', subtle: '#71717a',
-      inputBg: 'rgba(244, 244, 245, 0.75)', inputBorder: '#e4e4e7', inputText: '#09090b',
-      accent: '#f59e0b', panelBg: 'rgba(255, 255, 255, 0.97)', divider: '#e4e4e7',
+      bg: 'rgba(255, 255, 255, 0.94)', text: '#09090b', subtle: '#09090b',
+      inputBg: 'rgba(244, 244, 245, 0.75)', inputBorder: '#d4d4d8', inputText: '#09090b',
+      accent: '#f59e0b', panelBg: 'rgba(255, 255, 255, 0.97)', divider: '#d4d4d8',
     },
   };
   function T() { return THEMES[settings.theme] || THEMES.dark; }
@@ -554,7 +554,7 @@
     [prevBtn, nextBtn].forEach(function (btn) {
       if (btn) {
         btn.disabled      = !enabled;
-        btn.style.setProperty('opacity', enabled ? '1' : '0.3', 'important');
+        btn.style.setProperty('opacity', enabled ? '1' : '0.5', 'important');
         btn.style.setProperty('cursor', enabled ? 'pointer' : 'default', 'important');
       }
     });
@@ -562,7 +562,7 @@
     var hasMatches = searchRanges.length > 0;
     if (replayBtn) {
       replayBtn.disabled      = !hasMatches;
-      replayBtn.style.setProperty('opacity', hasMatches ? '1' : '0.3', 'important');
+      replayBtn.style.setProperty('opacity', hasMatches ? '1' : '0.5', 'important');
       replayBtn.style.setProperty('cursor', hasMatches ? 'pointer' : 'default', 'important');
     }
   }
@@ -692,11 +692,30 @@
     try {
       var parser = new DOMParser();
       var doc = parser.parseFromString(resetSvgMarkup, 'image/svg+xml');
-      resetBtn.appendChild(doc.documentElement);
+      var svgEl = doc.documentElement;
+      svgEl.style.setProperty('color', 'inherit', 'important');
+      svgEl.style.setProperty('stroke', 'currentColor', 'important');
+      svgEl.style.setProperty('fill', 'none', 'important');
+      var strokeWidth = svgEl.getAttribute('stroke-width') || '2.5';
+      svgEl.style.setProperty('stroke-width', strokeWidth, 'important');
+      svgEl.style.setProperty('stroke-linecap', 'round', 'important');
+      svgEl.style.setProperty('stroke-linejoin', 'round', 'important');
+      
+      var children = svgEl.querySelectorAll('*');
+      for (var i = 0; i < children.length; i++) {
+        children[i].style.setProperty('color', 'inherit', 'important');
+        children[i].style.setProperty('stroke', 'currentColor', 'important');
+        children[i].style.setProperty('fill', 'none', 'important');
+        var childStrokeWidth = children[i].getAttribute('stroke-width') || strokeWidth;
+        children[i].style.setProperty('stroke-width', childStrokeWidth, 'important');
+        children[i].style.setProperty('stroke-linecap', 'round', 'important');
+        children[i].style.setProperty('stroke-linejoin', 'round', 'important');
+      }
+      resetBtn.appendChild(svgEl);
     } catch (err) {}
     resetBtn.appendChild(document.createTextNode('Reset'));
     resetBtn.style.cssText = [
-      'background:none !important', 'border:none !important', 'color:var(--subtle) !important',
+      'background:none !important', 'border:none !important', 'color:var(--text) !important',
       'font-size:9.5px !important', 'font-family:system-ui,sans-serif !important', 'font-weight:600 !important',
       'cursor:pointer !important', 'padding:3px 6px !important', 'border-radius:4px !important',
       'display:inline-flex !important', 'align-items:center !important',
@@ -705,10 +724,10 @@
     ].join(';');
     resetBtn.addEventListener('mouseenter', function () {
       resetBtn.style.setProperty('color', 'var(--accent)', 'important');
-      resetBtn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', 'important');
+      resetBtn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', 'important');
     });
     resetBtn.addEventListener('mouseleave', function () {
-      resetBtn.style.setProperty('color', 'var(--subtle)', 'important');
+      resetBtn.style.setProperty('color', 'var(--text)', 'important');
       resetBtn.style.setProperty('background-color', 'transparent', 'important');
     });
     resetBtn.addEventListener('click', function () {
@@ -911,11 +930,11 @@
     input.style.setProperty('background', t.inputBg, 'important');
     input.style.setProperty('border-color', t.inputBorder, 'important');
     input.style.setProperty('color', t.inputText, 'important');
-    countEl.style.setProperty('color', t.subtle, 'important');
+    countEl.style.setProperty('color', t.text, 'important');
     [prevBtn, nextBtn, replayBtn, closeBtn].forEach(function (btn) {
-      if (btn) btn.style.setProperty('color', t.subtle, 'important');
+      if (btn) btn.style.setProperty('color', t.text, 'important');
     });
-    if (gearBtn) gearBtn.style.setProperty('color', settingsPanel ? t.accent : t.subtle, 'important');
+    if (gearBtn) gearBtn.style.setProperty('color', settingsPanel ? t.accent : t.text, 'important');
   }
 
   // ── UI build ──────────────────────────────────────────────────────────────────
@@ -926,7 +945,7 @@
       up: '<svg data-icon="up" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
       down: '<svg data-icon="down" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
       replay: '<svg data-icon="replay" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8"/><polyline points="21 3 21 8 16 8"/></svg>',
-      gear: '<svg data-icon="gear" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+      gear: '<svg data-icon="gear" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
       close: '<svg data-icon="close" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
     };
     return svgs[name] || '';
@@ -940,23 +959,46 @@
       try {
         var parser = new DOMParser();
         var doc = parser.parseFromString(svgMarkup, 'image/svg+xml');
-        btn.appendChild(doc.documentElement);
+        var svgEl = doc.documentElement;
+        
+        // Force inline high-contrast stroke, fill, and color on the SVG itself
+        svgEl.style.setProperty('color', 'inherit', 'important');
+        svgEl.style.setProperty('stroke', 'currentColor', 'important');
+        svgEl.style.setProperty('fill', 'none', 'important');
+        var strokeWidth = svgEl.getAttribute('stroke-width') || '2.5';
+        svgEl.style.setProperty('stroke-width', strokeWidth, 'important');
+        svgEl.style.setProperty('stroke-linecap', 'round', 'important');
+        svgEl.style.setProperty('stroke-linejoin', 'round', 'important');
+        
+        // Recursively apply to all descendant nodes of the SVG
+        var children = svgEl.querySelectorAll('*');
+        for (var i = 0; i < children.length; i++) {
+          children[i].style.setProperty('color', 'inherit', 'important');
+          children[i].style.setProperty('stroke', 'currentColor', 'important');
+          children[i].style.setProperty('fill', 'none', 'important');
+          var childStrokeWidth = children[i].getAttribute('stroke-width') || strokeWidth;
+          children[i].style.setProperty('stroke-width', childStrokeWidth, 'important');
+          children[i].style.setProperty('stroke-linecap', 'round', 'important');
+          children[i].style.setProperty('stroke-linejoin', 'round', 'important');
+        }
+        
+        btn.appendChild(svgEl);
       } catch (err) {}
     }
     btn.title = title;
     btn.style.cssText = [
-      'background:none !important', 'border:none !important', 'color:' + t.subtle + ' !important',
+      'background:none !important', 'border:none !important', 'color:' + t.text + ' !important',
       'cursor:pointer !important', 'padding:6px !important', 'font-size:0 !important',
       'border-radius:4px !important', 'display:inline-flex !important', 'align-items:center !important', 'justify-content:center !important',
       'transition:color 150ms, background-color 150ms, transform 150ms !important'
     ].join(';');
     btn.addEventListener('mouseenter', function () {
-      btn.style.setProperty('color', T().text, 'important');
-      btn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', 'important');
+      btn.style.setProperty('color', T().accent, 'important');
+      btn.style.setProperty('background-color', settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)', 'important');
       btn.style.setProperty('transform', 'scale(1.05)', 'important');
     });
     btn.addEventListener('mouseleave', function () {
-      btn.style.setProperty('color', (btn === gearBtn && settingsPanel) ? T().accent : T().subtle, 'important');
+      btn.style.setProperty('color', (btn === gearBtn && settingsPanel) ? T().accent : T().text, 'important');
       btn.style.setProperty('background-color', 'transparent', 'important');
       btn.style.setProperty('transform', 'none', 'important');
     });
@@ -1061,6 +1103,7 @@
     bar.appendChild(closeBtn);
     wrap.appendChild(bar);
     document.body.appendChild(wrap);
+    applyBarTheme();
     input.focus();
   }
 
@@ -1118,6 +1161,7 @@
       '  -webkit-backdrop-filter: blur(16px) saturate(180%);',
       '}',
       '#oc-wrap svg, #oc-wrap svg * {',
+      '  color: inherit !important;',
       '  fill: none !important;',
       '  stroke: currentColor !important;',
       '  stroke-width: inherit !important;',
@@ -1127,10 +1171,8 @@
       '#oc-wrap svg {',
       '  stroke-width: 2.5 !important;',
       '}',
-      '#oc-wrap svg[data-icon="gear"] {',
-      '  stroke-width: 2 !important;',
-      '}',
       '#oc-wrap button {',
+      '  color: var(--text) !important;',
       '  background: none !important;',
       '  border: none !important;',
       '  padding: 6px !important;',
@@ -1152,7 +1194,21 @@
       '  text-transform: none !important;',
       '  text-decoration: none !important;',
       '}',
-      '.oc-toggle-group {',
+      '#oc-wrap button:hover {',
+      '  color: var(--accent) !important;',
+      '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ' !important;',
+      '  transform: scale(1.05) !important;',
+      '}',
+      '#oc-wrap button:active {',
+      '  transform: scale(0.95) !important;',
+      '}',
+      '#oc-wrap button:disabled {',
+      '  opacity: 0.5 !important;',
+      '  cursor: default !important;',
+      '  transform: none !important;',
+      '  background: none !important;',
+      '}',
+      '#oc-wrap .oc-toggle-group {',
       '  display: inline-flex !important;',
       '  padding: 3px !important;',
       '  background: var(--input-bg) !important;',
@@ -1161,11 +1217,12 @@
       '  width: 100% !important;',
       '  box-sizing: border-box !important;',
       '}',
-      '.oc-toggle-btn {',
+      '#oc-wrap .oc-toggle-btn {',
       '  flex: 1 !important;',
       '  border: none !important;',
       '  background: transparent !important;',
-      '  color: var(--subtle) !important;',
+      '  color: var(--text) !important;',
+      '  opacity: 0.8 !important;',
       '  padding: 4px 6px !important;',
       '  border-radius: 4px !important;',
       '  font-size: 10px !important;',
@@ -1180,16 +1237,18 @@
       '  height: auto !important;',
       '  line-height: 1.2 !important;',
       '}',
-      '.oc-toggle-btn:hover {',
-      '  color: var(--text) !important;',
-      '  background: rgba(120, 120, 120, 0.08) !important;',
+      '#oc-wrap .oc-toggle-btn:hover {',
+      '  color: var(--accent) !important;',
+      '  opacity: 1 !important;',
+      '  background: rgba(120, 120, 120, 0.12) !important;',
       '}',
-      '.oc-toggle-btn.active {',
+      '#oc-wrap .oc-toggle-btn.active {',
       '  background: var(--btn-active-bg) !important;',
       '  color: var(--btn-active-text) !important;',
+      '  opacity: 1 !important;',
       '  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06) !important;',
       '}',
-      '.oc-color-badge {',
+      '#oc-wrap .oc-color-badge {',
       '  position: relative !important;',
       '  display: inline-flex !important;',
       '  align-items: center !important;',
@@ -1204,12 +1263,12 @@
       '  box-sizing: border-box !important;',
       '  transition: border-color 150ms, transform 150ms, box-shadow 150ms !important;',
       '}',
-      '.oc-color-badge:hover {',
+      '#oc-wrap .oc-color-badge:hover {',
       '  border-color: var(--subtle) !important;',
       '  transform: translateY(-1px) !important;',
       '  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;',
       '}',
-      '.oc-color-badge-swatch {',
+      '#oc-wrap .oc-color-badge-swatch {',
       '  width: 10px !important;',
       '  height: 10px !important;',
       '  border-radius: 50% !important;',
@@ -1217,7 +1276,7 @@
       '  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) !important;',
       '  flex-shrink: 0 !important;',
       '}',
-      '.oc-color-badge-text {',
+      '#oc-wrap .oc-color-badge-text {',
       '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;',
       '  font-size: 8.5px !important;',
       '  font-weight: 600 !important;',
