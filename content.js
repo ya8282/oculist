@@ -812,12 +812,32 @@
 
   function applyWrapPosition() {
     var p = P();
+    wrap.style.all = 'initial';
+    wrap.style.position = 'fixed';
+    wrap.style.zIndex = '2147483647';
+    wrap.style.display = 'flex';
+    wrap.style.overflow = 'hidden';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.margin = '0';
+    wrap.style.padding = '0';
+    wrap.style.width = 'auto';
+    wrap.style.height = 'auto';
+    wrap.style.maxWidth = 'none';
+    wrap.style.maxHeight = 'none';
+    wrap.style.minWidth = '0';
+    wrap.style.minHeight = '0';
     wrap.style.top = p.top;
     wrap.style.right = p.right;
     wrap.style.bottom = p.bottom;
     wrap.style.left = p.left;
     wrap.style.flexDirection = p.isBottom ? 'column-reverse' : 'column';
     wrap.style.borderRadius = p.radius;
+    wrap.style.background = 'var(--oc-bg)';
+    wrap.style.border = '1px solid var(--oc-divider)';
+    wrap.style.boxShadow = '0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05)';
+    wrap.style.backdropFilter = 'blur(16px) saturate(180%)';
+    wrap.style.webkitBackdropFilter = 'blur(16px) saturate(180%)';
+    wrap.style.transition = 'border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms';
     wrap.classList.toggle('is-top', !p.isBottom);
     wrap.classList.toggle('is-bottom', p.isBottom);
   }
@@ -1064,6 +1084,7 @@
         '  padding: 4px 8px;',
         '  font-size: 14px;',
         '  width: 200px;',
+        '  flex-shrink: 0;',
         '  outline: none;',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '  transition: border-color 150ms, box-shadow 150ms;',
@@ -1080,6 +1101,7 @@
         '  opacity: 0.75;',
         '  font-size: 12px;',
         '  min-width: 58px;',
+        '  flex-shrink: 0;',
         '  text-align: right;',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '  margin-right: 2px;',
@@ -1093,6 +1115,15 @@
         '  stroke-width: 2.5;',
         '  stroke-linecap: round;',
         '  stroke-linejoin: round;',
+        '}',
+        '.oc-bar button svg {',
+        '  display: inline-block;',
+        '  visibility: visible;',
+        '  width: 13px;',
+        '  height: 13px;',
+        '  min-width: 13px;',
+        '  min-height: 13px;',
+        '  flex-shrink: 0;',
         '}',
         'button:hover:not(:disabled) svg, button:hover:not(:disabled) svg * {',
         '  stroke: var(--oc-accent);',
@@ -1123,6 +1154,16 @@
         '  text-transform: none;',
         '  text-decoration: none;',
         '  cursor: pointer;',
+        '}',
+        '.oc-bar button {',
+        '  width: 25px;',
+        '  height: 25px;',
+        '  min-width: 25px;',
+        '  min-height: 25px;',
+        '  max-width: 25px;',
+        '  max-height: 25px;',
+        '  flex-shrink: 0;',
+        '  box-sizing: border-box;',
         '}',
         'button:hover, .oc-bar button:hover {',
         '  color: var(--oc-accent);',
