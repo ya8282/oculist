@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <!-- Luxurious golden radial gradient matching default Oculist gold/amber -->
+    <radialGradient id="goldCircleGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="60%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </radialGradient>
+    
+    <!-- Premium subtle drop shadow to give the white 'O' elegant depth -->
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2.5" flood-color="#78350f" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Solid Golden Circle (Edges are transparent since canvas is 128x128 and we draw a circle of r=62) -->
+  <circle cx="64" cy="64" r="62" fill="url(#goldCircleGrad)" />
+
+  <!-- Bold, White 'O' in the middle of the circle -->
+  <circle cx="64" cy="64" r="26" fill="none" stroke="#ffffff" stroke-width="11" filter="url(#dropShadow)" />
+</svg>

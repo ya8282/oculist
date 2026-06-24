@@ -12,15 +12,12 @@
     matchColor: '#fef08a',
     activeColor: '#f59e0b',
     beaconColor: '#fbbf24',
-    disabledSites: []
+    disabledSites: [],
+    faviconSwap: false
   };
 
   function saveSettings() {
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      chrome.storage.sync.set({ 'oc-settings': settings });
-    } else {
-      try { localStorage.setItem('oc-settings', JSON.stringify(settings)); } catch (e) {}
-    }
+    chrome.storage.sync.set({ 'oc-settings': settings });
   }
 
   // ── Central i18n Localization Dictionary ─────────────────────────────────────
@@ -37,7 +34,7 @@
     
     // Preference Panel Strings
     prefTitle: 'OCULIST PREFERENCES',
-    prefSubtitle: 'Configure search behavior & effects',
+    prefSubtitle: 'Configure appearance and effects',
     resetBtn: 'Reset',
     visualTheme: 'Visual Theme',
     themeDesc: 'Sleek interface color palette',
@@ -71,6 +68,10 @@
     siteToggleDesc: 'Toggle Oculist for this domain',
     enabled: 'Enabled',
     disabled: 'Disabled',
+
+    // Favicon Toggle
+    faviconLabel: 'Tab Icon',
+    faviconDesc: 'Show 🕶️ while Oculist is open',
     pinExtensionTip: 'Tip: Pin Oculist to your browser toolbar to easily access the site-specific toggle next to the address bar!',
 
     // Highlight Effects
@@ -79,7 +80,8 @@
     effectWarpDrive: 'Warp Drive',
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
-    effectElectronCloud: 'Electron Cloud'
+    effectElectronCloud: 'Electron Cloud',
+    effectSoftGlow: 'Soft Glow'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -114,48 +116,9 @@
     sweep: { label: i18n.effectWarpDrive, run: animateWarpDrive },
     flame: { label: i18n.effectInfernoFlame, run: animateFlame },
     lightning: { label: i18n.effectLightning, run: animateLightning },
-    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud }
+    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
+    glow: { label: i18n.effectSoftGlow, run: animateSoftGlow }
   };
-
-  window.Oculist = window.Oculist || {};
-  window.Oculist.registerEffect = function (id, label, drawFunction) {
-    if (typeof id !== 'string' || typeof drawFunction !== 'function') return;
-    effectsRegistry[id] = { label: label, run: drawFunction };
-    if (settingsPanel) {
-      settingsPanel.remove();
-      settingsPanel = null;
-      buildSettingsPanel();
-    }
-  };
-
-  function loadCustomEffects() {
-    try {
-      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
-      for (var id in saved) {
-        if (saved.hasOwnProperty(id)) {
-          var item = saved[id];
-          if (item && item.label && item.code) {
-            try {
-              effectsRegistry[id] = {
-                label: item.label,
-                run: new Function('rect', item.code)
-              };
-            } catch (e) {
-              console.warn('Oculist: Failed to compile custom effect ' + id, e);
-            }
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
-  function saveCustomEffect(id, label, code) {
-    try {
-      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
-      saved[id] = { label: label, code: code };
-      localStorage.setItem('oc-custom-effects', JSON.stringify(saved));
-    } catch (e) {}
-  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -165,6 +128,7 @@
   var originalFavicons = [];
   var firstEnter       = false;
   var debounceTimer    = null;
+  var activeBeacons    = 0;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
@@ -204,6 +168,7 @@
     for (var i = 0; i < beacons.length; i++) {
       beacons[i].remove();
     }
+    activeBeacons = 0;
   }
 
   // ── Effects (CSP-Compliant via Web Animations API & Document Root Mount) ───
@@ -396,6 +361,45 @@
     }, 2100);
   }
 
+  // Subtle: a soft halo hugging the match that settles, holds, and fades. No screen dim.
+  function animateSoftGlow(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var pad = 4;
+    var x = rect.left + window.scrollX - pad;
+    var y = rect.top + window.scrollY - pad;
+    var w = rect.width + pad * 2;
+    var h = rect.height + pad * 2;
+    var color = settings.beaconColor || '#fbbf24';
+
+    var glow = document.createElement('div');
+    glow.className = 'oc-beacon';
+    glow.style.cssText = [
+      'position:absolute',
+      'left:' + x + 'px', 'top:' + y + 'px',
+      'width:' + w + 'px', 'height:' + h + 'px',
+      'border-radius:5px',
+      'box-shadow:0 0 0 2px ' + color + ', 0 0 14px 3px ' + color,
+      'transform-origin:center',
+      'pointer-events:none', 'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(glow);
+
+    glow.animate([
+      { opacity: 0, transform: 'scale(1.5)' },
+      { opacity: 0.85, transform: 'scale(1)', offset: 0.25 },
+      { opacity: 0.85, transform: 'scale(1)', offset: 0.65 },
+      { opacity: 0, transform: 'scale(1)' }
+    ], {
+      duration: 1100,
+      easing: 'ease-out',
+      fill: 'forwards'
+    });
+
+    setTimeout(function () { glow.remove(); }, 1200);
+  }
+
   function animateWarpDrive(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
@@ -489,6 +493,13 @@
     var w = rect.width;
     var h = rect.height;
     var color = settings.beaconColor || '#f97316';
+    var _fhsl = hexToHsl(color);
+    var _fh = _fhsl[0], _fs = _fhsl[1], _fl = _fhsl[2];
+    // Offsets mirror the original orange-flame palette relative to the base
+    var colorDeep = hslToHex(_fh - 24, _fs - 11, Math.min(100, _fl + 7));
+    var colorMid  = hslToHex(_fh + 14, _fs -  3, Math.max(0,   _fl - 3));
+    var colorWarm = hslToHex(_fh + 24, _fs +  2, _fl);
+    var colorTip  = hslToHex(_fh + 28, _fs +  4, Math.min(100, _fl + 24));
 
     var container = document.createElement('div');
     container.className = 'oc-beacon';
@@ -508,7 +519,7 @@
       'left:80px', 'top:200px',
       'width:' + w + 'px', 'height:' + h + 'px',
       'border-radius:4px',
-      'box-shadow:0 0 60px #ef4444, inset 0 0 40px #f97316, 0 0 16px #eab308',
+      'box-shadow:0 0 60px ' + colorDeep + ', inset 0 0 40px ' + color + ', 0 0 16px ' + colorWarm,
       'opacity:0', 'pointer-events:none'
     ].join(';');
     container.appendChild(outline);
@@ -530,7 +541,7 @@
       'position:absolute',
       'left:40px', 'top:160px',
       'width:' + (w + 80) + 'px', 'height:' + (h + 80) + 'px',
-      'background:radial-gradient(ellipse, rgba(239, 68, 68, 0.4) 0%, rgba(249, 115, 22, 0.15) 60%, transparent 100%)',
+      'background:radial-gradient(ellipse, ' + hexToRgba(colorDeep, 0.4) + ' 0%, ' + hexToRgba(color, 0.15) + ' 60%, transparent 100%)',
       'filter:blur(32px)',
       'opacity:0', 'pointer-events:none'
     ].join(';');
@@ -548,7 +559,7 @@
     });
 
     // 3. Flame particles rising
-    var colors = ['#ef4444', '#f97316', '#f59e0b', '#facc15', '#fef08a'];
+    var colors = [colorDeep, color, colorMid, colorWarm, colorTip];
     var particleCount = 25;
     for (var i = 0; i < particleCount; i++) {
       var p = document.createElement('div');
@@ -988,8 +999,10 @@
   }
 
   function animate(rect) {
+    cancelBeacons();
     var effectObj = effectsRegistry[settings.effect] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
+      activeBeacons++;
       effectObj.run(rect);
     }
   }
@@ -1033,23 +1046,14 @@
 
     var node;
     while ((node = walker.nextNode())) {
+      var nodeParent = node.parentElement;
+      if (nodeParent) {
+        var nodeStyle = window.getComputedStyle(nodeParent);
+        if (nodeStyle && (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden')) continue;
+      }
       var text = node.textContent.toLowerCase();
       var index = 0;
       while ((index = text.indexOf(normalizedTerm, index)) !== -1) {
-        // Performance Optimization: Check computed style lazily only when we have a text match
-        var parent = node.parentElement;
-        var isStyledVisible = true;
-        if (parent) {
-          var style = window.getComputedStyle(parent);
-          if (style && (style.display === 'none' || style.visibility === 'hidden')) {
-            isStyledVisible = false;
-          }
-        }
-        if (!isStyledVisible) {
-          index += term.length;
-          continue;
-        }
-
         var range = document.createRange();
         range.setStart(node, index);
         range.setEnd(node, index + term.length);
@@ -1180,9 +1184,18 @@
   }
 
   function setNavEnabled(enabled) {
-    if (prevBtn) prevBtn.disabled = !enabled;
-    if (nextBtn) nextBtn.disabled = !enabled;
-    if (replayBtn) replayBtn.disabled = !(searchRanges.length > 0);
+    [prevBtn, nextBtn].forEach(function(btn) {
+      if (!btn) return;
+      btn.disabled = !enabled;
+      btn.style.opacity = enabled ? '1' : '0.35';
+      btn.style.cursor = enabled ? 'pointer' : 'default';
+    });
+    if (replayBtn) {
+      var canReplay = searchRanges.length > 0;
+      replayBtn.disabled = !canReplay;
+      replayBtn.style.opacity = canReplay ? '1' : '0.35';
+      replayBtn.style.cursor = canReplay ? 'pointer' : 'default';
+    }
   }
 
   var isAutoScrolling = false;
@@ -1197,8 +1210,10 @@
   }
 
   function fadeActiveBeacons() {
+    if (activeBeacons === 0) return;
     var beacons = document.querySelectorAll('.oc-beacon');
-    if (beacons.length === 0) return;
+    if (beacons.length === 0) { activeBeacons = 0; return; }
+    activeBeacons = 0;
     for (var i = 0; i < beacons.length; i++) {
       var b = beacons[i];
       b.style.transition = 'opacity 50ms ease-out';
@@ -1221,7 +1236,9 @@
   // ── Event handlers ────────────────────────────────────────────────────────────
 
   function keydownHandler(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    // Plain Ctrl/Cmd+F opens the finder in-page. Ctrl/Cmd+Shift+F is reserved for the
+    // extension command (handled by background.js) — let it pass through to the browser.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
       var isCurrentSiteDisabled = settings.disabledSites && settings.disabledSites.indexOf(window.location.hostname) !== -1;
       var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
       if (isCurrentSiteDisabled || isStandalone) {
@@ -1260,13 +1277,14 @@
   // ── Settings panel ────────────────────────────────────────────────────────────
 
   function toggleSettings() {
+    var t = T();
     if (settingsPanel) {
       settingsPanel.remove();
       settingsPanel = null;
-      if (gearBtn) gearBtn.classList.remove('active');
+      if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
     } else {
       buildSettingsPanel();
-      if (gearBtn) gearBtn.classList.add('active');
+      if (gearBtn) { gearBtn.classList.add('active'); gearBtn.style.color = t.accent; }
     }
   }
 
@@ -1292,7 +1310,7 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange, isEffectList) {
+  function makeRadioList(items, currentVal, onChange) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
 
@@ -1322,105 +1340,7 @@
       list.appendChild(row);
     });
 
-    if (false && isEffectList) { // Backlog: Hide from UI for now
-      var addRow = document.createElement('button');
-      addRow.className = 'oc-radio-item';
-      addRow.style.borderTop = '1px dashed var(--oc-input-border)';
-      addRow.style.marginTop = '4px';
-      addRow.style.paddingTop = '8px';
-      addRow.style.color = 'var(--oc-subtle)';
-      addRow.style.opacity = '0.7';
-      
-      var plusDot = document.createElement('span');
-      plusDot.className = 'oc-radio-dot';
-      plusDot.textContent = '+';
-      plusDot.style.fontWeight = 'bold';
-      
-      var plusLbl = document.createElement('span');
-      plusLbl.textContent = 'Add Custom Effect...';
-      plusLbl.style.fontStyle = 'italic';
-      
-      addRow.appendChild(plusDot);
-      addRow.appendChild(plusLbl);
-      
-      addRow.addEventListener('click', function () {
-        promptForCustomEffect(onChange);
-      });
-      list.appendChild(addRow);
-    }
-
     return list;
-  }
-
-  function promptForCustomEffect(onChange) {
-    var label = prompt("Enter a name for your custom highlight effect:", "My Cool Effect");
-    if (!label) return;
-
-    var id = 'custom_' + label.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    if (effectsRegistry[id]) {
-      alert("An effect with that name already exists!");
-      return;
-    }
-
-    var defaultCode = [
-      "// rect is the bounding client rect of the match on screen",
-      "// settings contains user color preferences (e.g. settings.beaconColor)",
-      "if (!rect || rect.width === 0 || rect.height === 0) return;",
-      "",
-      "var cx = rect.left + rect.width / 2 + window.scrollX;",
-      "var cy = rect.top + rect.height / 2 + window.scrollY;",
-      "var color = settings.beaconColor || '#fbbf24';",
-      "",
-      "// Create and inject custom beacon element",
-      "var el = document.createElement('div');",
-      "el.className = 'oc-beacon';",
-      "el.style.cssText = [",
-      "  'position: absolute',",
-      "  'left: ' + (cx - 50) + 'px',",
-      "  'top: ' + (cy - 50) + 'px',",
-      "  'width: 100px',",
-      "  'height: 100px',",
-      "  'border: 4px solid ' + color,",
-      "  'border-radius: 50%',",
-      "  'pointer-events: none',",
-      "  'z-index: 2147483643',",
-      "  'opacity: 1'",
-      "].join(';');",
-      "document.documentElement.appendChild(el);",
-      "",
-      "// Web Animations API",
-      "el.animate([",
-      "  { transform: 'scale(0.2)', opacity: 1 },",
-      "  { transform: 'scale(2.5)', opacity: 0 }",
-      "], {",
-      "  duration: 1000,",
-      "  easing: 'cubic-bezier(0.1, 0.8, 0.3, 1)',",
-      "  fill: 'forwards'",
-      "});",
-      "",
-      "setTimeout(function() { el.remove(); }, 1100);"
-    ].join("\\n");
-
-    var fnBody = prompt("Enter the JavaScript code for your custom effect:", defaultCode.replace(/\\\\n/g, '\\n'));
-    if (!fnBody) return;
-
-    try {
-      var runFn = new Function('rect', fnBody);
-      window.Oculist.registerEffect(id, label, runFn);
-      saveCustomEffect(id, label, fnBody);
-      settings.effect = id;
-      saveSettings();
-      if (typeof onChange === 'function') {
-        onChange(id);
-      }
-      if (settingsPanel) {
-        settingsPanel.remove();
-        settingsPanel = null;
-        buildSettingsPanel();
-      }
-    } catch (e) {
-      alert("Error compiling custom animation function:\\n" + e.message);
-    }
   }
 
   function makeSettingsField(labelText, descText, controlEl) {
@@ -1451,6 +1371,7 @@
 
     settingsPanel = document.createElement('div');
     settingsPanel.id = 'oc-settings-panel';
+    settingsPanel.style.fontFamily = 'system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
 
     // Title / Header in Settings panel
     var header = document.createElement('div');
@@ -1475,11 +1396,7 @@
     // Right: Reset Button
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
-    var resetSvg = createSvgIcon('reset');
-    if (resetSvg) {
-      resetBtn.appendChild(resetSvg);
-    }
-    resetBtn.appendChild(document.createTextNode(i18n.resetBtn));
+    resetBtn.appendChild(document.createTextNode('↺ ' + i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
       settings.position = 'tr';
@@ -1488,14 +1405,6 @@
       settings.activeColor = '#f59e0b';
       settings.beaconColor = '#fbbf24';
       saveSettings();
-      try {
-        localStorage.removeItem('oc-custom-effects');
-      } catch (e) {}
-      for (var k in effectsRegistry) {
-        if (effectsRegistry.hasOwnProperty(k) && k !== 'hud' && k !== 'iris' && k !== 'sweep' && k !== 'flame') {
-          delete effectsRegistry[k];
-        }
-      }
       applyWrapPosition();
       injectHighlightStyles();
       settingsPanel.remove();
@@ -1514,19 +1423,25 @@
     var grid = document.createElement('div');
     grid.className = 'oc-settings-grid';
 
-    // Col 1: Effect & Theme
+    // Col 1: Theme & Effect
     var col1 = document.createElement('div');
     col1.className = 'oc-settings-col';
 
-    var effectOptions = [];
-    for (var key in effectsRegistry) {
-      if (effectsRegistry.hasOwnProperty(key)) {
-        effectOptions.push({ value: key, label: effectsRegistry[key].label });
+    var _hostname = window.location.hostname;
+    var _siteEnabled = settings.disabledSites.indexOf(_hostname) === -1;
+    col1.appendChild(makeSettingsField(i18n.siteToggleLabel, i18n.siteToggleDesc, makeOptionGroup([
+      { value: 'enabled',  label: i18n.enabled  },
+      { value: 'disabled', label: i18n.disabled },
+    ], _siteEnabled ? 'enabled' : 'disabled', function (v) {
+      if (v === 'disabled') {
+        if (settings.disabledSites.indexOf(_hostname) === -1) settings.disabledSites.push(_hostname);
+        if (wrap) window.__ocDestroy();
+      } else {
+        var idx = settings.disabledSites.indexOf(_hostname);
+        if (idx !== -1) settings.disabledSites.splice(idx, 1);
       }
-    }
-    effectOptions.sort(function (a, b) {
-      return a.label.localeCompare(b.label);
-    });
+      saveSettings();
+    })));
 
     col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
       { value: 'dark',  label: i18n.dark  },
@@ -1539,13 +1454,20 @@
       buildSettingsPanel();
     })));
 
+    var effectOptions = [];
+    for (var key in effectsRegistry) {
+      if (effectsRegistry.hasOwnProperty(key)) {
+        effectOptions.push({ value: key, label: effectsRegistry[key].label });
+      }
+    }
+    effectOptions.sort(function (a, b) {
+      return a.label.localeCompare(b.label);
+    });
+
     var effectField = makeSettingsField(i18n.highlightEffect, i18n.effectDesc, makeRadioList(
       effectOptions,
       settings.effect,
-      function (v) {
-        settings.effect = v; saveSettings();
-      },
-      true
+      function (v) { settings.effect = v; saveSettings(); }
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -1583,6 +1505,16 @@
     var colorsField = makeSettingsField(i18n.customColors, i18n.colorsDesc, pickerGroup);
     colorsField.style.marginTop = '8px';
     col2.appendChild(colorsField);
+
+    var faviconField = makeSettingsField(i18n.faviconLabel, i18n.faviconDesc, makeOptionGroup([
+      { value: 'on',  label: i18n.enabled  },
+      { value: 'off', label: i18n.disabled },
+    ], settings.faviconSwap ? 'on' : 'off', function (v) {
+      settings.faviconSwap = (v === 'on');
+      saveSettings();
+    }));
+    faviconField.style.marginTop = '8px';
+    col2.appendChild(faviconField);
 
 
 
@@ -1659,6 +1591,8 @@
 
   function applyWrapPosition() {
     var p = P();
+    // Reset host-page CSS on the shadow host element so it can't override our styles
+    wrap.style.cssText = '';
     wrap.style.all = 'initial';
     wrap.style.position = 'fixed';
     wrap.style.zIndex = '2147483647';
@@ -1681,6 +1615,7 @@
     wrap.style.borderRadius = p.radius;
     var t = T();
     wrap.style.background = t.bg;
+    wrap.style.color = t.text;
     wrap.style.border = '1px solid ' + t.divider;
     wrap.style.boxShadow = '0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05)';
     wrap.style.backdropFilter = 'blur(16px) saturate(180%)';
@@ -1736,81 +1671,13 @@
 
   // ── UI build ──────────────────────────────────────────────────────────────────
 
-  function createSvgIcon(name, size) {
-    size = size || 13;
-    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('data-icon', name);
-    svg.setAttribute('width', size);
-    svg.setAttribute('height', size);
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2.5');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
+  var ICON_CHARS = { up: '↑', down: '↓', replay: '↺', gear: '⚙', close: '✕' };
 
-    if (name === 'up') {
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'm18 15-6-6-6 6');
-      svg.appendChild(path);
-    } else if (name === 'down') {
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'm6 9 6 6 6-6');
-      svg.appendChild(path);
-    } else if (name === 'replay') {
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8');
-      svg.appendChild(path);
-      var poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      poly.setAttribute('points', '21 3 21 8 16 8');
-      svg.appendChild(poly);
-    } else if (name === 'gear') {
-      var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', '12');
-      circle.setAttribute('cy', '12');
-      circle.setAttribute('r', '3');
-      svg.appendChild(circle);
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z');
-      svg.appendChild(path);
-    } else if (name === 'close') {
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M18 6 6 18M6 6l12 12');
-      svg.appendChild(path);
-    } else if (name === 'reset') {
-      svg.setAttribute('width', '10');
-      svg.setAttribute('height', '10');
-      svg.style.marginRight = '4px';
-      svg.style.display = 'inline-block';
-      svg.style.verticalAlign = '-1px';
-
-      var path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path1.setAttribute('d', 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8');
-      svg.appendChild(path1);
-
-      var poly1 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      poly1.setAttribute('points', '16 3 21 3 21 8');
-      svg.appendChild(poly1);
-
-      var path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path2.setAttribute('d', 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16');
-      svg.appendChild(path2);
-
-      var poly2 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      poly2.setAttribute('points', '8 21 3 21 3 16');
-      svg.appendChild(poly2);
-    }
-
-    return svg;
-  }
-
-  function makeIconBtn(iconName, title, size) {
+  function makeIconBtn(iconName, title) {
     var btn = document.createElement('button');
-    var svg = createSvgIcon(iconName, size);
-    if (svg) {
-      btn.appendChild(svg);
-    }
+    btn.textContent = ICON_CHARS[iconName] || '';
     btn.title = title;
+    btn.setAttribute('aria-label', title);
     return btn;
   }
 
@@ -1820,15 +1687,40 @@
     wrapRoot = wrap.attachShadow({ mode: 'open' });
     applyWrapPosition();
 
+    var t = T();
+
     bar = document.createElement('div');
     bar.className = 'oc-bar';
+    bar.style.display = 'flex';
+    bar.style.alignItems = 'center';
+    bar.style.gap = '6px';
+    bar.style.padding = '6px 10px';
+    bar.style.font = '14px/1 system-ui,-apple-system,sans-serif';
+    bar.style.background = t.bg;
+    bar.style.color = t.text;
+    bar.style.boxSizing = 'border-box';
+    bar.style.width = '100%';
 
     input = document.createElement('input');
     input.type = 'text';
     input.placeholder = i18n.findPlaceholder;
+    input.setAttribute('aria-label', 'Find in page');
     input.className = 'oc-input';
+    input.style.border = '1px solid ' + t.inputBorder;
+    input.style.borderRadius = '6px';
+    input.style.background = t.inputBg;
+    input.style.color = t.inputText;
+    input.style.padding = '4px 8px';
+    input.style.fontSize = '14px';
+    input.style.width = '200px';
+    input.style.flexShrink = '0';
+    input.style.outline = 'none';
+    input.style.fontFamily = 'system-ui,-apple-system,sans-serif';
+    input.style.boxSizing = 'border-box';
+    input.style.margin = '0';
+    input.style.height = 'auto';
     input.addEventListener('keydown', function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
         try { e.preventDefault(); } catch (err) {}
         input.focus();
         input.select();
@@ -1837,7 +1729,6 @@
       }
       e.stopPropagation();
     });
-
     input.addEventListener('input', function () {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function () {
@@ -1850,10 +1741,27 @@
         }
       }, 150);
     });
+    input.addEventListener('focus', function() {
+      input.style.borderColor = T().accent;
+      input.style.boxShadow = '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2);
+    });
+    input.addEventListener('blur', function() {
+      input.style.borderColor = T().inputBorder;
+      input.style.boxShadow = 'none';
+    });
 
     countEl = document.createElement('span');
     countEl.className = 'oc-count';
-
+    countEl.style.color = t.text;
+    countEl.style.opacity = '0.75';
+    countEl.style.fontSize = '12px';
+    countEl.style.minWidth = '58px';
+    countEl.style.flexShrink = '0';
+    countEl.style.textAlign = 'right';
+    countEl.style.fontFamily = 'system-ui,-apple-system,sans-serif';
+    countEl.style.marginRight = '2px';
+    countEl.style.userSelect = 'none';
+    countEl.style.whiteSpace = 'nowrap';
     prevBtn = makeIconBtn('up', i18n.prevTitle);
     prevBtn.addEventListener('click', function () { findNext(true); });
 
@@ -1868,6 +1776,32 @@
 
     closeBtn = makeIconBtn('close', i18n.closeTitle);
     closeBtn.addEventListener('click', window.__ocDestroy);
+
+    [prevBtn, nextBtn, replayBtn, gearBtn, closeBtn].forEach(function(btn) {
+      btn.style.color = t.text;
+      btn.style.background = 'none';
+      btn.style.border = 'none';
+      btn.style.padding = '0';
+      btn.style.fontSize = '14px';
+      btn.style.fontFamily = 'system-ui,-apple-system,sans-serif';
+      btn.style.borderRadius = '4px';
+      btn.style.display = 'inline-flex';
+      btn.style.alignItems = 'center';
+      btn.style.justifyContent = 'center';
+      btn.style.cursor = 'pointer';
+      btn.style.width = '26px';
+      btn.style.height = '26px';
+      btn.style.minWidth = '26px';
+      btn.style.minHeight = '26px';
+      btn.style.maxWidth = '26px';
+      btn.style.maxHeight = '26px';
+      btn.style.flexShrink = '0';
+      btn.style.boxSizing = 'border-box';
+      btn.style.lineHeight = '1';
+      btn.style.margin = '0';
+      btn.style.webkitAppearance = 'none';
+    });
+    gearBtn.style.fontSize = '17px';
 
     setNavEnabled(false);
 
@@ -1904,6 +1838,30 @@
     var g = (rgb >> 8) & 0xff;
     var b = (rgb >> 0) & 0xff;
     return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+
+  function hexToHsl(hex) {
+    var c = hex.replace('#', '');
+    if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+    var r = parseInt(c.substr(0,2),16)/255, g = parseInt(c.substr(2,2),16)/255, b = parseInt(c.substr(4,2),16)/255;
+    var max = Math.max(r,g,b), min = Math.min(r,g,b), h, s, l = (max+min)/2;
+    if (max === min) { h = s = 0; } else {
+      var d = max - min;
+      s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+      if (max === r) h = ((g-b)/d + (g<b?6:0))/6;
+      else if (max === g) h = ((b-r)/d + 2)/6;
+      else h = ((r-g)/d + 4)/6;
+    }
+    return [h*360, s*100, l*100];
+  }
+
+  function hslToHex(h, s, l) {
+    h = ((h%360)+360)%360; s = Math.max(0,Math.min(100,s))/100; l = Math.max(0,Math.min(100,l))/100;
+    var c = (1-Math.abs(2*l-1))*s, x = c*(1-Math.abs((h/60)%2-1)), m = l-c/2, r=0,g=0,b=0;
+    if      (h<60)  { r=c;g=x;b=0; } else if (h<120) { r=x;g=c;b=0; }
+    else if (h<180) { r=0;g=c;b=x; } else if (h<240) { r=0;g=x;b=c; }
+    else if (h<300) { r=x;g=0;b=c; } else            { r=c;g=0;b=x; }
+    return '#'+[r,g,b].map(function(v){return Math.round((v+m)*255).toString(16).padStart(2,'0');}).join('');
   }
 
   function injectHighlightStyles() {
@@ -1950,8 +1908,8 @@
         '  backdrop-filter: blur(16px) saturate(180%);',
         '  -webkit-backdrop-filter: blur(16px) saturate(180%);',
         '  transition: border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms;',
-        '  border: 1px solid var(--oc-divider);',
-        '  background: var(--oc-bg);',
+        '  border: 1px solid ' + t.divider + ';',
+        '  background: ' + t.bg + ';',
         '  --oc-bg: ' + t.bg + ';',
         '  --oc-text: ' + t.text + ';',
         '  --oc-subtle: ' + t.subtle + ';',
@@ -1965,7 +1923,7 @@
         '  --oc-btn-active-text: ' + (settings.theme === 'dark' ? '#fafafa' : '#09090b') + ';',
         '  --oc-btn-hover-bg: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2) + ';',
-        '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
         '.oc-bar {',
         '  --oc-bg: ' + t.bg + ';',
@@ -1982,8 +1940,8 @@
         '  gap: 6px;',
         '  padding: 6px 10px;',
         '  font: 14px/1 system-ui, -apple-system, sans-serif;',
-        '  background: var(--oc-bg);',
-        '  color: var(--oc-text);',
+        '  background: ' + t.bg + ';',
+        '  color: ' + t.text + ';',
         '}',
         'input.oc-input {',
         '  border: 1px solid var(--oc-input-border);',
@@ -2006,7 +1964,7 @@
         '  box-shadow: 0 0 0 2px var(--oc-accent-alpha);',
         '}',
         '.oc-count {',
-        '  color: var(--oc-text);',
+        '  color: ' + t.text + ';',
         '  opacity: 0.75;',
         '  font-size: 12px;',
         '  min-width: 58px;',
@@ -2017,41 +1975,13 @@
         '  user-select: none;',
         '  white-space: nowrap;',
         '}',
-        'svg, svg * {',
-        '  stroke: var(--oc-text);',
-        '  fill: none;',
-        '  stroke-dasharray: none;',
-        '  stroke-width: 2.5;',
-        '  stroke-linecap: round;',
-        '  stroke-linejoin: round;',
-        '}',
-        '.oc-bar button svg {',
-        '  display: inline-block;',
-        '  visibility: visible;',
-        '  width: 13px;',
-        '  height: 13px;',
-        '  min-width: 13px;',
-        '  min-height: 13px;',
-        '  flex-shrink: 0;',
-        '  stroke: var(--oc-text);',
-        '  fill: none;',
-        '}',
-        '.oc-bar button svg path, .oc-bar button svg polyline, .oc-bar button svg circle {',
-        '  stroke: var(--oc-text);',
-        '  fill: none;',
-        '}',
-        'button:hover:not(:disabled) svg, button:hover:not(:disabled) svg * {',
-        '  stroke: var(--oc-accent);',
-        '}',
-        'button.active svg, button.active svg * {',
-        '  stroke: var(--oc-accent);',
-        '}',
         'button, .oc-bar button {',
-        '  color: var(--oc-text);',
+        '  color: ' + t.text + ';',
         '  background: none;',
         '  border: none;',
-        '  padding: 6px;',
-        '  font-size: 0;',
+        '  padding: 0;',
+        '  font-size: 14px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
         '  border-radius: 4px;',
         '  display: inline-flex;',
         '  align-items: center;',
@@ -2071,32 +2001,32 @@
         '  cursor: pointer;',
         '}',
         '.oc-bar button {',
-        '  width: 25px;',
-        '  height: 25px;',
-        '  min-width: 25px;',
-        '  min-height: 25px;',
-        '  max-width: 25px;',
-        '  max-height: 25px;',
+        '  width: 26px;',
+        '  height: 26px;',
+        '  min-width: 26px;',
+        '  min-height: 26px;',
+        '  max-width: 26px;',
+        '  max-height: 26px;',
         '  flex-shrink: 0;',
         '  box-sizing: border-box;',
         '}',
         'button:hover, .oc-bar button:hover {',
-        '  color: var(--oc-accent);',
-        '  background-color: var(--oc-btn-hover-bg);',
+        '  color: ' + t.accent + ';',
+        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  transform: scale(1.05);',
         '}',
         'button:active, .oc-bar button:active {',
         '  transform: scale(0.95);',
         '}',
         'button.active, .oc-bar button.active {',
-        '  color: var(--oc-accent);',
+        '  color: ' + t.accent + ';',
         '}',
         'button:disabled, .oc-bar button:disabled {',
         '  opacity: 0.35;',
         '  cursor: default;',
         '  transform: none;',
         '  background: none;',
-        '  color: var(--oc-text);',
+        '  color: ' + t.text + ';',
         '}',
         '#oc-settings-panel {',
         '  background: var(--oc-panel-bg);',
@@ -2127,24 +2057,24 @@
         '  gap: 1px;',
         '}',
         '.oc-settings-title {',
-        '  font-size: 10px;',
+        '  font-size: .875rem;',
         '  color: var(--oc-text);',
-        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  font-family: inherit;',
         '  font-weight: 700;',
         '  letter-spacing: 0.05em;',
         '}',
         '.oc-settings-subtitle {',
-        '  font-size: 9px;',
+        '  font-size: .875rem;',
         '  color: var(--oc-subtle);',
-        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  font-family: inherit;',
         '  font-weight: 400;',
         '}',
         '.oc-settings-reset-btn {',
         '  background: none;',
         '  border: none;',
         '  color: var(--oc-text);',
-        '  font-size: 9.5px;',
-        '  font-family: system-ui, sans-serif;',
+        '  font-size: .875rem;',
+        '  font-family: inherit;',
         '  font-weight: 600;',
         '  cursor: pointer;',
         '  padding: 3px 6px;',
@@ -2187,58 +2117,17 @@
         '  margin-bottom: 2px;',
         '}',
         '.oc-settings-label {',
-        '  font-size: 11px;',
+        '  font-size: .875rem;',
         '  color: var(--oc-text);',
-        '  font-family: system-ui, sans-serif;',
+        '  font-family: inherit;',
         '  font-weight: 600;',
         '  letter-spacing: 0.01em;',
         '}',
         '.oc-settings-desc {',
-        '  font-size: 9px;',
+        '  font-size: .875rem;',
         '  color: var(--oc-subtle);',
-        '  font-family: system-ui, sans-serif;',
-        '  font-weight: 400;',
-        '}',
-        '.oc-radio-list {',
-        '  display: flex;',
-        '  flex-direction: column;',
-        '  gap: 2px;',
-        '}',
-        '.oc-radio-item {',
-        '  display: flex;',
-        '  align-items: center;',
-        '  justify-content: flex-start;',
-        '  gap: 8px;',
-        '  padding: 5px 8px;',
-        '  border: none;',
-        '  background: transparent;',
-        '  color: var(--oc-text);',
-        '  font-size: 11px;',
         '  font-family: inherit;',
-        '  font-weight: 500;',
-        '  cursor: pointer;',
-        '  border-radius: 4px;',
-        '  text-align: left;',
-        '  width: 100%;',
-        '  opacity: 0.7;',
-        '  box-sizing: border-box;',
-        '  box-shadow: none;',
-        '  margin: 0;',
-        '  transition: background-color 120ms, opacity 120ms, color 120ms;',
-        '}',
-        '.oc-radio-item:hover {',
-        '  background: var(--oc-btn-hover-bg);',
-        '  opacity: 1;',
-        '}',
-        '.oc-radio-item.active {',
-        '  color: var(--oc-accent);',
-        '  opacity: 1;',
-        '}',
-        '.oc-radio-dot {',
-        '  font-size: 10px;',
-        '  flex-shrink: 0;',
-        '  width: 1em;',
-        '  text-align: center;',
+        '  font-weight: 400;',
         '}',
         '.oc-donate-btn {',
         '  display: inline-flex;',
@@ -2248,8 +2137,8 @@
         '  padding: 6px 12px;',
         '  background: #FFDD00;',
         '  color: #000000 !important;',
-        '  font-family: system-ui, sans-serif;',
-        '  font-size: 11px;',
+        '  font-family: inherit;',
+        '  font-size: .875rem;',
         '  font-weight: 700;',
         '  border-radius: 6px;',
         '  text-decoration: none;',
@@ -2271,8 +2160,8 @@
         '  padding: 6px 12px;',
         '  background: #2563eb;',
         '  color: #ffffff !important;',
-        '  font-family: system-ui, sans-serif;',
-        '  font-size: 11px;',
+        '  font-family: inherit;',
+        '  font-size: .875rem;',
         '  font-weight: 700;',
         '  border-radius: 6px;',
         '  text-decoration: none;',
@@ -2320,9 +2209,9 @@
         '  background: transparent;',
         '  color: var(--oc-text);',
         '  opacity: 0.8;',
-        '  padding: 4px 6px;',
+        '  padding: 5px 6px;',
         '  border-radius: 4px;',
-        '  font-size: 10px;',
+        '  font-size: .875rem;',
         '  font-weight: 600;',
         '  cursor: pointer;',
         '  font-family: inherit;',
@@ -2380,6 +2269,47 @@
         '  color: var(--oc-text);',
         '  letter-spacing: 0.02em;',
         '}',
+        '.oc-radio-list {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 2px;',
+        '}',
+        '.oc-radio-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  justify-content: flex-start;',
+        '  gap: 8px;',
+        '  padding: 5px 8px;',
+        '  border: none;',
+        '  background: transparent;',
+        '  color: var(--oc-text);',
+        '  font-size: .875rem;',
+        '  font-family: inherit;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  border-radius: 4px;',
+        '  text-align: left;',
+        '  width: 100%;',
+        '  opacity: 0.7;',
+        '  box-sizing: border-box;',
+        '  box-shadow: none;',
+        '  margin: 0;',
+        '  transition: background-color 120ms, opacity 120ms, color 120ms;',
+        '}',
+        '.oc-radio-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '  opacity: 1;',
+        '}',
+        '.oc-radio-item.active {',
+        '  color: var(--oc-accent);',
+        '  opacity: 1;',
+        '}',
+        '.oc-radio-dot {',
+        '  font-size: .75rem;',
+        '  flex-shrink: 0;',
+        '  width: 1em;',
+        '  text-align: center;',
+        '}',
         '.oc-color-badge input.oc-color-input {',
         '  position: absolute;',
         '  top: 0;',
@@ -2413,12 +2343,12 @@
   function boot() {
     document.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
     window.addEventListener('scroll', handleScroll, { passive: true });
-    
+
     window.__ocToggle = function () {
       if (wrap) {
         window.__ocDestroy();
       } else {
-        setSunglassesFavicon();
+        if (settings.faviconSwap) setSunglassesFavicon();
         buildUI();
         injectHighlightStyles();
         if (input) {
@@ -2427,35 +2357,35 @@
         }
       }
     };
+
+    chrome.runtime.onMessage.addListener(function(msg) {
+      if (msg.action === 'toggle') window.__ocToggle();
+      else if (msg.action === 'destroy') window.__ocDestroy();
+    });
+
+    chrome.storage.onChanged.addListener(function(changes) {
+      if (!changes['oc-settings']) return;
+      var nv = changes['oc-settings'].newValue;
+      if (!nv) return;
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites', 'faviconSwap'].forEach(function(k) {
+        if (k in nv) settings[k] = nv[k];
+      });
+      if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+      if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
+        window.__ocDestroy();
+      }
+    });
   }
 
-  // Load settings via chrome.storage.sync with fallback to localStorage
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-    chrome.storage.sync.get('oc-settings', function (data) {
-      if (data && data['oc-settings']) {
-        var saved = data['oc-settings'];
-        ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites'].forEach(function (k) {
-          if (k in saved) settings[k] = saved[k];
-        });
-        if (!Array.isArray(settings.disabledSites)) {
-          settings.disabledSites = [];
-        }
-      }
-      loadCustomEffects();
-      boot();
-    });
-  } else {
-    try {
-      var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites'].forEach(function (k) {
+  chrome.storage.sync.get('oc-settings', function (data) {
+    if (data && data['oc-settings']) {
+      var saved = data['oc-settings'];
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites', 'faviconSwap'].forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
-      if (!Array.isArray(settings.disabledSites)) {
-        settings.disabledSites = [];
-      }
-    } catch (e) {}
-    loadCustomEffects();
+      if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+    }
     boot();
-  }
+  });
 
 })();

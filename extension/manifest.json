@@ -8,15 +8,19 @@
     "scripting",
     "storage"
   ],
-  "action": {
-    "default_icon": "icon.svg",
-    "default_title": "Toggle Oculist Finder"
-  },
   "icons": {
-    "16": "icon.svg",
-    "32": "icon.svg",
-    "48": "icon.svg",
-    "128": "icon.svg"
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
+    "default_title": "Oculist Settings & Toggle",
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js"
@@ -25,16 +29,16 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle",
-      "world": "MAIN"
+      "run_at": "document_idle"
     }
   ],
   "commands": {
-    "_execute_action": {
+    "toggle-finder": {
       "suggested_key": {
         "default": "Ctrl+Shift+F",
-        "mac": "MacCtrl+Shift+F"
-      }
+        "mac": "Command+Shift+F"
+      },
+      "description": "Open or close the Oculist find overlay"
     }
   }
 }
