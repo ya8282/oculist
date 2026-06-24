@@ -11,7 +11,8 @@
     theme: 'dark',
     matchColor: '#fef08a',
     activeColor: '#f59e0b',
-    beaconColor: '#fbbf24'
+    beaconColor: '#fbbf24',
+    disabledSites: []
   };
 
   function saveSettings() {
@@ -21,6 +22,65 @@
       try { localStorage.setItem('oc-settings', JSON.stringify(settings)); } catch (e) {}
     }
   }
+
+  // ── Central i18n Localization Dictionary ─────────────────────────────────────
+
+  var i18n = {
+    findPlaceholder: 'Find…',
+    prevTitle: 'Previous  Shift+Enter',
+    nextTitle: 'Next  Enter',
+    replayTitle: 'Replay Effect',
+    optionsTitle: 'Options',
+    closeTitle: 'Close  Esc',
+    noMatch: 'no match',
+    of: 'of',
+    
+    // Preference Panel Strings
+    prefTitle: 'OCULIST PREFERENCES',
+    prefSubtitle: 'Configure search behavior & effects',
+    resetBtn: 'Reset',
+    visualTheme: 'Visual Theme',
+    themeDesc: 'Sleek interface color palette',
+    dark: 'Dark',
+    light: 'Light',
+    highlightEffect: 'Highlight Effect',
+    effectDesc: 'Choose match visual transition',
+    panelPosition: 'Panel Position',
+    positionDesc: 'Screen quadrant placement',
+    topLeft: 'Top left',
+    topRight: 'Top right',
+    bottomLeft: 'Bottom left',
+    bottomRight: 'Bottom right',
+    customColors: 'Custom Colors',
+    colorsDesc: 'Interactive effect colors',
+    matchLabel: 'Match',
+    matchTitle: 'Normal Match Color',
+    activeLabel: 'Active',
+    activeTitle: 'Active Match Color',
+    beaconLabel: 'Beacon',
+    beaconTitle: 'Beacon Animation Color',
+    supportTitle: 'Support Oculist',
+    supportDesc: 'Keep this open-source tool going',
+    coffeeBtn: '☕ Buy me a coffee',
+    feedbackTitle: 'Share Feedback',
+    feedbackDesc: 'Help us improve Oculist',
+    feedbackBtn: '💬 Send Feedback',
+    
+    // Site Toggle Strings
+    siteToggleLabel: 'Active on this Site',
+    siteToggleDesc: 'Toggle Oculist for this domain',
+    enabled: 'Enabled',
+    disabled: 'Disabled',
+    pinExtensionTip: 'Tip: Pin Oculist to your browser toolbar to easily access the site-specific toggle next to the address bar!',
+
+    // Highlight Effects
+    effectAnimeLaser: 'Anime Laser',
+    effectSpotlight: 'Spotlight',
+    effectWarpDrive: 'Warp Drive',
+    effectInfernoFlame: 'Inferno Flame',
+    effectLightning: 'Lightning',
+    effectElectronCloud: 'Electron Cloud'
+  };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
 
@@ -49,9 +109,12 @@
   // ── Plugins & Effects Registry ────────────────────────────────────────────────
 
   var effectsRegistry = {
-    hud: { label: 'Anime Laser', run: animateAnimeLaser },
-    iris: { label: 'Cinematic', run: animateIris },
-    sweep: { label: 'Warp Drive', run: animateWarpDrive }
+    hud: { label: i18n.effectAnimeLaser, run: animateAnimeLaser },
+    iris: { label: i18n.effectSpotlight, run: animateIris },
+    sweep: { label: i18n.effectWarpDrive, run: animateWarpDrive },
+    flame: { label: i18n.effectInfernoFlame, run: animateFlame },
+    lightning: { label: i18n.effectLightning, run: animateLightning },
+    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud }
   };
 
   window.Oculist = window.Oculist || {};
@@ -64,6 +127,35 @@
       buildSettingsPanel();
     }
   };
+
+  function loadCustomEffects() {
+    try {
+      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
+      for (var id in saved) {
+        if (saved.hasOwnProperty(id)) {
+          var item = saved[id];
+          if (item && item.label && item.code) {
+            try {
+              effectsRegistry[id] = {
+                label: item.label,
+                run: new Function('rect', item.code)
+              };
+            } catch (e) {
+              console.warn('Oculist: Failed to compile custom effect ' + id, e);
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  function saveCustomEffect(id, label, code) {
+    try {
+      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
+      saved[id] = { label: label, code: code };
+      localStorage.setItem('oc-custom-effects', JSON.stringify(saved));
+    } catch (e) {}
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +170,10 @@
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
   window.__ocDestroy = function () {
+    try {
+      window.removeEventListener('scroll', handleScroll, { passive: true });
+    } catch (e) {}
+
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
@@ -346,40 +442,549 @@
     }
 
     // 2. Warp Speed Radial Star Streaks
-    var streakCount = 24;
+    var streakCount = 120;
     for (var i = 0; i < streakCount; i++) {
       var streak = document.createElement('div');
-      var thick = Math.random() * 2.5 + 1;
-      var len = Math.random() * 40 + 20;
+      var thick = Math.random() * 2.2 + 1;
+      var len = Math.random() * 55 + 25;
       var angle = Math.random() * Math.PI * 2;
 
       streak.style.cssText = [
         'position:absolute',
         'left:150px', 'top:150px',
         'width:' + len + 'px', 'height:' + thick + 'px',
-        'background:linear-gradient(90deg, transparent, ' + color + ', #ffffff, ' + color + ', transparent)',
-        'box-shadow:0 0 8px ' + color,
+        'background:linear-gradient(90deg, transparent, ' + color + ', #ffffff 40%, #ffffff 60%, ' + color + ', transparent)',
+        'box-shadow:0 0 10px ' + color + ', 0 0 4px #ffffff',
         'transform-origin:left center',
         'opacity:0', 'pointer-events:none'
       ].join(';');
       container.appendChild(streak);
 
-      var travel = Math.random() * 120 + 80;
+      var travel = Math.random() * 240 + 130;
+      var startDelay = Math.random() * 550;
 
       streak.animate([
-        { transform: 'rotate(' + angle + 'rad) translate(10px, 0) scaleX(0.1)', opacity: 0 },
-        { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.3) + 'px, 0) scaleX(2.0)', opacity: 1, offset: 0.2 },
-        { transform: 'rotate(' + angle + 'rad) translate(' + travel + 'px, 0) scaleX(5.0)', opacity: 0 }
+        { transform: 'rotate(' + angle + 'rad) translate(10px, 0) scaleX(0.05)', opacity: 0 },
+        { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.25) + 'px, 0) scaleX(3.5)', opacity: 1, offset: 0.15 },
+        { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.7) + 'px, 0) scaleX(7.0)', opacity: 1, offset: 0.7 },
+        { transform: 'rotate(' + angle + 'rad) translate(' + travel + 'px, 0) scaleX(10.0)', opacity: 0 }
       ], {
-        duration: 1500 + Math.random() * 450,
-        easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
+        duration: 750 + Math.random() * 550,
+        delay: startDelay,
+        easing: 'cubic-bezier(0.1, 0.8, 0.25, 1)',
         fill: 'forwards'
       });
     }
 
     setTimeout(function() {
       container.remove();
-    }, 2100);
+    }, 2200);
+  }
+
+  function animateFlame(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+    var color = settings.beaconColor || '#f97316';
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 80) + 'px', 'top:' + (y - 200) + 'px',
+      'width:' + (w + 160) + 'px', 'height:' + (h + 280) + 'px',
+      'pointer-events:none', 'z-index:2147483643',
+      'overflow:visible'
+    ].join(';');
+    document.documentElement.appendChild(container);
+
+    // 1. Fiery glowing outline
+    var outline = document.createElement('div');
+    outline.style.cssText = [
+      'position:absolute',
+      'left:80px', 'top:200px',
+      'width:' + w + 'px', 'height:' + h + 'px',
+      'border-radius:4px',
+      'box-shadow:0 0 60px #ef4444, inset 0 0 40px #f97316, 0 0 16px #eab308',
+      'opacity:0', 'pointer-events:none'
+    ].join(';');
+    container.appendChild(outline);
+
+    outline.animate([
+      { opacity: 0, transform: 'scale(1.15)' },
+      { opacity: 0.9, transform: 'scale(1)', offset: 0.15 },
+      { opacity: 0.8, transform: 'scale(1)', offset: 0.85 },
+      { opacity: 0, transform: 'scale(0.95)' }
+    ], {
+      duration: 1800,
+      easing: 'ease-out',
+      fill: 'forwards'
+    });
+
+    // 2. Soft heat glow behind
+    var glow = document.createElement('div');
+    glow.style.cssText = [
+      'position:absolute',
+      'left:40px', 'top:160px',
+      'width:' + (w + 80) + 'px', 'height:' + (h + 80) + 'px',
+      'background:radial-gradient(ellipse, rgba(239, 68, 68, 0.4) 0%, rgba(249, 115, 22, 0.15) 60%, transparent 100%)',
+      'filter:blur(32px)',
+      'opacity:0', 'pointer-events:none'
+    ].join(';');
+    container.appendChild(glow);
+
+    glow.animate([
+      { opacity: 0, transform: 'scale(0.8)' },
+      { opacity: 1, transform: 'scale(1)', offset: 0.2 },
+      { opacity: 0.8, transform: 'scale(1.05)', offset: 0.85 },
+      { opacity: 0, transform: 'scale(1.1)' }
+    ], {
+      duration: 1800,
+      easing: 'ease-out',
+      fill: 'forwards'
+    });
+
+    // 3. Flame particles rising
+    var colors = ['#ef4444', '#f97316', '#f59e0b', '#facc15', '#fef08a'];
+    var particleCount = 25;
+    for (var i = 0; i < particleCount; i++) {
+      var p = document.createElement('div');
+      var pSize = Math.random() * 48 + 24;
+      var px = 80 + Math.random() * w;
+      var py = 200 + h;
+
+      p.style.cssText = [
+        'position:absolute',
+        'left:' + px + 'px', 'top:' + py + 'px',
+        'width:' + pSize + 'px', 'height:' + pSize + 'px',
+        'background:' + colors[Math.floor(Math.random() * colors.length)],
+        'border-radius:50% 50% 20% 80%',
+        'filter:blur(' + (Math.random() * 8 + 4) + 'px)',
+        'transform-origin:center bottom',
+        'opacity:0', 'pointer-events:none'
+      ].join(';');
+      container.appendChild(p);
+
+      var riseHeight = Math.random() * 180 + 120;
+      var swayX = (Math.random() - 0.5) * 100;
+      var randomRotate = Math.random() * 360;
+
+      p.animate([
+        { transform: 'translate(-50%, -50%) translate(0, 0) rotate(' + randomRotate + 'deg) scale(0.2)', opacity: 0 },
+        { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.3) + 'px, -' + (riseHeight * 0.3) + 'px) rotate(' + (randomRotate + 45) + 'deg) scale(1.2)', opacity: 0.9, offset: 0.2 },
+        { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.7) + 'px, -' + (riseHeight * 0.7) + 'px) rotate(' + (randomRotate + 90) + 'deg) scale(0.8)', opacity: 0.6, offset: 0.7 },
+        { transform: 'translate(-50%, -50%) translate(' + swayX + 'px, -' + riseHeight + 'px) rotate(' + (randomRotate + 180) + 'deg) scale(0)', opacity: 0 }
+      ], {
+        duration: 1000 + Math.random() * 600,
+        delay: Math.random() * 400,
+        easing: 'cubic-bezier(0.21, 0.61, 0.35, 1)',
+        fill: 'forwards'
+      });
+    }
+
+    // 4. Gray smoke particles
+    var smokeCount = 8;
+    for (var j = 0; j < smokeCount; j++) {
+      var s = document.createElement('div');
+      var sSize = Math.random() * 60 + 40;
+      var sx = 80 + Math.random() * w;
+      var sy = 200 + h / 2;
+
+      s.style.cssText = [
+        'position:absolute',
+        'left:' + sx + 'px', 'top:' + sy + 'px',
+        'width:' + sSize + 'px', 'height:' + sSize + 'px',
+        'background:rgba(120, 113, 108, 0.25)',
+        'border-radius:50%',
+        'filter:blur(' + (Math.random() * 12 + 8) + 'px)',
+        'opacity:0', 'pointer-events:none'
+      ].join(';');
+      container.appendChild(s);
+
+      var sRise = Math.random() * 240 + 200;
+      var sSway = (Math.random() - 0.5) * 160;
+
+      s.animate([
+        { transform: 'translate(-50%, -50%) translate(0, 0) scale(0.5)', opacity: 0 },
+        { transform: 'translate(-50%, -50%) translate(' + (sSway * 0.4) + 'px, -' + (sRise * 0.4) + 'px) scale(1.2)', opacity: 0.3, offset: 0.3 },
+        { transform: 'translate(-50%, -50%) translate(' + sSway + 'px, -' + sRise + 'px) scale(2)', opacity: 0 }
+      ], {
+        duration: 1400 + Math.random() * 600,
+        delay: Math.random() * 500,
+        easing: 'ease-out',
+        fill: 'forwards'
+      });
+    }
+
+    setTimeout(function() {
+      container.remove();
+    }, 2200);
+  }
+
+  function animateLightning(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var color = settings.beaconColor || '#a855f7';
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:fixed', 'left:0', 'top:0',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none', 'z-index:2147483643',
+      'overflow:hidden'
+    ].join(';');
+    document.documentElement.appendChild(container);
+
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = 'width:100%; height:100%; overflow:visible; display:block;';
+    container.appendChild(svg);
+
+    var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    var filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+    filter.setAttribute('id', 'oc-lightning-glow');
+    var blur = document.createElementNS('http://www.w3.org/2000/svg', 'feGaussianBlur');
+    blur.setAttribute('stdDeviation', '4');
+    blur.setAttribute('result', 'coloredBlur');
+    var merge = document.createElementNS('http://www.w3.org/2000/svg', 'feMerge');
+    var mergeNode1 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode');
+    mergeNode1.setAttribute('in', 'coloredBlur');
+    var mergeNode2 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode');
+    mergeNode2.setAttribute('in', 'SourceGraphic');
+    merge.appendChild(mergeNode1);
+    merge.appendChild(mergeNode2);
+    filter.appendChild(blur);
+    filter.appendChild(merge);
+    defs.appendChild(filter);
+    svg.appendChild(defs);
+
+    var corners = [
+      { x: 0, y: 0 },
+      { x: vw, y: 0 },
+      { x: 0, y: vh },
+      { x: vw, y: vh }
+    ];
+
+    var paths = [];
+
+    corners.forEach(function (corner) {
+      var segments = 12;
+      var displace = 45;
+      var points = [];
+      points.push({ x: corner.x, y: corner.y });
+
+      for (var i = 1; i < segments; i++) {
+        var t = i / segments;
+        var px = corner.x + (cx - corner.x) * t;
+        var py = corner.y + (cy - corner.y) * t;
+
+        var dx = cx - corner.x;
+        var dy = cy - corner.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        var nx = -dy / len;
+        var ny = dx / len;
+
+        var jitter = displace * Math.sin(t * Math.PI) * (Math.random() - 0.5) * 2;
+        px += nx * jitter;
+        py += ny * jitter;
+
+        points.push({ x: px, y: py });
+      }
+      points.push({ x: cx, y: cy });
+
+      var d = 'M ' + points[0].x + ' ' + points[0].y;
+      for (var p = 1; p < points.length; p++) {
+        d += ' L ' + points[p].x + ' ' + points[p].y;
+      }
+
+      var glowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      glowPath.setAttribute('d', d);
+      glowPath.setAttribute('stroke', color);
+      glowPath.setAttribute('stroke-width', '6');
+      glowPath.setAttribute('fill', 'none');
+      glowPath.setAttribute('filter', 'url(#oc-lightning-glow)');
+      glowPath.setAttribute('stroke-linecap', 'round');
+      glowPath.setAttribute('stroke-linejoin', 'round');
+      glowPath.style.opacity = '0.8';
+      svg.appendChild(glowPath);
+
+      var corePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      corePath.setAttribute('d', d);
+      corePath.setAttribute('stroke', '#ffffff');
+      corePath.setAttribute('stroke-width', '2');
+      corePath.setAttribute('fill', 'none');
+      corePath.setAttribute('stroke-linecap', 'round');
+      corePath.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(corePath);
+
+      paths.push({ glow: glowPath, core: corePath });
+    });
+
+    var travelDuration = 350;
+
+    paths.forEach(function (p) {
+      var totalLength = 1500;
+      try {
+        totalLength = p.core.getTotalLength() || 1500;
+      } catch (e) {}
+
+      p.glow.setAttribute('stroke-dasharray', totalLength);
+      p.glow.setAttribute('stroke-dashoffset', totalLength);
+      p.core.setAttribute('stroke-dasharray', totalLength);
+      p.core.setAttribute('stroke-dashoffset', totalLength);
+
+      p.glow.animate([
+        { strokeDashoffset: totalLength },
+        { strokeDashoffset: '0' }
+      ], {
+        duration: travelDuration,
+        easing: 'ease-out',
+        fill: 'forwards'
+      });
+
+      p.core.animate([
+        { strokeDashoffset: totalLength },
+        { strokeDashoffset: '0' }
+      ], {
+        duration: travelDuration,
+        easing: 'ease-out',
+        fill: 'forwards'
+      });
+    });
+
+    setTimeout(function () {
+      var flashBg = document.createElement('div');
+      flashBg.style.cssText = [
+        'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
+        'background:#ffffff', 'opacity:0', 'pointer-events:none'
+      ].join(';');
+      container.appendChild(flashBg);
+      flashBg.animate([
+        { opacity: 0.3 },
+        { opacity: 0, offset: 0.8 }
+      ], {
+        duration: 300,
+        easing: 'ease-out',
+        fill: 'forwards'
+      });
+
+      var flashCircle = document.createElement('div');
+      var fw = rect.width + 60;
+      var fh = rect.height + 60;
+      flashCircle.style.cssText = [
+        'position:absolute',
+        'left:' + (cx - fw / 2) + 'px', 'top:' + (cy - fh / 2) + 'px',
+        'width:' + fw + 'px', 'height:' + fh + 'px',
+        'background:radial-gradient(circle, #ffffff 10%, ' + color + ' 60%, transparent 100%)',
+        'border-radius:50%',
+        'filter:drop-shadow(0 0 25px ' + color + ')',
+        'transform-origin:center',
+        'opacity:1', 'pointer-events:none'
+      ].join(';');
+      container.appendChild(flashCircle);
+
+      flashCircle.animate([
+        { transform: 'scale(0.5)', opacity: 1 },
+        { transform: 'scale(1.4)', opacity: 1, offset: 0.2 },
+        { transform: 'scale(1.1)', opacity: 0.9, offset: 0.7 },
+        { transform: 'scale(1.8) scaleY(0)', opacity: 0 }
+      ], {
+        duration: 700,
+        easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
+        fill: 'forwards'
+      });
+
+      for (var j = 0; j < 3; j++) {
+        var flickerGlow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        var fd = 'M ' + cx + ' ' + cy;
+        var fx = cx;
+        var fy = cy;
+        for (var k = 0; k < 3; k++) {
+          fx += (Math.random() - 0.5) * 80;
+          fy += (Math.random() - 0.5) * 80;
+          fd += ' L ' + fx + ' ' + fy;
+        }
+        flickerGlow.setAttribute('d', fd);
+        flickerGlow.setAttribute('stroke', color);
+        flickerGlow.setAttribute('stroke-width', '4');
+        flickerGlow.setAttribute('fill', 'none');
+        svg.appendChild(flickerGlow);
+
+        var flickerCore = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        flickerCore.setAttribute('d', fd);
+        flickerCore.setAttribute('stroke', '#ffffff');
+        flickerCore.setAttribute('stroke-width', '1.5');
+        flickerCore.setAttribute('fill', 'none');
+        svg.appendChild(flickerCore);
+
+        var flickAnim = [
+          { opacity: 1 },
+          { opacity: 0, offset: 0.2 },
+          { opacity: 0.8, offset: 0.4 },
+          { opacity: 0, offset: 0.6 },
+          { opacity: 0.9, offset: 0.8 },
+          { opacity: 0 }
+        ];
+
+        flickerGlow.animate(flickAnim, { duration: 400, fill: 'forwards' });
+        flickerCore.animate(flickAnim, { duration: 400, fill: 'forwards' });
+      }
+
+      paths.forEach(function (p) {
+        p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: 150, fill: 'forwards' });
+        p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'forwards' });
+      });
+
+    }, travelDuration);
+
+    setTimeout(function () {
+      container.remove();
+    }, travelDuration + 1000);
+  }
+
+  function animateElectronCloud(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var color = settings.beaconColor || '#38bdf8';
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:fixed', 'left:0', 'top:0',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none', 'z-index:2147483643',
+      'overflow:hidden'
+    ].join(';');
+    document.documentElement.appendChild(container);
+
+    var canvas = document.createElement('canvas');
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = vw * dpr;
+    canvas.height = vh * dpr;
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.display = 'block';
+    container.appendChild(canvas);
+
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var r = Math.max(rect.width, rect.height, 40) * 0.9;
+    var a = r * 1.5;
+    var b = r * 0.6;
+
+    var thetas = [
+      Math.PI / 2,
+      Math.PI / 6,
+      5 * Math.PI / 6
+    ];
+
+    var speed = 0.007;
+    var phaseOffsets = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3];
+
+    var histories = [[], [], []];
+    var maxHistory = 15;
+
+    var startTime = performance.now();
+    var duration = 1800;
+    var animFrameId;
+
+    function render(now) {
+      var elapsed = now - startTime;
+      if (elapsed >= duration) {
+        cancelAnimationFrame(animFrameId);
+        container.remove();
+        return;
+      }
+
+      ctx.clearRect(0, 0, vw, vh);
+
+      var pulse = 1 + 0.1 * Math.sin(elapsed * 0.01);
+      var nucleusRadius = 12 * pulse;
+      var grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, nucleusRadius);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.2, '#ffffff');
+      grad.addColorStop(0.6, color);
+      grad.addColorStop(1, 'transparent');
+      
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, nucleusRadius, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.22;
+      for (var i = 0; i < 3; i++) {
+        ctx.beginPath();
+        if (typeof ctx.ellipse === 'function') {
+          ctx.ellipse(cx, cy, a, b, thetas[i], 0, 2 * Math.PI);
+        } else {
+          for (var angle = 0; angle <= 2 * Math.PI + 0.1; angle += 0.1) {
+            var xu = a * Math.cos(angle);
+            var yu = b * Math.sin(angle);
+            var rot = thetas[i];
+            var px = cx + xu * Math.cos(rot) - yu * Math.sin(rot);
+            var py = cy + xu * Math.sin(rot) + yu * Math.cos(rot);
+            if (angle === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1.0;
+
+      for (var i = 0; i < 3; i++) {
+        var t = speed * elapsed + phaseOffsets[i];
+        var x_unrot = a * Math.cos(t);
+        var y_unrot = b * Math.sin(t);
+        var rot = thetas[i];
+        var ex = cx + x_unrot * Math.cos(rot) - y_unrot * Math.sin(rot);
+        var ey = cy + x_unrot * Math.sin(rot) + y_unrot * Math.cos(rot);
+
+        histories[i].push({ x: ex, y: ey });
+        if (histories[i].length > maxHistory) {
+          histories[i].shift();
+        }
+
+        var history = histories[i];
+        for (var k = 0; k < history.length; k++) {
+          var ratio = k / history.length;
+          var radius = 1.5 + ratio * 2.5;
+          ctx.beginPath();
+          ctx.arc(history[k].x, history[k].y, radius, 0, 2 * Math.PI);
+          ctx.fillStyle = color;
+          ctx.globalAlpha = ratio * 0.55;
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(ex, ey, 4.5, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      animFrameId = requestAnimationFrame(render);
+    }
+
+    animFrameId = requestAnimationFrame(render);
   }
 
   function animate(rect) {
@@ -419,10 +1024,6 @@
           if (!parent || SKIP_TAGS[parent.tagName] || parent.closest('#oc-wrap') || parent.closest('.oc-beacon')) {
             return NodeFilter.FILTER_REJECT;
           }
-          var style = window.getComputedStyle(parent);
-          if (style && (style.display === 'none' || style.visibility === 'hidden')) {
-            return NodeFilter.FILTER_REJECT;
-          }
           return NodeFilter.FILTER_ACCEPT;
         } catch (e) {
           return NodeFilter.FILTER_REJECT;
@@ -435,10 +1036,37 @@
       var text = node.textContent.toLowerCase();
       var index = 0;
       while ((index = text.indexOf(normalizedTerm, index)) !== -1) {
+        // Performance Optimization: Check computed style lazily only when we have a text match
+        var parent = node.parentElement;
+        var isStyledVisible = true;
+        if (parent) {
+          var style = window.getComputedStyle(parent);
+          if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+            isStyledVisible = false;
+          }
+        }
+        if (!isStyledVisible) {
+          index += term.length;
+          continue;
+        }
+
         var range = document.createRange();
         range.setStart(node, index);
         range.setEnd(node, index + term.length);
-        searchRanges.push(range);
+        
+        var rects = range.getClientRects();
+        var isVisible = false;
+        for (var rIndex = 0; rIndex < rects.length; rIndex++) {
+          var rect = rects[rIndex];
+          if (rect.width > 0 && rect.height > 0) {
+            isVisible = true;
+            break;
+          }
+        }
+        if (isVisible) {
+          searchRanges.push(range);
+        }
+        
         index += term.length;
         if (searchRanges.length >= 999) break;
       }
@@ -457,9 +1085,9 @@
         console.warn('Oculist: CSS Custom Highlight API not supported or blocked.', e);
       }
       setNavEnabled(searchRanges.length > 1);
-      countEl.textContent = '0 of ' + searchRanges.length;
+      countEl.textContent = '0 ' + i18n.of + ' ' + searchRanges.length;
     } else {
-      countEl.textContent = 'no match';
+      countEl.textContent = i18n.noMatch;
       setNavEnabled(false);
     }
   }
@@ -484,7 +1112,7 @@
     }
 
     if (searchRanges.length === 0) {
-      countEl.textContent = 'no match';
+      countEl.textContent = i18n.noMatch;
       setNavEnabled(false);
       return;
     }
@@ -521,7 +1149,7 @@
       }
     } catch (e) {}
 
-    countEl.textContent = (activeIndex + 1) + ' of ' + searchRanges.length;
+    countEl.textContent = (activeIndex + 1) + ' ' + i18n.of + ' ' + searchRanges.length;
 
     var rect = activeRange.getBoundingClientRect();
     var isFullyInViewport = (
@@ -534,6 +1162,7 @@
     if (!isFullyInViewport) {
       var element = activeRange.startContainer.parentElement;
       if (element) {
+        triggerAutoScrollFlag();
         element.scrollIntoView({
           behavior: 'smooth',
           block: 'center',
@@ -556,10 +1185,48 @@
     if (replayBtn) replayBtn.disabled = !(searchRanges.length > 0);
   }
 
+  var isAutoScrolling = false;
+  var autoScrollTimer = null;
+
+  function triggerAutoScrollFlag() {
+    isAutoScrolling = true;
+    if (autoScrollTimer) clearTimeout(autoScrollTimer);
+    autoScrollTimer = setTimeout(function () {
+      isAutoScrolling = false;
+    }, 800);
+  }
+
+  function fadeActiveBeacons() {
+    var beacons = document.querySelectorAll('.oc-beacon');
+    if (beacons.length === 0) return;
+    for (var i = 0; i < beacons.length; i++) {
+      var b = beacons[i];
+      b.style.transition = 'opacity 50ms ease-out';
+      b.style.opacity = '0';
+    }
+    setTimeout(function () {
+      for (var i = 0; i < beacons.length; i++) {
+        if (beacons[i] && beacons[i].parentNode && beacons[i].style.opacity === '0') {
+          beacons[i].remove();
+        }
+      }
+    }, 50);
+  }
+
+  function handleScroll() {
+    if (isAutoScrolling) return;
+    fadeActiveBeacons();
+  }
+
   // ── Event handlers ────────────────────────────────────────────────────────────
 
   function keydownHandler(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      var isCurrentSiteDisabled = settings.disabledSites && settings.disabledSites.indexOf(window.location.hostname) !== -1;
+      var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+      if (isCurrentSiteDisabled || isStandalone) {
+        return;
+      }
       try { e.preventDefault(); } catch (err) {}
       e.stopPropagation();
       if (typeof window.__ocToggle === 'function') {
@@ -574,6 +1241,13 @@
     }
     if (!wrap) return;
     if (e.key === 'Escape') { window.__ocDestroy(); return; }
+    
+    if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') || e.key === 'F3') {
+      try { e.preventDefault(); } catch (err) {}
+      e.stopPropagation();
+      findNext(e.shiftKey);
+      return;
+    }
     
     if (e.key === 'Enter') {
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
@@ -618,6 +1292,137 @@
     return group;
   }
 
+  function makeRadioList(items, currentVal, onChange, isEffectList) {
+    var list = document.createElement('div');
+    list.className = 'oc-radio-list';
+
+    items.forEach(function (item) {
+      var row = document.createElement('button');
+      row.className = 'oc-radio-item' + (item.value === currentVal ? ' active' : '');
+
+      var dot = document.createElement('span');
+      dot.className = 'oc-radio-dot';
+      dot.textContent = item.value === currentVal ? '●' : '○';
+
+      var lbl = document.createElement('span');
+      lbl.textContent = item.label;
+
+      row.appendChild(dot);
+      row.appendChild(lbl);
+      row.addEventListener('click', function () {
+        list.querySelectorAll('.oc-radio-item').forEach(function (r) {
+          r.classList.remove('active');
+          var d = r.querySelector('.oc-radio-dot');
+          if (d) d.textContent = '○';
+        });
+        row.classList.add('active');
+        dot.textContent = '●';
+        onChange(item.value);
+      });
+      list.appendChild(row);
+    });
+
+    if (false && isEffectList) { // Backlog: Hide from UI for now
+      var addRow = document.createElement('button');
+      addRow.className = 'oc-radio-item';
+      addRow.style.borderTop = '1px dashed var(--oc-input-border)';
+      addRow.style.marginTop = '4px';
+      addRow.style.paddingTop = '8px';
+      addRow.style.color = 'var(--oc-subtle)';
+      addRow.style.opacity = '0.7';
+      
+      var plusDot = document.createElement('span');
+      plusDot.className = 'oc-radio-dot';
+      plusDot.textContent = '+';
+      plusDot.style.fontWeight = 'bold';
+      
+      var plusLbl = document.createElement('span');
+      plusLbl.textContent = 'Add Custom Effect...';
+      plusLbl.style.fontStyle = 'italic';
+      
+      addRow.appendChild(plusDot);
+      addRow.appendChild(plusLbl);
+      
+      addRow.addEventListener('click', function () {
+        promptForCustomEffect(onChange);
+      });
+      list.appendChild(addRow);
+    }
+
+    return list;
+  }
+
+  function promptForCustomEffect(onChange) {
+    var label = prompt("Enter a name for your custom highlight effect:", "My Cool Effect");
+    if (!label) return;
+
+    var id = 'custom_' + label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    if (effectsRegistry[id]) {
+      alert("An effect with that name already exists!");
+      return;
+    }
+
+    var defaultCode = [
+      "// rect is the bounding client rect of the match on screen",
+      "// settings contains user color preferences (e.g. settings.beaconColor)",
+      "if (!rect || rect.width === 0 || rect.height === 0) return;",
+      "",
+      "var cx = rect.left + rect.width / 2 + window.scrollX;",
+      "var cy = rect.top + rect.height / 2 + window.scrollY;",
+      "var color = settings.beaconColor || '#fbbf24';",
+      "",
+      "// Create and inject custom beacon element",
+      "var el = document.createElement('div');",
+      "el.className = 'oc-beacon';",
+      "el.style.cssText = [",
+      "  'position: absolute',",
+      "  'left: ' + (cx - 50) + 'px',",
+      "  'top: ' + (cy - 50) + 'px',",
+      "  'width: 100px',",
+      "  'height: 100px',",
+      "  'border: 4px solid ' + color,",
+      "  'border-radius: 50%',",
+      "  'pointer-events: none',",
+      "  'z-index: 2147483643',",
+      "  'opacity: 1'",
+      "].join(';');",
+      "document.documentElement.appendChild(el);",
+      "",
+      "// Web Animations API",
+      "el.animate([",
+      "  { transform: 'scale(0.2)', opacity: 1 },",
+      "  { transform: 'scale(2.5)', opacity: 0 }",
+      "], {",
+      "  duration: 1000,",
+      "  easing: 'cubic-bezier(0.1, 0.8, 0.3, 1)',",
+      "  fill: 'forwards'",
+      "});",
+      "",
+      "setTimeout(function() { el.remove(); }, 1100);"
+    ].join("\\n");
+
+    var fnBody = prompt("Enter the JavaScript code for your custom effect:", defaultCode.replace(/\\\\n/g, '\\n'));
+    if (!fnBody) return;
+
+    try {
+      var runFn = new Function('rect', fnBody);
+      window.Oculist.registerEffect(id, label, runFn);
+      saveCustomEffect(id, label, fnBody);
+      settings.effect = id;
+      saveSettings();
+      if (typeof onChange === 'function') {
+        onChange(id);
+      }
+      if (settingsPanel) {
+        settingsPanel.remove();
+        settingsPanel = null;
+        buildSettingsPanel();
+      }
+    } catch (e) {
+      alert("Error compiling custom animation function:\\n" + e.message);
+    }
+  }
+
   function makeSettingsField(labelText, descText, controlEl) {
     var field = document.createElement('div');
     field.className = 'oc-settings-field';
@@ -657,11 +1462,11 @@
 
     var title = document.createElement('span');
     title.className = 'oc-settings-title';
-    title.textContent = 'OCULIST PREFERENCES';
+    title.textContent = i18n.prefTitle;
     
     var subtitle = document.createElement('span');
     subtitle.className = 'oc-settings-subtitle';
-    subtitle.textContent = 'Configure search behavior & effects';
+    subtitle.textContent = i18n.prefSubtitle;
 
     titleContainer.appendChild(title);
     titleContainer.appendChild(subtitle);
@@ -670,9 +1475,11 @@
     // Right: Reset Button
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
-    var resetSvgMarkup = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;display:inline-block;vertical-align:-1px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="16 3 21 3 21 8"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><polyline points="8 21 3 21 3 16"/></svg>';
-    resetBtn.innerHTML = resetSvgMarkup;
-    resetBtn.appendChild(document.createTextNode('Reset'));
+    var resetSvg = createSvgIcon('reset');
+    if (resetSvg) {
+      resetBtn.appendChild(resetSvg);
+    }
+    resetBtn.appendChild(document.createTextNode(i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
       settings.position = 'tr';
@@ -681,6 +1488,14 @@
       settings.activeColor = '#f59e0b';
       settings.beaconColor = '#fbbf24';
       saveSettings();
+      try {
+        localStorage.removeItem('oc-custom-effects');
+      } catch (e) {}
+      for (var k in effectsRegistry) {
+        if (effectsRegistry.hasOwnProperty(k) && k !== 'hud' && k !== 'iris' && k !== 'sweep' && k !== 'flame') {
+          delete effectsRegistry[k];
+        }
+      }
       applyWrapPosition();
       injectHighlightStyles();
       settingsPanel.remove();
@@ -689,6 +1504,11 @@
     });
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
+
+    var pinTip = document.createElement('div');
+    pinTip.className = 'oc-pin-tip';
+    pinTip.textContent = i18n.pinExtensionTip;
+    settingsPanel.appendChild(pinTip);
 
     // Grid Container
     var grid = document.createElement('div');
@@ -704,34 +1524,41 @@
         effectOptions.push({ value: key, label: effectsRegistry[key].label });
       }
     }
+    effectOptions.sort(function (a, b) {
+      return a.label.localeCompare(b.label);
+    });
 
-    col1.appendChild(makeSettingsField('Highlight Effect', 'Choose match visual transition', makeOptionGroup(
+    col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
+      { value: 'dark',  label: i18n.dark  },
+      { value: 'light', label: i18n.light },
+    ], settings.theme, function (v) {
+      settings.theme = v; saveSettings();
+      injectHighlightStyles();
+      applyWrapPosition();
+      settingsPanel.remove(); settingsPanel = null;
+      buildSettingsPanel();
+    })));
+
+    var effectField = makeSettingsField(i18n.highlightEffect, i18n.effectDesc, makeRadioList(
       effectOptions,
       settings.effect,
       function (v) {
         settings.effect = v; saveSettings();
-      }
-    )));
-
-    col1.appendChild(makeSettingsField('Visual Theme', 'Sleek interface color palette', makeOptionGroup([
-      { value: 'dark',  label: 'Dark'  },
-      { value: 'light', label: 'Light' },
-    ], settings.theme, function (v) {
-      settings.theme = v; saveSettings();
-      injectHighlightStyles();
-      settingsPanel.remove(); settingsPanel = null;
-      buildSettingsPanel();
-    })));
+      },
+      true
+    ));
+    effectField.style.marginTop = '8px';
+    col1.appendChild(effectField);
 
     // Col 2: Position & Colors
     var col2 = document.createElement('div');
     col2.className = 'oc-settings-col';
 
-    col2.appendChild(makeSettingsField('Panel Position', 'Screen quadrant placement', makeOptionGroup([
-      { value: 'tl', label: '↖', title: 'Top left'     },
-      { value: 'tr', label: '↗', title: 'Top right'    },
-      { value: 'bl', label: '↙', title: 'Bottom left'  },
-      { value: 'br', label: '↘', title: 'Bottom right' },
+    col2.appendChild(makeSettingsField(i18n.panelPosition, i18n.positionDesc, makeOptionGroup([
+      { value: 'tl', label: '↖', title: i18n.topLeft     },
+      { value: 'tr', label: '↗', title: i18n.topRight    },
+      { value: 'bl', label: '↙', title: i18n.bottomLeft  },
+      { value: 'br', label: '↘', title: i18n.bottomRight },
     ], settings.position, function (v) {
       settings.position = v; saveSettings();
       applyWrapPosition();
@@ -743,17 +1570,43 @@
     pickerGroup.className = 'oc-settings-picker-group';
 
     var items = [
-      { label: 'Match', val: settings.matchColor, title: 'Normal Match Color', cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: 'Active', val: settings.activeColor, title: 'Active Match Color', cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: 'Beacon', val: settings.beaconColor, title: 'Beacon Animation Color', cb: function (v) { settings.beaconColor = v; saveSettings(); } }
+      { label: i18n.matchLabel, val: settings.matchColor, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
+      { label: i18n.activeLabel, val: settings.activeColor, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
+      { label: i18n.beaconLabel, val: settings.beaconColor, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
     ];
 
     items.forEach(function (item) {
-      var picker = makeColorPicker(item.val, item.title, item.cb);
+      var picker = makeColorPicker(item.label, item.val, item.title, item.cb);
       pickerGroup.appendChild(picker);
     });
 
-    col2.appendChild(makeSettingsField('Custom Colors', 'Interactive hex swatches', pickerGroup));
+    var colorsField = makeSettingsField(i18n.customColors, i18n.colorsDesc, pickerGroup);
+    colorsField.style.marginTop = '8px';
+    col2.appendChild(colorsField);
+
+
+
+    var donateBtn = document.createElement('a');
+    donateBtn.className = 'oc-donate-btn';
+    donateBtn.href = 'https://buymeacoffee.com/brewsforchris';
+    donateBtn.target = '_blank';
+    donateBtn.rel = 'noopener noreferrer';
+    donateBtn.textContent = i18n.coffeeBtn;
+
+    var donateField = makeSettingsField(i18n.supportTitle, i18n.supportDesc, donateBtn);
+    donateField.style.marginTop = '8px';
+    col2.appendChild(donateField);
+
+    var feedbackBtn = document.createElement('a');
+    feedbackBtn.className = 'oc-feedback-btn';
+    feedbackBtn.href = 'https://tally.so/r/Xx9GdL';
+    feedbackBtn.target = '_blank';
+    feedbackBtn.rel = 'noopener noreferrer';
+    feedbackBtn.textContent = i18n.feedbackBtn;
+
+    var feedbackField = makeSettingsField(i18n.feedbackTitle, i18n.feedbackDesc, feedbackBtn);
+    feedbackField.style.marginTop = '8px';
+    col2.appendChild(feedbackField);
 
     grid.appendChild(col1);
     grid.appendChild(col2);
@@ -771,7 +1624,7 @@
     });
   }
 
-  function makeColorPicker(val, title, onChange) {
+  function makeColorPicker(label, val, title, onChange) {
     var badge = document.createElement('div');
     badge.className = 'oc-color-badge';
     badge.title = title;
@@ -782,7 +1635,7 @@
     
     var text = document.createElement('span');
     text.className = 'oc-color-badge-text';
-    text.textContent = val.toUpperCase();
+    text.textContent = label;
     
     var input = document.createElement('input');
     input.type = 'color';
@@ -793,7 +1646,6 @@
     input.addEventListener('input', function () {
       var newColor = input.value;
       swatch.style.backgroundColor = newColor;
-      text.textContent = newColor.toUpperCase();
       onChange(newColor);
     });
     
@@ -884,23 +1736,79 @@
 
   // ── UI build ──────────────────────────────────────────────────────────────────
 
-  function getSvgIcon(name, size) {
+  function createSvgIcon(name, size) {
     size = size || 13;
-    var svgs = {
-      up: '<svg data-icon="up" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
-      down: '<svg data-icon="down" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
-      replay: '<svg data-icon="replay" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8"/><polyline points="21 3 21 8 16 8"/></svg>',
-      gear: '<svg data-icon="gear" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-      close: '<svg data-icon="close" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
-    };
-    return svgs[name] || '';
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('data-icon', name);
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+
+    if (name === 'up') {
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'm18 15-6-6-6 6');
+      svg.appendChild(path);
+    } else if (name === 'down') {
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'm6 9 6 6 6-6');
+      svg.appendChild(path);
+    } else if (name === 'replay') {
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.73L21 8');
+      svg.appendChild(path);
+      var poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      poly.setAttribute('points', '21 3 21 8 16 8');
+      svg.appendChild(poly);
+    } else if (name === 'gear') {
+      var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', '12');
+      circle.setAttribute('cy', '12');
+      circle.setAttribute('r', '3');
+      svg.appendChild(circle);
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z');
+      svg.appendChild(path);
+    } else if (name === 'close') {
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M18 6 6 18M6 6l12 12');
+      svg.appendChild(path);
+    } else if (name === 'reset') {
+      svg.setAttribute('width', '10');
+      svg.setAttribute('height', '10');
+      svg.style.marginRight = '4px';
+      svg.style.display = 'inline-block';
+      svg.style.verticalAlign = '-1px';
+
+      var path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path1.setAttribute('d', 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8');
+      svg.appendChild(path1);
+
+      var poly1 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      poly1.setAttribute('points', '16 3 21 3 21 8');
+      svg.appendChild(poly1);
+
+      var path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path2.setAttribute('d', 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16');
+      svg.appendChild(path2);
+
+      var poly2 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      poly2.setAttribute('points', '8 21 3 21 3 16');
+      svg.appendChild(poly2);
+    }
+
+    return svg;
   }
 
   function makeIconBtn(iconName, title, size) {
     var btn = document.createElement('button');
-    var svgMarkup = getSvgIcon(iconName, size);
-    if (svgMarkup) {
-      btn.innerHTML = svgMarkup;
+    var svg = createSvgIcon(iconName, size);
+    if (svg) {
+      btn.appendChild(svg);
     }
     btn.title = title;
     return btn;
@@ -917,7 +1825,7 @@
 
     input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Find…';
+    input.placeholder = i18n.findPlaceholder;
     input.className = 'oc-input';
     input.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -946,19 +1854,19 @@
     countEl = document.createElement('span');
     countEl.className = 'oc-count';
 
-    prevBtn = makeIconBtn('up', 'Previous  Shift+Enter');
+    prevBtn = makeIconBtn('up', i18n.prevTitle);
     prevBtn.addEventListener('click', function () { findNext(true); });
 
-    nextBtn = makeIconBtn('down', 'Next  Enter');
+    nextBtn = makeIconBtn('down', i18n.nextTitle);
     nextBtn.addEventListener('click', function () { findNext(false); });
 
-    replayBtn = makeIconBtn('replay', 'Replay Effect');
+    replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
-    gearBtn = makeIconBtn('gear', 'Options');
+    gearBtn = makeIconBtn('gear', i18n.optionsTitle);
     gearBtn.addEventListener('click', toggleSettings);
 
-    closeBtn = makeIconBtn('close', 'Close  Esc');
+    closeBtn = makeIconBtn('close', i18n.closeTitle);
     closeBtn.addEventListener('click', window.__ocDestroy);
 
     setNavEnabled(false);
@@ -1009,7 +1917,8 @@
 
     var highlightCss = [
       '::highlight(oculist-match) { background-color: ' + matchColor + '; color: ' + matchTextColor + '; }',
-      '::highlight(oculist-active-match) { background-color: ' + activeColor + '; color: ' + activeTextColor + '; }'
+      '::highlight(oculist-active-match) { background-color: ' + activeColor + '; color: ' + activeTextColor + '; }',
+      '.oc-beacon { will-change: transform, opacity; transition: opacity 50ms ease-out; }'
     ].join('\n');
 
     if (globalEl) {
@@ -1290,6 +2199,107 @@
         '  font-family: system-ui, sans-serif;',
         '  font-weight: 400;',
         '}',
+        '.oc-radio-list {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 2px;',
+        '}',
+        '.oc-radio-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  justify-content: flex-start;',
+        '  gap: 8px;',
+        '  padding: 5px 8px;',
+        '  border: none;',
+        '  background: transparent;',
+        '  color: var(--oc-text);',
+        '  font-size: 11px;',
+        '  font-family: inherit;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  border-radius: 4px;',
+        '  text-align: left;',
+        '  width: 100%;',
+        '  opacity: 0.7;',
+        '  box-sizing: border-box;',
+        '  box-shadow: none;',
+        '  margin: 0;',
+        '  transition: background-color 120ms, opacity 120ms, color 120ms;',
+        '}',
+        '.oc-radio-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '  opacity: 1;',
+        '}',
+        '.oc-radio-item.active {',
+        '  color: var(--oc-accent);',
+        '  opacity: 1;',
+        '}',
+        '.oc-radio-dot {',
+        '  font-size: 10px;',
+        '  flex-shrink: 0;',
+        '  width: 1em;',
+        '  text-align: center;',
+        '}',
+        '.oc-donate-btn {',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  justify-content: center;',
+        '  gap: 6px;',
+        '  padding: 6px 12px;',
+        '  background: #FFDD00;',
+        '  color: #000000 !important;',
+        '  font-family: system-ui, sans-serif;',
+        '  font-size: 11px;',
+        '  font-weight: 700;',
+        '  border-radius: 6px;',
+        '  text-decoration: none;',
+        '  cursor: pointer;',
+        '  transition: transform 150ms, box-shadow 150ms;',
+        '  width: 100%;',
+        '  box-sizing: border-box;',
+        '  border: none;',
+        '}',
+        '.oc-donate-btn:hover {',
+        '  transform: translateY(-1px);',
+        '  box-shadow: 0 4px 12px rgba(255, 221, 0, 0.2);',
+        '}',
+        '.oc-feedback-btn {',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  justify-content: center;',
+        '  gap: 6px;',
+        '  padding: 6px 12px;',
+        '  background: #2563eb;',
+        '  color: #ffffff !important;',
+        '  font-family: system-ui, sans-serif;',
+        '  font-size: 11px;',
+        '  font-weight: 700;',
+        '  border-radius: 6px;',
+        '  text-decoration: none;',
+        '  cursor: pointer;',
+        '  transition: transform 150ms, box-shadow 150ms;',
+        '  width: 100%;',
+        '  box-sizing: border-box;',
+        '  border: none;',
+        '}',
+        '.oc-feedback-btn:hover {',
+        '  transform: translateY(-1px);',
+        '  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);',
+        '}',
+        '.oc-pin-tip {',
+        '  font-size: .8125rem;',
+        '  color: var(--oc-subtle);',
+        '  font-family: inherit;',
+        '  font-style: italic;',
+        '  line-height: 1.4;',
+        '  margin-top: 12px;',
+        '  padding: 6px 10px;',
+        '  border-left: 2px solid var(--oc-accent);',
+        '  background: rgba(245, 158, 11, 0.05);',
+        '  border-radius: 0 4px 4px 0;',
+        '  box-sizing: border-box;',
+        '  width: 100%;',
+        '}',
         '.oc-settings-picker-group {',
         '  display: inline-flex;',
         '  gap: 6px;',
@@ -1364,8 +2374,8 @@
         '  flex-shrink: 0;',
         '}',
         '.oc-color-badge-text {',
-        '  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;',
-        '  font-size: 8.5px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  font-size: 10.5px;',
         '  font-weight: 600;',
         '  color: var(--oc-text);',
         '  letter-spacing: 0.02em;',
@@ -1402,6 +2412,7 @@
 
   function boot() {
     document.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
+    window.addEventListener('scroll', handleScroll, { passive: true });
     
     window.__ocToggle = function () {
       if (wrap) {
@@ -1423,19 +2434,27 @@
     chrome.storage.sync.get('oc-settings', function (data) {
       if (data && data['oc-settings']) {
         var saved = data['oc-settings'];
-        ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor'].forEach(function (k) {
+        ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites'].forEach(function (k) {
           if (k in saved) settings[k] = saved[k];
         });
+        if (!Array.isArray(settings.disabledSites)) {
+          settings.disabledSites = [];
+        }
       }
+      loadCustomEffects();
       boot();
     });
   } else {
     try {
       var saved = JSON.parse(localStorage.getItem('oc-settings') || '{}');
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor'].forEach(function (k) {
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites'].forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
+      if (!Array.isArray(settings.disabledSites)) {
+        settings.disabledSites = [];
+      }
     } catch (e) {}
+    loadCustomEffects();
     boot();
   }
 

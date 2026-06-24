@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Oculist Options</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #f59e0b;
+      --primary-hover: #d97706;
+      --primary-gradient: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      --accent-green: #10b981;
+      --accent-red: #ef4444;
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 320px;
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      overflow: hidden;
+      padding: 16px;
+      user-select: none;
+    }
+
+    /* Header styling with brand gradient */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      background: var(--primary-gradient);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 14px;
+      color: #0f172a;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+    }
+
+    .brand-name {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(to right, #fbbf24, #f59e0b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .version {
+      font-size: 11px;
+      color: var(--text-muted);
+      background-color: var(--card-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    /* Main Domain Settings Panel */
+    .panel {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .domain-info {
+      margin-bottom: 12px;
+    }
+
+    .domain-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+
+    .domain-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-dot.enabled {
+      background-color: var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+
+    .status-dot.disabled {
+      background-color: var(--accent-red);
+      box-shadow: 0 0 8px var(--accent-red);
+    }
+
+    /* Sliding Toggle Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #334155;
+      transition: .3s;
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+
+    input:checked + .slider {
+      background-color: var(--accent-green);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    /* Primary Action Buttons */
+    .action-btn {
+      width: 100%;
+      background: var(--primary-gradient);
+      color: #0f172a;
+      border: none;
+      border-radius: 8px;
+      padding: 11px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+    }
+
+    .action-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(245, 158, 11, 0.3);
+    }
+
+    .action-btn:active {
+      transform: translateY(1px);
+    }
+
+    /* Footer / Keyboard shortcut note */
+    .footer {
+      text-align: center;
+      margin-top: 14px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .shortcut {
+      display: inline-block;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: var(--text);
+      font-family: monospace;
+      font-size: 10px;
+    }
+
+    .tip-box {
+      margin-top: 10px;
+      margin-bottom: 12px;
+      padding: 8px 10px;
+      background-color: rgba(245, 158, 11, 0.1);
+      border-left: 3px solid var(--primary);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="logo-icon">O</div>
+      <span class="brand-name">Oculist</span>
+    </div>
+    <span class="version">v1.0</span>
+  </div>
+
+  <div class="panel">
+    <div class="domain-info">
+      <div class="domain-label">Current Site</div>
+      <div id="domain-name" class="domain-name">Loading...</div>
+    </div>
+    <div class="status-row">
+      <div class="status-badge">
+        <span id="status-dot" class="status-dot disabled"></span>
+        <span id="status-text">Checking...</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggle-site" disabled>
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div id="reload-tip" class="tip-box" style="display: none;">
+    Tip: Please reload the page to activate Oculist on this site.
+  </div>
+
+  <button id="open-finder" class="action-btn" disabled>
+    Open Oculist
+  </button>
+
+  <div class="footer">
+    Shortcut: <span class="shortcut" id="shortcut-text">Ctrl+Shift+F</span>
+    <div style="margin-top: 10px;">
+      <a href="https://tally.so/r/Xx9GdL" target="_blank" id="feedback-link" style="color: var(--primary); text-decoration: none; font-weight: 500; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; transition: color 0.15s ease;">💬 Share Feedback</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
