@@ -1913,38 +1913,14 @@
     wrapRoot = wrap.attachShadow({ mode: 'open' });
     applyWrapPosition();
 
-    var t = T();
-
     bar = document.createElement('div');
     bar.className = 'oc-bar';
-    bar.style.display = 'flex';
-    bar.style.alignItems = 'center';
-    bar.style.gap = '6px';
-    bar.style.padding = '6px 10px';
-    bar.style.font = '14px/1 system-ui,-apple-system,sans-serif';
-    bar.style.background = t.bg;
-    bar.style.color = t.text;
-    bar.style.boxSizing = 'border-box';
-    bar.style.width = '100%';
 
     input = document.createElement('input');
     input.type = 'text';
     input.placeholder = i18n.findPlaceholder;
     input.setAttribute('aria-label', 'Find in page');
     input.className = 'oc-input';
-    input.style.border = '1px solid ' + t.inputBorder;
-    input.style.borderRadius = '6px';
-    input.style.background = t.inputBg;
-    input.style.color = t.inputText;
-    input.style.padding = '4px 8px';
-    input.style.fontSize = '14px';
-    input.style.width = '200px';
-    input.style.flexShrink = '0';
-    input.style.outline = 'none';
-    input.style.fontFamily = 'system-ui,-apple-system,sans-serif';
-    input.style.boxSizing = 'border-box';
-    input.style.margin = '0';
-    input.style.height = 'auto';
     input.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
         try { e.preventDefault(); } catch (err) {}
@@ -1967,27 +1943,10 @@
         }
       }, 150);
     });
-    input.addEventListener('focus', function() {
-      input.style.borderColor = T().accent;
-      input.style.boxShadow = '0 0 0 2px ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2);
-    });
-    input.addEventListener('blur', function() {
-      input.style.borderColor = T().inputBorder;
-      input.style.boxShadow = 'none';
-    });
 
     countEl = document.createElement('span');
     countEl.className = 'oc-count';
-    countEl.style.color = t.text;
-    countEl.style.opacity = '0.75';
-    countEl.style.fontSize = '12px';
-    countEl.style.minWidth = '58px';
-    countEl.style.flexShrink = '0';
-    countEl.style.textAlign = 'right';
-    countEl.style.fontFamily = 'system-ui,-apple-system,sans-serif';
-    countEl.style.marginRight = '2px';
-    countEl.style.userSelect = 'none';
-    countEl.style.whiteSpace = 'nowrap';
+
     prevBtn = makeIconBtn('up', i18n.prevTitle);
     prevBtn.addEventListener('click', function () { findNext(true); });
 
@@ -2003,32 +1962,6 @@
     closeBtn = makeIconBtn('close', i18n.closeTitle);
     closeBtn.addEventListener('click', window.__ocDestroy);
 
-    [prevBtn, nextBtn, replayBtn, gearBtn, closeBtn].forEach(function(btn) {
-      btn.style.color = t.text;
-      btn.style.background = 'none';
-      btn.style.border = 'none';
-      btn.style.padding = '0';
-      btn.style.fontSize = '14px';
-      btn.style.fontFamily = 'system-ui,-apple-system,sans-serif';
-      btn.style.borderRadius = '4px';
-      btn.style.display = 'inline-flex';
-      btn.style.alignItems = 'center';
-      btn.style.justifyContent = 'center';
-      btn.style.cursor = 'pointer';
-      btn.style.width = '26px';
-      btn.style.height = '26px';
-      btn.style.minWidth = '26px';
-      btn.style.minHeight = '26px';
-      btn.style.maxWidth = '26px';
-      btn.style.maxHeight = '26px';
-      btn.style.flexShrink = '0';
-      btn.style.boxSizing = 'border-box';
-      btn.style.lineHeight = '1';
-      btn.style.margin = '0';
-      btn.style.webkitAppearance = 'none';
-    });
-    gearBtn.style.fontSize = '17px';
-
     setNavEnabled(false);
 
     bar.appendChild(input);
@@ -2038,6 +1971,7 @@
     bar.appendChild(replayBtn);
     bar.appendChild(gearBtn);
     bar.appendChild(closeBtn);
+
     wrapRoot.appendChild(bar);
     document.body.appendChild(wrap);
     input.focus();
