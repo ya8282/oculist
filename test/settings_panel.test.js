@@ -308,6 +308,14 @@ describe('Oculist Preference Panel Tests', () => {
       p.innerHTML = 'hello <strong>world</strong>';
       document.body.appendChild(p);
 
+      const pAccents = document.createElement('p');
+      pAccents.innerHTML = 'héllo <strong>wôrld</strong>';
+      document.body.appendChild(pAccents);
+
+      const pSpaces = document.createElement('p');
+      pSpaces.innerHTML = 'multiple    spaces    here';
+      document.body.appendChild(pSpaces);
+
       const host = document.createElement('div');
       document.body.appendChild(host);
       const shadow = host.attachShadow({ mode: 'open' });
@@ -323,14 +331,26 @@ describe('Oculist Preference Panel Tests', () => {
       const wrap = document.getElementById('oc-wrap');
       const input = wrap.shadowRoot.querySelector('.oc-input');
 
-      // Test split-node matching
+      // Test split-node matching and accent folding (should find both 'hello world' and 'héllo world')
       input.value = 'hello world';
       input.dispatchEvent(new global.window.Event('input'));
       await new Promise(resolve => setTimeout(resolve, 250));
 
       const wrapRoot = wrap.shadowRoot;
       const countEl = wrapRoot.querySelector('.oc-count');
-      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 split-node match');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 2', 'Should find exactly 2 matches (and select the first one)');
+
+      // Test searching with accents (should also match both)
+      input.value = 'héllo wôrld';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 2', 'Should find exactly 2 matches when querying with accents');
+
+      // Test whitespace query normalization
+      input.value = 'multiple   spaces   here';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 match with normalized spaces query');
 
       // Test shadow DOM piercing
       input.value = 'shadow text';
@@ -545,6 +565,14 @@ describe('Oculist Preference Panel Tests', () => {
       p.innerHTML = 'hello <strong>world</strong>';
       document.body.appendChild(p);
 
+      const pAccents = document.createElement('p');
+      pAccents.innerHTML = 'héllo <strong>wôrld</strong>';
+      document.body.appendChild(pAccents);
+
+      const pSpaces = document.createElement('p');
+      pSpaces.innerHTML = 'multiple    spaces    here';
+      document.body.appendChild(pSpaces);
+
       const host = document.createElement('div');
       document.body.appendChild(host);
       const shadow = host.attachShadow({ mode: 'open' });
@@ -560,14 +588,26 @@ describe('Oculist Preference Panel Tests', () => {
       const wrap = document.getElementById('oc-wrap');
       const input = wrap.shadowRoot.querySelector('.oc-input');
 
-      // Test split-node matching
+      // Test split-node matching and accent folding (should find both 'hello world' and 'héllo world')
       input.value = 'hello world';
       input.dispatchEvent(new global.window.Event('input'));
       await new Promise(resolve => setTimeout(resolve, 250));
 
       const wrapRoot = wrap.shadowRoot;
       const countEl = wrapRoot.querySelector('.oc-count');
-      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 split-node match in content.js');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 2', 'Should find exactly 2 matches (and select the first one) in content.js');
+
+      // Test searching with accents (should also match both)
+      input.value = 'héllo wôrld';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 2', 'Should find exactly 2 matches when querying with accents in content.js');
+
+      // Test whitespace query normalization
+      input.value = 'multiple   spaces   here';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 match with normalized spaces query in content.js');
 
       // Test shadow DOM piercing
       input.value = 'shadow text';
