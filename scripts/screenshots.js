@@ -50,10 +50,26 @@ const INPUT = '#oc-wrap >> .oc-input';
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${OUT}/02-matches.png` });
 
-  // 03 — beacon mid-animation (default effect)
+  // 03 — beacon mid-animation (Warp Drive effect in blue color)
+  await page.locator(GEAR).click();
+  await page.waitForTimeout(300);
+  await page.locator('#oc-wrap >> text=Warp Drive').first().click();
+  await page.waitForTimeout(200);
+
+  // Change beacon color to a vibrant blue
+  const beaconInput = page.locator('#oc-wrap >> .oc-color-badge:has-text("Beacon") >> .oc-color-input');
+  await beaconInput.evaluate((el) => {
+    el.value = '#3b82f6';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(200);
+
+  await page.locator(GEAR).click(); // Close options
+  await page.waitForTimeout(300);
+
   await page.keyboard.press('Enter');
   await page.waitForTimeout(380);
-  await page.screenshot({ path: `${OUT}/03-beacon-laser.png` });
+  await page.screenshot({ path: `${OUT}/03-beacon-warp.png` });
 
   // 04 — settings panel open
   await page.locator(GEAR).click();
