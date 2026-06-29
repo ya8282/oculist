@@ -48,17 +48,15 @@ text only to locate matches in-browser and transmits nothing.
 
 **Description:**
 
-> Oculist makes finding text on a page effortless. Press Ctrl+Shift+F (or
-> Cmd+Shift+F on Mac) to open the high-visibility find overlay. As you navigate
-> matches, each one gets a dramatic animated beacon — so you can instantly spot
-> it, even on long pages.
+> Tired of searching for a text match in a dense sea of text? 
+> This extension replaces the subtle default highlight with eye-catching, animated visual beacons. 
+> Locate exactly what you’re looking for with style.
 >
 > Features:
-> - Six effects: Anime Laser, Spotlight, Warp Drive, Inferno Flame, Lightning, Electron Cloud
+> - Multiple visual effects: Anime Laser, Spotlight, Warp Drive, Inferno Flame, Lightning, Electron Cloud
 > - Dark and light themes
-> - Customizable beacon colors (effects adapt to your chosen color)
+> - Customizable beacon and search match colors
 > - Per-site on/off toggle
-> - Works on standard HTML pages, no setup required
 
 ## Post-submission
 

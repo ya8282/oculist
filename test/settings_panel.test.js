@@ -45,6 +45,16 @@ function createDOMEnvironment() {
     };
   };
 
+  // Mock Range.prototype.getClientRects for layout-less JSDOM
+  dom.window.Range.prototype.getClientRects = function() {
+    return [{ width: 10, height: 10, top: 0, left: 0, right: 10, bottom: 10 }];
+  };
+
+  // Mock Range.prototype.getBoundingClientRect for layout-less JSDOM
+  dom.window.Range.prototype.getBoundingClientRect = function() {
+    return { width: 10, height: 10, top: 0, left: 0, right: 10, bottom: 10, x: 0, y: 0 };
+  };
+
   return dom;
 }
 
@@ -255,6 +265,80 @@ describe('Oculist Preference Panel Tests', () => {
       assert.ok(!inactivePreventDefault, 'preventDefault should NOT be called on Cmd+G when Oculist is closed');
     });
 
+    test('Should allow selecting smooth and instant scroll behaviors in the preference panel', () => {
+      createDOMEnvironment();
+
+      const codePath = path.join(__dirname, '../oculist.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrapRoot = global.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+
+      const settingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanel, 'Settings panel should open');
+
+      // Verify the Scroll Behavior toggle buttons exist
+      const smoothBtn = Array.from(settingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Smooth');
+      const instantBtn = Array.from(settingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Instant');
+      
+      assert.ok(smoothBtn, 'Smooth scroll toggle button should exist');
+      assert.ok(instantBtn, 'Instant scroll toggle button should exist');
+
+      // Click Instant button to switch scroll behavior
+      instantBtn.click();
+
+      // Verify it re-renders and the setting is active
+      const freshSettingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      const freshInstantBtn = Array.from(freshSettingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Instant');
+      assert.ok(freshInstantBtn.classList.contains('active'), 'Instant scroll button should have active class after click');
+    });
+
+    test('Should support split-node text matching and pierce Shadow DOM', async () => {
+      createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+      
+      const p = document.createElement('p');
+      p.innerHTML = 'hello <strong>world</strong>';
+      document.body.appendChild(p);
+
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const shadow = host.attachShadow({ mode: 'open' });
+      const shadowP = document.createElement('p');
+      shadowP.textContent = 'shadow text';
+      shadow.appendChild(shadowP);
+
+      const codePath = path.join(__dirname, '../oculist.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const input = wrap.shadowRoot.querySelector('.oc-input');
+
+      // Test split-node matching
+      input.value = 'hello world';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const wrapRoot = wrap.shadowRoot;
+      const countEl = wrapRoot.querySelector('.oc-count');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 split-node match');
+
+      // Test shadow DOM piercing
+      input.value = 'shadow text';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 match inside Shadow DOM');
+    });
+
   });
 
   describe('Extension Content Script (content.js)', () => {
@@ -416,6 +500,80 @@ describe('Oculist Preference Panel Tests', () => {
       inactiveEvent.preventDefault = () => { inactivePreventDefault = true; };
       global.document.dispatchEvent(inactiveEvent);
       assert.ok(!inactivePreventDefault, 'preventDefault should NOT be called on Cmd+G when Oculist is closed');
+    });
+
+    test('Should allow selecting smooth and instant scroll behaviors in the preference panel in content.js', () => {
+      createDOMEnvironment();
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrapRoot = global.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+
+      const settingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanel, 'Settings panel should open');
+
+      // Verify the Scroll Behavior toggle buttons exist
+      const smoothBtn = Array.from(settingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Smooth');
+      const instantBtn = Array.from(settingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Instant');
+      
+      assert.ok(smoothBtn, 'Smooth scroll toggle button should exist');
+      assert.ok(instantBtn, 'Instant scroll toggle button should exist');
+
+      // Click Instant button to switch scroll behavior
+      instantBtn.click();
+
+      // Verify it re-renders and the setting is active
+      const freshSettingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      const freshInstantBtn = Array.from(freshSettingsPanel.querySelectorAll('.oc-toggle-btn'))
+        .find(el => el.textContent === 'Instant');
+      assert.ok(freshInstantBtn.classList.contains('active'), 'Instant scroll button should have active class after click');
+    });
+
+    test('Should support split-node text matching and pierce Shadow DOM in content.js', async () => {
+      createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+      
+      const p = document.createElement('p');
+      p.innerHTML = 'hello <strong>world</strong>';
+      document.body.appendChild(p);
+
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const shadow = host.attachShadow({ mode: 'open' });
+      const shadowP = document.createElement('p');
+      shadowP.textContent = 'shadow text';
+      shadow.appendChild(shadowP);
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const input = wrap.shadowRoot.querySelector('.oc-input');
+
+      // Test split-node matching
+      input.value = 'hello world';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const wrapRoot = wrap.shadowRoot;
+      const countEl = wrapRoot.querySelector('.oc-count');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 split-node match in content.js');
+
+      // Test shadow DOM piercing
+      input.value = 'shadow text';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 match inside Shadow DOM in content.js');
     });
 
   });

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Oculist - High-Visibility Finder",
   "version": "1.0.0",
-  "description": "Locate search matches instantly with animated visual beacons and CSS Custom Highlight API.",
+  "description": "Stop squinting. Use Oculist to find text on any page and see it instantly.",
   "permissions": [
     "activeTab",
     "scripting",

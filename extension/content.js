@@ -12,6 +12,7 @@
     matchColor: '#fef08a',
     activeColor: '#f59e0b',
     beaconColor: '#fbbf24',
+    scrollBehavior: 'smooth',
     disabledSites: [],
     faviconSwap: false
   };
@@ -40,6 +41,10 @@
     themeDesc: 'Sleek interface color palette',
     dark: 'Dark',
     light: 'Light',
+    scrollBehavior: 'Scroll Behavior',
+    scrollBehaviorDesc: 'Viewport movement style',
+    smooth: 'Smooth',
+    instant: 'Instant',
     highlightEffect: 'Highlight Effect',
     effectDesc: 'Choose match visual transition',
     panelPosition: 'Panel Position',
@@ -184,12 +189,21 @@
     var cy = rect.top + rect.height / 2 + window.scrollY;
     var color = settings.beaconColor || '#fbbf24';
 
+    var containerHeight = 200;
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var targetTop = Math.min(Math.max(0, cy - 100), maxTop);
+    var offsetY = cy - targetTop;
+
     var laserContainer = document.createElement('div');
     laserContainer.className = 'oc-beacon';
     laserContainer.style.cssText = [
       'position:absolute',
-      'left:0', 'top:' + (cy - 100) + 'px',
-      'width:100%', 'height:200px',
+      'left:0', 'top:' + targetTop + 'px',
+      'width:100%', 'height:' + containerHeight + 'px',
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
@@ -199,7 +213,7 @@
     var sheath = document.createElement('div');
     sheath.style.cssText = [
       'position:absolute',
-      'left:0', 'right:0', 'top:90px', 'height:20px',
+      'left:0', 'right:0', 'top:' + (offsetY - 10) + 'px', 'height:20px',
       'background:linear-gradient(90deg, transparent, ' + color + ' 20%, ' + color + ' 80%, transparent)',
       'filter:blur(3px)',
       'opacity:0', 'pointer-events:none'
@@ -221,7 +235,7 @@
     var core = document.createElement('div');
     core.style.cssText = [
       'position:absolute',
-      'left:0', 'right:0', 'top:96px', 'height:8px',
+      'left:0', 'right:0', 'top:' + (offsetY - 4) + 'px', 'height:8px',
       'background:linear-gradient(90deg, transparent, ' + color + ' 10%, #ffffff 40%, #ffffff 60%, ' + color + ' 90%, transparent)',
       'box-shadow:0 0 15px ' + color + ', 0 0 35px ' + color + ', 0 0 60px #ffffff',
       'transform-origin:center',
@@ -244,7 +258,7 @@
     var flash = document.createElement('div');
     flash.style.cssText = [
       'position:absolute',
-      'left:' + (x - 25) + 'px', 'top:' + (100 - h/2 - 25) + 'px',
+      'left:' + (x - 25) + 'px', 'top:' + (offsetY - h/2 - 25) + 'px',
       'width:' + (w + 50) + 'px', 'height:' + (h + 50) + 'px',
       'background:radial-gradient(circle, #ffffff 10%, ' + color + ' 60%, transparent 100%)',
       'border-radius:50%',
@@ -272,7 +286,7 @@
       var size = Math.random() * 5 + 3;
       spark.style.cssText = [
         'position:absolute',
-        'left:' + cx + 'px', 'top:100px',
+        'left:' + cx + 'px', 'top:' + offsetY + 'px',
         'width:' + size + 'px', 'height:' + size + 'px',
         'border-radius:50%',
         'background:#ffffff',
@@ -407,12 +421,29 @@
     var cy = rect.top + rect.height / 2 + window.scrollY;
     var color = settings.beaconColor || '#fbbf24';
 
+    var containerWidth = 300;
+    var containerHeight = 300;
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var scrollWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body ? document.body.scrollWidth : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var maxLeft = Math.max(0, scrollWidth - containerWidth);
+    var targetTop = Math.min(Math.max(0, cy - 150), maxTop);
+    var targetLeft = Math.min(Math.max(0, cx - 150), maxLeft);
+    var offsetX = cx - targetLeft;
+    var offsetY = cy - targetTop;
+
     var container = document.createElement('div');
     container.className = 'oc-beacon';
     container.style.cssText = [
       'position:absolute',
-      'left:' + (cx - 150) + 'px', 'top:' + (cy - 150) + 'px',
-      'width:300px', 'height:300px',
+      'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
+      'width:' + containerWidth + 'px', 'height:' + containerHeight + 'px',
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
@@ -424,7 +455,7 @@
       var ring = document.createElement('div');
       ring.style.cssText = [
         'position:absolute',
-        'left:145px', 'top:145px',
+        'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
         'width:10px', 'height:10px',
         'border:2px solid #ffffff',
         'border-radius:50%',
@@ -455,7 +486,7 @@
 
       streak.style.cssText = [
         'position:absolute',
-        'left:150px', 'top:150px',
+        'left:' + offsetX + 'px', 'top:' + offsetY + 'px',
         'width:' + len + 'px', 'height:' + thick + 'px',
         'background:linear-gradient(90deg, transparent, ' + color + ', #ffffff 40%, #ffffff 60%, ' + color + ', transparent)',
         'box-shadow:0 0 10px ' + color + ', 0 0 4px #ffffff',
@@ -501,12 +532,29 @@
     var colorWarm = hslToHex(_fh + 24, _fs +  2, _fl);
     var colorTip  = hslToHex(_fh + 28, _fs +  4, Math.min(100, _fl + 24));
 
+    var containerWidth = w + 160;
+    var containerHeight = h + 280;
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var scrollWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body ? document.body.scrollWidth : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var maxLeft = Math.max(0, scrollWidth - containerWidth);
+    var targetTop = Math.min(Math.max(0, y - 200), maxTop);
+    var targetLeft = Math.min(Math.max(0, x - 80), maxLeft);
+    var offsetX = x - targetLeft;
+    var offsetY = y - targetTop;
+
     var container = document.createElement('div');
     container.className = 'oc-beacon';
     container.style.cssText = [
       'position:absolute',
-      'left:' + (x - 80) + 'px', 'top:' + (y - 200) + 'px',
-      'width:' + (w + 160) + 'px', 'height:' + (h + 280) + 'px',
+      'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
+      'width:' + containerWidth + 'px', 'height:' + containerHeight + 'px',
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
@@ -516,7 +564,7 @@
     var outline = document.createElement('div');
     outline.style.cssText = [
       'position:absolute',
-      'left:80px', 'top:200px',
+      'left:' + offsetX + 'px', 'top:' + offsetY + 'px',
       'width:' + w + 'px', 'height:' + h + 'px',
       'border-radius:4px',
       'box-shadow:0 0 60px ' + colorDeep + ', inset 0 0 40px ' + color + ', 0 0 16px ' + colorWarm,
@@ -539,7 +587,7 @@
     var glow = document.createElement('div');
     glow.style.cssText = [
       'position:absolute',
-      'left:40px', 'top:160px',
+      'left:' + (offsetX - 40) + 'px', 'top:' + (offsetY - 40) + 'px',
       'width:' + (w + 80) + 'px', 'height:' + (h + 80) + 'px',
       'background:radial-gradient(ellipse, ' + hexToRgba(colorDeep, 0.4) + ' 0%, ' + hexToRgba(color, 0.15) + ' 60%, transparent 100%)',
       'filter:blur(32px)',
@@ -564,8 +612,8 @@
     for (var i = 0; i < particleCount; i++) {
       var p = document.createElement('div');
       var pSize = Math.random() * 48 + 24;
-      var px = 80 + Math.random() * w;
-      var py = 200 + h;
+      var px = offsetX + Math.random() * w;
+      var py = offsetY + h;
 
       p.style.cssText = [
         'position:absolute',
@@ -601,8 +649,8 @@
     for (var j = 0; j < smokeCount; j++) {
       var s = document.createElement('div');
       var sSize = Math.random() * 60 + 40;
-      var sx = 80 + Math.random() * w;
-      var sy = 200 + h / 2;
+      var sx = offsetX + Math.random() * w;
+      var sy = offsetY + h / 2;
 
       s.style.cssText = [
         'position:absolute',
@@ -999,6 +1047,7 @@
   }
 
   function animate(rect) {
+    if (!wrap) return;
     cancelBeacons();
     var effectObj = effectsRegistry[settings.effect] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
@@ -1030,34 +1079,116 @@
     }
 
     var normalizedTerm = term.toLowerCase();
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode: function (node) {
-        try {
-          var parent = node.parentElement;
-          if (!parent || SKIP_TAGS[parent.tagName] || parent.closest('#oc-wrap') || parent.closest('.oc-beacon')) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          return NodeFilter.FILTER_ACCEPT;
-        } catch (e) {
-          return NodeFilter.FILTER_REJECT;
+    var flatText = '';
+    var textNodeMaps = [];
+
+    var BLOCK_TAGS = {
+      ADDRESS: 1, ARTICLE: 1, ASIDE: 1, BLOCKQUOTE: 1, DETAILS: 1, DIALOG: 1,
+      DIV: 1, DL: 1, DT: 1, DD: 1, FIELDSET: 1, FIGCAPTION: 1, FIGURE: 1,
+      FOOTER: 1, FORM: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+      HEADER: 1, HGROUP: 1, HR: 1, LI: 1, MAIN: 1, NAV: 1, OL: 1, P: 1,
+      PRE: 1, SECTION: 1, TABLE: 1, UL: 1, TR: 1, TD: 1, TH: 1,
+      THEAD: 1, TBODY: 1, TFOOT: 1, BR: 1
+    };
+
+    function traverse(node) {
+      if (!node) return;
+
+      var isBlock = node.nodeType === 1 && BLOCK_TAGS[node.tagName];
+      if (isBlock) {
+        if (flatText.length > 0 && flatText[flatText.length - 1] !== '\n') {
+          flatText += '\n';
         }
       }
-    });
 
-    var node;
-    while ((node = walker.nextNode())) {
-      var nodeParent = node.parentElement;
-      if (nodeParent) {
-        var nodeStyle = window.getComputedStyle(nodeParent);
-        if (nodeStyle && (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden')) continue;
+      var child = node.firstChild;
+      while (child) {
+        if (child.nodeType === 3) {
+          var parent = child.parentElement || (child.parentNode && child.parentNode.host);
+          if (parent && !SKIP_TAGS[parent.tagName] && !parent.classList.contains('oc-beacon')) {
+            var nodeStyle = window.getComputedStyle(parent);
+            if (nodeStyle && nodeStyle.display !== 'none' && nodeStyle.visibility !== 'hidden') {
+              var content = child.textContent;
+              var startOffset = flatText.length;
+              var rawIndexMap = [];
+              var normalizedContent = '';
+              var lastWasSpace = false;
+
+              for (var c = 0; c < content.length; c++) {
+                var char = content[c];
+                var isSpace = char === ' ' || char === '\n' || char === '\r' || char === '\t';
+                if (isSpace) {
+                  if (!lastWasSpace) {
+                    normalizedContent += ' ';
+                    rawIndexMap.push(c);
+                    lastWasSpace = true;
+                  }
+                } else {
+                  normalizedContent += char;
+                  rawIndexMap.push(c);
+                  lastWasSpace = false;
+                }
+              }
+
+              flatText += normalizedContent;
+              var endOffset = flatText.length;
+              textNodeMaps.push({
+                node: child,
+                start: startOffset,
+                end: endOffset,
+                rawIndexMap: rawIndexMap
+              });
+            }
+          }
+        } else if (child.nodeType === 1) {
+          if (!SKIP_TAGS[child.tagName] && !child.classList.contains('oc-beacon')) {
+            if (child.shadowRoot) {
+              traverse(child.shadowRoot);
+            }
+            traverse(child);
+          }
+        }
+        child = child.nextSibling;
       }
-      var text = node.textContent.toLowerCase();
-      var index = 0;
-      while ((index = text.indexOf(normalizedTerm, index)) !== -1) {
+
+      if (isBlock) {
+        if (flatText.length > 0 && flatText[flatText.length - 1] !== '\n') {
+          flatText += '\n';
+        }
+      }
+    }
+
+    traverse(document.body);
+
+    var normalizedFlatText = flatText.toLowerCase();
+    var index = 0;
+    while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
+      var matchStart = index;
+      var matchEnd = index + term.length;
+
+      var startNode = null;
+      var startOffset = 0;
+      var endNode = null;
+      var endOffset = 0;
+
+      for (var m = 0; m < textNodeMaps.length; m++) {
+        var map = textNodeMaps[m];
+        if (matchStart >= map.start && matchStart < map.end) {
+          startNode = map.node;
+          startOffset = map.rawIndexMap[matchStart - map.start];
+        }
+        if (matchEnd > map.start && matchEnd <= map.end) {
+          endNode = map.node;
+          endOffset = map.rawIndexMap[matchEnd - map.start - 1] + 1;
+          break;
+        }
+      }
+
+      if (startNode && endNode) {
         var range = document.createRange();
-        range.setStart(node, index);
-        range.setEnd(node, index + term.length);
-        
+        range.setStart(startNode, startOffset);
+        range.setEnd(endNode, endOffset);
+
         var rects = range.getClientRects();
         var isVisible = false;
         for (var rIndex = 0; rIndex < rects.length; rIndex++) {
@@ -1070,10 +1201,9 @@
         if (isVisible) {
           searchRanges.push(range);
         }
-        
-        index += term.length;
-        if (searchRanges.length >= 999) break;
       }
+
+      index += term.length;
       if (searchRanges.length >= 999) break;
     }
 
@@ -1167,19 +1297,48 @@
       var element = activeRange.startContainer.parentElement;
       if (element) {
         triggerAutoScrollFlag();
+        var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
+        if (shouldAnimate) {
+          if (behavior === 'smooth') {
+            var scrollTimeout = null;
+            var onScrollEnd = function () {
+              if (scrollTimeout) clearTimeout(scrollTimeout);
+              window.removeEventListener('scrollend', onScrollEnd);
+              window.removeEventListener('scroll', onScrollEndDebounced);
+              var freshRect = activeRange.getBoundingClientRect();
+              animate(freshRect);
+            };
+
+            var scrollDebounceTimer = null;
+            var onScrollEndDebounced = function () {
+              if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
+              scrollDebounceTimer = setTimeout(onScrollEnd, 80);
+            };
+
+            scrollTimeout = setTimeout(onScrollEnd, 600);
+
+            window.addEventListener('scrollend', onScrollEnd, { once: true });
+            window.addEventListener('scroll', onScrollEndDebounced);
+          } else {
+            setTimeout(function () {
+              var freshRect = activeRange.getBoundingClientRect();
+              animate(freshRect);
+            }, 50);
+          }
+        }
         element.scrollIntoView({
-          behavior: 'smooth',
+          behavior: behavior,
           block: 'center',
           inline: 'nearest'
         });
       }
-    }
-
-    if (shouldAnimate) {
-      setTimeout(function () {
-        var freshRect = activeRange.getBoundingClientRect();
-        animate(freshRect);
-      }, 180);
+    } else {
+      if (shouldAnimate) {
+        setTimeout(function () {
+          var freshRect = activeRange.getBoundingClientRect();
+          animate(freshRect);
+        }, 50);
+      }
     }
   }
 
@@ -1404,6 +1563,7 @@
       settings.matchColor = '#fef08a';
       settings.activeColor = '#f59e0b';
       settings.beaconColor = '#fbbf24';
+      settings.scrollBehavior = 'smooth';
       saveSettings();
       applyWrapPosition();
       injectHighlightStyles();
@@ -1453,6 +1613,15 @@
       settingsPanel.remove(); settingsPanel = null;
       buildSettingsPanel();
     })));
+
+    var scrollBehaviorField = makeSettingsField(i18n.scrollBehavior, i18n.scrollBehaviorDesc, makeOptionGroup([
+      { value: 'smooth', label: i18n.smooth },
+      { value: 'instant', label: i18n.instant }
+    ], settings.scrollBehavior, function (v) {
+      settings.scrollBehavior = v; saveSettings();
+    }));
+    scrollBehaviorField.style.marginTop = '8px';
+    col1.appendChild(scrollBehaviorField);
 
     var effectOptions = [];
     for (var key in effectsRegistry) {
@@ -2367,7 +2536,7 @@
       if (!changes['oc-settings']) return;
       var nv = changes['oc-settings'].newValue;
       if (!nv) return;
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites', 'faviconSwap'].forEach(function(k) {
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'faviconSwap'].forEach(function(k) {
         if (k in nv) settings[k] = nv[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
@@ -2380,7 +2549,7 @@
   chrome.storage.sync.get('oc-settings', function (data) {
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'disabledSites', 'faviconSwap'].forEach(function (k) {
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'faviconSwap'].forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
