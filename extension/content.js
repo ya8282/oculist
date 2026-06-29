@@ -41,6 +41,7 @@
     themeDesc: 'Sleek interface color palette',
     dark: 'Dark',
     light: 'Light',
+    system: 'System',
     scrollBehavior: 'Scroll Behavior',
     scrollBehaviorDesc: 'Viewport movement style',
     smooth: 'Smooth',
@@ -103,7 +104,16 @@
       accent: '#f59e0b', panelBg: 'rgba(255, 255, 255, 0.97)', divider: '#d4d4d8',
     },
   };
-  function T() { return THEMES[settings.theme] || THEMES.dark; }
+  function getActiveThemeName() {
+    var themeName = settings.theme;
+    if (themeName === 'system') {
+      var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      themeName = isDark ? 'dark' : 'light';
+    }
+    return themeName;
+  }
+
+  function T() { return THEMES[getActiveThemeName()] || THEMES.dark; }
 
   var POS_DATA = {
     tr: { top: '0', right: '0', bottom: '', left: '',  radius: '0 0 0 8px', isBottom: false },
@@ -1651,6 +1661,7 @@
     col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
       { value: 'dark',  label: i18n.dark  },
       { value: 'light', label: i18n.light },
+      { value: 'system', label: i18n.system },
     ], settings.theme, function (v) {
       settings.theme = v; saveSettings();
       injectHighlightStyles();
@@ -1889,6 +1900,7 @@
 
   function makeIconBtn(iconName, title) {
     var btn = document.createElement('button');
+    btn.className = 'oc-' + iconName + '-btn';
     btn.textContent = ICON_CHARS[iconName] || '';
     btn.title = title;
     btn.setAttribute('aria-label', title);
@@ -2111,6 +2123,7 @@
       var dialogEl = wrapRoot.querySelector('#' + dialogStyleId);
 
       var t = T();
+      var activeTheme = getActiveThemeName();
 
       var dialogCss = [
         ':host {',
@@ -2133,9 +2146,9 @@
         '  --oc-accent: ' + t.accent + ';',
         '  --oc-panel-bg: ' + t.panelBg + ';',
         '  --oc-divider: ' + t.divider + ';',
-        '  --oc-btn-active-bg: ' + (settings.theme === 'dark' ? '#27272a' : '#ffffff') + ';',
-        '  --oc-btn-active-text: ' + (settings.theme === 'dark' ? '#fafafa' : '#09090b') + ';',
-        '  --oc-btn-hover-bg: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  --oc-btn-active-bg: ' + (activeTheme === 'dark' ? '#27272a' : '#ffffff') + ';',
+        '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
+        '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2) + ';',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
@@ -2213,6 +2226,9 @@
         '  text-transform: none;',
         '  text-decoration: none;',
         '  cursor: pointer;',
+        '}',
+        '.oc-bar button.oc-gear-btn {',
+        '  font-size: 17px;',
         '}',
         '.oc-bar button {',
         '  width: 26px;',

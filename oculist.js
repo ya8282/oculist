@@ -44,6 +44,7 @@
     themeDesc: 'Sleek interface color palette',
     dark: 'Dark',
     light: 'Light',
+    system: 'System',
     scrollBehavior: 'Scroll Behavior',
     scrollBehaviorDesc: 'Viewport movement style',
     smooth: 'Smooth',
@@ -101,7 +102,16 @@
       accent: '#f59e0b', panelBg: 'rgba(255, 255, 255, 0.97)', divider: '#d4d4d8',
     },
   };
-  function T() { return THEMES[settings.theme] || THEMES.dark; }
+  function getActiveThemeName() {
+    var themeName = settings.theme;
+    if (themeName === 'system') {
+      var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      themeName = isDark ? 'dark' : 'light';
+    }
+    return themeName;
+  }
+
+  function T() { return THEMES[getActiveThemeName()] || THEMES.dark; }
 
   var POS_DATA = {
     tr: { top: '0', right: '0', bottom: '', left: '',  radius: '0 0 0 8px', isBottom: false },
@@ -1731,6 +1741,7 @@
     col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
       { value: 'dark',  label: i18n.dark  },
       { value: 'light', label: i18n.light },
+      { value: 'system', label: i18n.system },
     ], settings.theme, function (v) {
       settings.theme = v; saveSettings();
       injectHighlightStyles();
@@ -2015,6 +2026,7 @@
 
   function makeIconBtn(iconName, title, size) {
     var btn = document.createElement('button');
+    btn.classList.add('oc-' + iconName + '-btn');
     var svg = createSvgIcon(iconName, size);
     if (svg) {
       btn.appendChild(svg);
@@ -2072,7 +2084,7 @@
     replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
-    gearBtn = makeIconBtn('gear', i18n.optionsTitle);
+    gearBtn = makeIconBtn('gear', i18n.optionsTitle, 16);
     gearBtn.addEventListener('click', toggleSettings);
 
     closeBtn = makeIconBtn('close', i18n.closeTitle);
@@ -2148,6 +2160,7 @@
       var dialogEl = wrapRoot.querySelector('#' + dialogStyleId);
 
       var t = T();
+      var activeTheme = getActiveThemeName();
 
       var dialogCss = [
         ':host {',
@@ -2170,9 +2183,9 @@
         '  --oc-accent: ' + t.accent + ';',
         '  --oc-panel-bg: ' + t.panelBg + ';',
         '  --oc-divider: ' + t.divider + ';',
-        '  --oc-btn-active-bg: ' + (settings.theme === 'dark' ? '#27272a' : '#ffffff') + ';',
-        '  --oc-btn-active-text: ' + (settings.theme === 'dark' ? '#fafafa' : '#09090b') + ';',
-        '  --oc-btn-hover-bg: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  --oc-btn-active-bg: ' + (activeTheme === 'dark' ? '#27272a' : '#ffffff') + ';',
+        '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
+        '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2) + ';',
         '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;',
         '}',
@@ -2244,6 +2257,12 @@
         '  flex-shrink: 0;',
         '  stroke: var(--oc-text);',
         '  fill: none;',
+        '}',
+        '.oc-bar button.oc-gear-btn svg {',
+        '  width: 16px;',
+        '  height: 16px;',
+        '  min-width: 16px;',
+        '  min-height: 16px;',
         '}',
         '.oc-bar button svg path, .oc-bar button svg polyline, .oc-bar button svg circle {',
         '  stroke: var(--oc-text);',
