@@ -171,10 +171,26 @@
   var firstEnter       = false;
   var debounceTimer    = null;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
+  var activeScrollTimeout      = null;
+  var activeScrollEndHandler   = null;
+  var activeScrollDebounceHandler = null;
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
   window.__ocDestroy = function () {
+    if (activeScrollTimeout) {
+      clearTimeout(activeScrollTimeout);
+      activeScrollTimeout = null;
+    }
+    if (activeScrollEndHandler) {
+      window.removeEventListener('scrollend', activeScrollEndHandler);
+      activeScrollEndHandler = null;
+    }
+    if (activeScrollDebounceHandler) {
+      window.removeEventListener('scroll', activeScrollDebounceHandler);
+      activeScrollDebounceHandler = null;
+    }
+
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
     } catch (e) {}
@@ -1051,6 +1067,16 @@
 
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1 };
 
+  function foldAccentsSafe(str) {
+    var result = '';
+    for (var i = 0; i < str.length; i++) {
+      var char = str[i];
+      var folded = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      result += (folded.length === 1) ? folded : char;
+    }
+    return result;
+  }
+
   function performSearch(term) {
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
@@ -1069,7 +1095,7 @@
       return;
     }
 
-    var normalizedTerm = term.toLowerCase();
+    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
     var flatText = '';
     var textNodeMaps = [];
 
@@ -1151,11 +1177,11 @@
 
     traverse(document.body);
 
-    var normalizedFlatText = flatText.toLowerCase();
+    var normalizedFlatText = foldAccentsSafe(flatText.toLowerCase());
     var index = 0;
     while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
       var matchStart = index;
-      var matchEnd = index + term.length;
+      var matchEnd = index + normalizedTerm.length;
 
       var startNode = null;
       var startOffset = 0;
@@ -1291,11 +1317,27 @@
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
+            if (activeScrollTimeout) {
+              clearTimeout(activeScrollTimeout);
+              activeScrollTimeout = null;
+            }
+            if (activeScrollEndHandler) {
+              window.removeEventListener('scrollend', activeScrollEndHandler);
+              activeScrollEndHandler = null;
+            }
+            if (activeScrollDebounceHandler) {
+              window.removeEventListener('scroll', activeScrollDebounceHandler);
+              activeScrollDebounceHandler = null;
+            }
+
             var scrollTimeout = null;
             var onScrollEnd = function () {
               if (scrollTimeout) clearTimeout(scrollTimeout);
+              if (activeScrollTimeout === scrollTimeout) activeScrollTimeout = null;
               window.removeEventListener('scrollend', onScrollEnd);
               window.removeEventListener('scroll', onScrollEndDebounced);
+              if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
+              if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
               var freshRect = activeRange.getBoundingClientRect();
               animate(freshRect);
             };
@@ -1307,6 +1349,9 @@
             };
 
             scrollTimeout = setTimeout(onScrollEnd, 600);
+            activeScrollTimeout = scrollTimeout;
+            activeScrollEndHandler = onScrollEnd;
+            activeScrollDebounceHandler = onScrollEndDebounced;
 
             window.addEventListener('scrollend', onScrollEnd, { once: true });
             window.addEventListener('scroll', onScrollEndDebounced);
