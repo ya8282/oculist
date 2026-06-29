@@ -13,8 +13,7 @@
     activeColor: '#f59e0b',
     beaconColor: '#fbbf24',
     scrollBehavior: 'smooth',
-    disabledSites: [],
-    faviconSwap: false
+    disabledSites: []
   };
 
   function saveSettings() {
@@ -74,11 +73,6 @@
     siteToggleDesc: 'Toggle Oculist for this domain',
     enabled: 'Enabled',
     disabled: 'Disabled',
-
-    // Favicon Toggle
-    faviconLabel: 'Tab Icon',
-    faviconDesc: 'Show 🕶️ while Oculist is open',
-    pinExtensionTip: 'Tip: Pin Oculist to your browser toolbar to easily access the site-specific toggle next to the address bar!',
 
     // Highlight Effects
     effectAnimeLaser: 'Anime Laser',
@@ -140,7 +134,6 @@
   var searchRanges     = [];
   var activeIndex      = -1;
   var lastTerm         = '';
-  var originalFavicons = [];
   var firstEnter       = false;
   var debounceTimer    = null;
   var activeBeacons    = 0;
@@ -181,7 +174,6 @@
       debounceTimer = null;
     }
 
-    restoreFavicons();
     cancelBeacons();
     if (wrap) wrap.remove();
     
@@ -189,7 +181,7 @@
     if (s) s.remove();
     
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = []; firstEnter = false;
+    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -1629,11 +1621,6 @@
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
 
-    var pinTip = document.createElement('div');
-    pinTip.className = 'oc-pin-tip';
-    pinTip.textContent = i18n.pinExtensionTip;
-    settingsPanel.appendChild(pinTip);
-
     // Grid Container
     var grid = document.createElement('div');
     grid.className = 'oc-settings-grid';
@@ -1730,16 +1717,6 @@
     var colorsField = makeSettingsField(i18n.customColors, i18n.colorsDesc, pickerGroup);
     colorsField.style.marginTop = '8px';
     col2.appendChild(colorsField);
-
-    var faviconField = makeSettingsField(i18n.faviconLabel, i18n.faviconDesc, makeOptionGroup([
-      { value: 'on',  label: i18n.enabled  },
-      { value: 'off', label: i18n.disabled },
-    ], settings.faviconSwap ? 'on' : 'off', function (v) {
-      settings.faviconSwap = (v === 'on');
-      saveSettings();
-    }));
-    faviconField.style.marginTop = '8px';
-    col2.appendChild(faviconField);
 
 
 
@@ -1848,50 +1825,6 @@
     wrap.style.transition = 'border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms';
     wrap.classList.toggle('is-top', !p.isBottom);
     wrap.classList.toggle('is-bottom', p.isBottom);
-  }
-
-  // ── Favicon Management ────────────────────────────────────────────────────────
-
-  function setSunglassesFavicon() {
-    try {
-      originalFavicons = [];
-      var links = document.querySelectorAll("link[rel*='icon']");
-      for (var i = 0; i < links.length; i++) {
-        if (links[i] && links[i].parentNode) {
-          originalFavicons.push({ el: links[i], parent: links[i].parentNode, nextSibling: links[i].nextSibling });
-          links[i].remove();
-        }
-      }
-
-      var link = document.createElement('link');
-      link.id = 'oc-favicon';
-      link.rel = 'icon';
-      link.type = 'image/svg+xml';
-      link.href = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">🕶️</text></svg>');
-      if (document.head) {
-        document.head.appendChild(link);
-      }
-    } catch (e) {
-      console.warn('Oculist: Failed to set custom favicon.', e);
-    }
-  }
-
-  function restoreFavicons() {
-    try {
-      var fav = document.getElementById('oc-favicon');
-      if (fav) fav.remove();
-
-      originalFavicons.forEach(function (item) {
-        if (item.el && item.parent) {
-          try {
-            item.parent.insertBefore(item.el, item.nextSibling);
-          } catch (err) {}
-        }
-      });
-    } catch (e) {
-      console.warn('Oculist: Failed to restore original favicons.', e);
-    }
-    originalFavicons = [];
   }
 
   // ── UI build ──────────────────────────────────────────────────────────────────
@@ -2512,7 +2445,6 @@
       if (wrap) {
         window.__ocDestroy();
       } else {
-        if (settings.faviconSwap) setSunglassesFavicon();
         buildUI();
         injectHighlightStyles();
         if (input) {
@@ -2531,7 +2463,7 @@
       if (!changes['oc-settings']) return;
       var nv = changes['oc-settings'].newValue;
       if (!nv) return;
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'faviconSwap'].forEach(function(k) {
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites'].forEach(function(k) {
         if (k in nv) settings[k] = nv[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
@@ -2552,7 +2484,7 @@
   chrome.storage.sync.get('oc-settings', function (data) {
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'faviconSwap'].forEach(function (k) {
+      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites'].forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];

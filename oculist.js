@@ -177,7 +177,6 @@
   var searchRanges     = [];
   var activeIndex      = -1;
   var lastTerm         = '';
-  var originalFavicons = [];
   var firstEnter       = false;
   var debounceTimer    = null;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
@@ -221,7 +220,6 @@
       debounceTimer = null;
     }
 
-    restoreFavicons();
     cancelBeacons();
     if (wrap) wrap.remove();
     
@@ -229,7 +227,7 @@
     if (s) s.remove();
     
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; originalFavicons = []; firstEnter = false;
+    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -1910,50 +1908,6 @@
     wrap.classList.toggle('is-bottom', p.isBottom);
   }
 
-  // ── Favicon Management ────────────────────────────────────────────────────────
-
-  function setSunglassesFavicon() {
-    try {
-      originalFavicons = [];
-      var links = document.querySelectorAll("link[rel*='icon']");
-      for (var i = 0; i < links.length; i++) {
-        if (links[i] && links[i].parentNode) {
-          originalFavicons.push({ el: links[i], parent: links[i].parentNode, nextSibling: links[i].nextSibling });
-          links[i].remove();
-        }
-      }
-
-      var link = document.createElement('link');
-      link.id = 'oc-favicon';
-      link.rel = 'icon';
-      link.type = 'image/svg+xml';
-      link.href = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">🕶️</text></svg>');
-      if (document.head) {
-        document.head.appendChild(link);
-      }
-    } catch (e) {
-      console.warn('Oculist: Failed to set custom favicon.', e);
-    }
-  }
-
-  function restoreFavicons() {
-    try {
-      var fav = document.getElementById('oc-favicon');
-      if (fav) fav.remove();
-
-      originalFavicons.forEach(function (item) {
-        if (item.el && item.parent) {
-          try {
-            item.parent.insertBefore(item.el, item.nextSibling);
-          } catch (err) {}
-        }
-      });
-    } catch (e) {
-      console.warn('Oculist: Failed to restore original favicons.', e);
-    }
-    originalFavicons = [];
-  }
-
   // ── UI build ──────────────────────────────────────────────────────────────────
 
   function createSvgIcon(name, size) {
@@ -2646,7 +2600,6 @@
       if (wrap) {
         window.__ocDestroy();
       } else {
-        setSunglassesFavicon();
         buildUI();
         injectHighlightStyles();
         if (input) {
