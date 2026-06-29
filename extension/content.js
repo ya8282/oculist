@@ -2104,6 +2104,7 @@
         '}',
         '.oc-bar button.oc-gear-btn {',
         '  font-size: 21px;',
+        '  transform: translateY(-1px);',
         '}',
         '.oc-bar button {',
         '  width: 26px;',
