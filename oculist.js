@@ -2084,7 +2084,7 @@
     replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
-    gearBtn = makeIconBtn('gear', i18n.optionsTitle, 16);
+    gearBtn = makeIconBtn('gear', i18n.optionsTitle, 18);
     gearBtn.addEventListener('click', toggleSettings);
 
     closeBtn = makeIconBtn('close', i18n.closeTitle);
@@ -2259,10 +2259,10 @@
         '  fill: none;',
         '}',
         '.oc-bar button.oc-gear-btn svg {',
-        '  width: 16px;',
-        '  height: 16px;',
-        '  min-width: 16px;',
-        '  min-height: 16px;',
+        '  width: 18px;',
+        '  height: 18px;',
+        '  min-width: 18px;',
+        '  min-height: 18px;',
         '}',
         '.oc-bar button svg path, .oc-bar button svg polyline, .oc-bar button svg circle {',
         '  stroke: var(--oc-text);',

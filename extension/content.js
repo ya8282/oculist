@@ -2228,7 +2228,7 @@
         '  cursor: pointer;',
         '}',
         '.oc-bar button.oc-gear-btn {',
-        '  font-size: 17px;',
+        '  font-size: 21px;',
         '}',
         '.oc-bar button {',
         '  width: 26px;',
@@ -2603,6 +2603,14 @@
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
       if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
         window.__ocDestroy();
+      } else {
+        injectHighlightStyles();
+        applyWrapPosition();
+        if (settingsPanel) {
+          settingsPanel.remove();
+          settingsPanel = null;
+          buildSettingsPanel();
+        }
       }
     });
   }
