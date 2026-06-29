@@ -1825,6 +1825,8 @@
     wrap.style.transition = 'border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms';
     wrap.classList.toggle('is-top', !p.isBottom);
     wrap.classList.toggle('is-bottom', p.isBottom);
+    wrap.classList.remove('pos-tr', 'pos-tl', 'pos-br', 'pos-bl');
+    wrap.classList.add('pos-' + settings.position);
   }
 
   // ── UI build ──────────────────────────────────────────────────────────────────
@@ -2036,6 +2038,12 @@
         '  font: 14px/1 system-ui, -apple-system, sans-serif;',
         '  background: ' + t.bg + ';',
         '  color: ' + t.text + ';',
+        '}',
+        ':host(.pos-tr) .oc-bar, :host(.pos-br) .oc-bar {',
+        '  align-self: flex-end;',
+        '}',
+        ':host(.pos-tl) .oc-bar, :host(.pos-bl) .oc-bar {',
+        '  align-self: flex-start;',
         '}',
         'input.oc-input {',
         '  border: 1px solid var(--oc-input-border);',
