@@ -2460,6 +2460,7 @@
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
     }
+    if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
     boot();
   });
 
