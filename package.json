@@ -4,7 +4,9 @@
   "description": "This is a Chrome bookmarklet that provides a high-visibility find-in-page experience. When performing searches with the search bar it activates, it instantly locates the matches and fires animated beacons to help you instantly spot text occurrences without interfering with host-page styles, layouts, or security policies.",
   "main": "background.js",
   "scripts": {
-    "test": "node --test test/settings_panel.test.js"
+    "test": "node --test test/settings_panel.test.js",
+    "promo": "node scripts/capture-promo.js",
+    "build": "node build.js"
   },
   "repository": {
     "type": "git",
