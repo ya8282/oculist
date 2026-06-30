@@ -89,7 +89,7 @@
 
     .sub {
       font-size: 18px;
-      color: #71717a;
+      color: #a7a7b6;
       line-height: 1.5;
       max-width: 380px;
     }
@@ -206,20 +206,49 @@
     /* Oculist find bar */
     .find-bar {
       margin: 6px 12px 14px;
-      background: #0c0c0e;
-      border: 1px solid #2a2a2e;
+      background: rgba(9,9,11,0.96);
+      border: 1px solid #3f3f46;
       border-radius: 8px;
-      padding: 8px 14px;
+      padding: 6px 10px;
       display: flex;
       align-items: center;
-      gap: 10px;
-      font-size: 13px;
+      gap: 6px;
+      font-size: 14px;
     }
 
-    .find-icon { color: #3f3f46; flex-shrink: 0; }
-    .find-input { flex: 1; color: #e4e4e7; }
-    .find-count { color: #f59e0b; font-size: 12px; white-space: nowrap; }
-    .find-btns  { color: #3f3f46; font-size: 12px; letter-spacing: 2px; }
+    .find-input {
+      flex: 1;
+      min-width: 0;
+      color: #fafafa;
+      background: rgba(24,24,27,0.75);
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 14px;
+      box-shadow: 0 0 0 2px rgba(251,191,36,0.2);
+    }
+
+    .find-count {
+      color: #fafafa;
+      opacity: 0.75;
+      font-size: 12px;
+      white-space: nowrap;
+      min-width: 40px;
+      text-align: right;
+      flex-shrink: 0;
+      margin-right: 2px;
+    }
+
+    .find-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+
+    .find-btn {
+      color: #fafafa;
+      width: 26px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+
+    .find-btn.gear { font-size: 18px; transform: translateY(-1px); }
 
     /* Divider between left and right */
     .divider {
@@ -290,10 +319,15 @@
     </div>
 
     <div class="find-bar">
-      <svg class="find-icon" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <span class="find-input">cyanobacteria</span>
+      <div class="find-input">cyanobacteria</div>
       <span class="find-count">1 / 3</span>
-      <span class="find-btns">▼ ▲ ✕ ⚙</span>
+      <div class="find-actions">
+        <span class="find-btn">↑</span>
+        <span class="find-btn">↓</span>
+        <span class="find-btn">↺</span>
+        <span class="find-btn gear">⚙</span>
+        <span class="find-btn">✕</span>
+      </div>
     </div>
   </div>
 </div>

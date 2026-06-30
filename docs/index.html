@@ -145,19 +145,44 @@
 
     .demo-bar {
       margin-top: 18px;
-      background: #0c0c0e;
-      border: 1px solid var(--border);
+      background: rgba(9,9,11,0.96);
+      border: 1px solid #3f3f46;
       border-radius: 8px;
-      padding: 8px 14px;
+      padding: 6px 10px;
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 13px;
+      gap: 6px;
+      font-size: 14px;
     }
 
-    .demo-bar-input { flex: 1; color: var(--text); }
-    .demo-bar-count { color: var(--accent); font-size: 12px; }
-    .demo-bar-btns  { color: var(--subtle); letter-spacing: 3px; font-size: 11px; }
+    .demo-bar-input {
+      flex: 1; min-width: 0;
+      color: #fafafa;
+      background: rgba(24,24,27,0.75);
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 14px;
+      box-shadow: 0 0 0 2px rgba(251,191,36,0.2);
+    }
+
+    .demo-bar-count {
+      color: #fafafa; opacity: 0.75;
+      font-size: 12px; white-space: nowrap;
+      min-width: 36px; text-align: right;
+      flex-shrink: 0; margin-right: 2px;
+    }
+
+    .demo-bar-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+
+    .demo-bar-btn {
+      color: #fafafa;
+      width: 26px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+
+    .demo-bar-btn.gear { font-size: 18px; transform: translateY(-1px); }
 
     /* ── Section ──────────────────────────────── */
     section {
@@ -337,7 +362,7 @@
       100% { transform: scaleY(0); opacity: 0; }
     }
 
-    .effect-also { font-size: 14px; color: var(--subtle); }
+    .effect-also { font-size: 14px; color: var(--muted); }
 
     /* ── Trust pills ──────────────────────────── */
     .trust-pills { display:flex; flex-wrap:wrap; gap:12px; }
@@ -446,10 +471,15 @@
         <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo. Duis aute irure dolor in reprehenderit in <span class="demo-match">voluptate velit</span> esse cillum dolore eu fugiat nulla pariatur sint occaecat.</p>
       </div>
       <div class="demo-bar">
-        <svg width="14" height="14" fill="none" stroke="#52525b" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <span class="demo-bar-input">voluptate velit</span>
+        <div class="demo-bar-input">voluptate velit</div>
         <span class="demo-bar-count">1 / 1</span>
-        <span class="demo-bar-btns">▼ ▲ ✕ ⚙</span>
+        <div class="demo-bar-actions">
+          <span class="demo-bar-btn">↑</span>
+          <span class="demo-bar-btn">↓</span>
+          <span class="demo-bar-btn">↺</span>
+          <span class="demo-bar-btn gear">⚙</span>
+          <span class="demo-bar-btn">✕</span>
+        </div>
       </div>
     </div>
   </div>
@@ -459,24 +489,24 @@
 <section>
   <div class="wrap">
     <div class="section-eyebrow">Why Oculist</div>
-    <h2 class="section-heading">Everything Chrome's find is missing</h2>
+    <h2 class="section-heading">Avoid wasting time in text searches</h2>
     <p class="section-sub">A subtle yellow box is no match for a dense article, a long code file, or anything with a busy layout.</p>
 
     <div class="why-grid">
       <div class="why-card">
         <div class="why-icon" aria-hidden="true">✦</div>
-        <h3>6 Visual Effects</h3>
-        <p>Anime Laser, Spotlight, Warp Drive, Inferno Flame, Lightning, Electron Cloud. Pick the one that fits and switch anytime from the settings panel.</p>
+        <h3>Multiple Visual Effects</h3>
+        <p>Anime Laser, Spotlight, Warp Drive, Inferno Flame, Lightning, Electron Cloud. Pick the one that fits and switch anytime from the settings panel. Choose between instant or animated page scrolling to the match.</p>
       </div>
       <div class="why-card">
         <div class="why-icon" aria-hidden="true">⚡</div>
         <h3>Works Everywhere</h3>
-        <p>Built on Chrome's CSS Highlight API and the Web Animations API — no DOM injection, no injected styles. Fully compatible with strict CSP pages like GitHub and Google.</p>
+        <p>Built on Chrome's CSS Highlight API and the Web Animations API. No DOM injection, no injected styles. Fully compatible with strict Content Security Policy (CSP) pages like GitHub and Google.</p>
       </div>
       <div class="why-card">
         <div class="why-icon" aria-hidden="true">◎</div>
         <h3>Zero Friction</h3>
-        <p>One shortcut opens it. Escape closes it. Settings persist automatically. No account, no onboarding, no configuration needed to get started.</p>
+        <p>Familiar text find controls. Settings persist automatically. No account, no onboarding, no configuration needed to get started.</p>
       </div>
     </div>
   </div>
@@ -487,7 +517,7 @@
   <div class="wrap">
     <div class="section-eyebrow">How It Works</div>
     <h2 class="section-heading">Three steps to clarity</h2>
-    <p class="section-sub">Oculist replaces the native find UI with its own — same muscle memory, far better visibility.</p>
+    <p class="section-sub">Oculist replaces the native find UI with its own. Same hotkeys and behavior with better visibility.</p>
 
     <div class="steps">
       <div class="step">
@@ -571,7 +601,7 @@
     <!-- TODO: replace # with Chrome Web Store URL -->
     <a class="btn-primary-lg" href="#" target="_blank" rel="noopener noreferrer">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 13H11v-6h2v6zm0-8H11V5h2v2z"/></svg>
-      Add to Chrome — it's free
+      Add to Chrome (Free)
     </a>
     <p class="cta-fine">Chrome 105+. No signup required. Uninstall anytime.</p>
   </div>
