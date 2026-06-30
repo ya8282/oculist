@@ -73,7 +73,19 @@
 
     .h-line.dim { color: #a1a1aa; }
     .h-line.accent { color: #f59e0b; }
-    .h-line.blurry { color: #a1a1aa; filter: blur(4px); opacity: 0.7; user-select: none; }
+
+    @keyframes blur-cycle {
+      0%, 20%  { filter: blur(0px);  opacity: 1; }
+      45%, 75% { filter: blur(4px);  opacity: 0.7; }
+      100%     { filter: blur(0px);  opacity: 1; }
+    }
+
+    .h-line.blurry {
+      color: #a1a1aa;
+      user-select: none;
+      animation: blur-cycle 4s ease-in-out infinite;
+      animation-delay: -2s;
+    }
 
     .sub {
       font-size: 18px;
