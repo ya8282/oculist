@@ -36,51 +36,6 @@ Unlike typical search overlays, oculist is designed to run safely on complex, mo
 3. Type your search query. Highlights will display as you type.
 4. Press **Enter** or **Shift+Enter** to cycle through matches and trigger animations.
 
-## Custom Animation Plugins
-
-Oculist features a CSP-compliant plugin API that allows you to dynamically register custom highlight animations. Because it avoids `eval()` or `new Function()`, it works seamlessly under the strictest Content Security Policy headers (and Content Scripts context).
-
-To register a custom animation, define a function that acts on a bounding rectangle (`DOMRect`) and register it under a unique ID using `window.Oculist.registerEffect()`:
-
-```javascript
-window.Oculist = window.Oculist || {};
-window.Oculist.registerEffect('grow-pulse', 'Grow & Pulse', function (rect) {
-  if (!rect || rect.width === 0 || rect.height === 0) return;
-
-  var div = document.createElement('div');
-  div.className = 'oc-beacon';
-  div.style.cssText = [
-    'position: absolute',
-    'left: ' + (rect.left + window.scrollX) + 'px',
-    'top: ' + (rect.top + window.scrollY) + 'px',
-    'width: ' + rect.width + 'px',
-    'height: ' + rect.height + 'px',
-    'border: 2px solid #ec4899',
-    'box-shadow: 0 0 10px #ec4899',
-    'border-radius: 4px',
-    'pointer-events: none',
-    'z-index: 2147483643',
-    'transform-origin: center'
-  ].join(';');
-  document.documentElement.appendChild(div);
-
-  div.animate([
-    { transform: 'scale(1)', opacity: 1 },
-    { transform: 'scale(1.5)', opacity: 0 }
-  ], {
-    duration: 800,
-    easing: 'ease-out',
-    fill: 'forwards'
-  });
-
-  setTimeout(function () {
-    div.remove();
-  }, 900);
-});
-```
-
-Once registered, your custom effect will dynamically appear as a selectable preference button under **Highlight Effect** in the options panel!
-
 ## Known Limitations
 
 - **Browser Compatibility:** Chrome 105+ (due to reliance on the native CSS Custom Highlight API).
