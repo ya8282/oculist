@@ -7,7 +7,7 @@ This Chrome bookmarklet adds a high-visibility page text search experience. When
 1. **Activate:** Launch the bookmarklet. A sleek search bar appears in the corner of your viewport (top-right by default).
 2. **Search-as-you-Type:** Simply type your search term. Matches are indexed and highlighted across the page instantly using a lightweight, debounced DOM text scanner.
 3. **Navigate:** Press **Enter** / **Shift+Enter** or click **▼ ▲** to cycle through matches. The active match scrolls smoothly into view and plays your selected visual animation.
-4. **Customize:** Click the settings icon (**⚙**) to choose an effect (Pulse, Spotlight, Ring), reposition the bar (Top-Left, Top-Right, Bottom-Left, Bottom-Right), or toggle themes (Dark/Light). Settings persist across sessions via local storage.
+4. **Customize:** Click the settings icon (**⚙**) to choose an effect (for example, Anime Laser, Inferno Flame, or Spotlight), reposition the bar (Top-Left, Top-Right, Bottom-Left, Bottom-Right), or toggle themes (Dark/Light/System preference). Settings persist across sessions via local storage.
 5. **Close:** Press **Escape** or click the **x** (**✕**) to close. All custom highlights, styles, and event listeners are fully purged from the host page.
 
 ## Core Refined Architecture
