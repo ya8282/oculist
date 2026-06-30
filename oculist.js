@@ -2482,6 +2482,7 @@
           settings.disabledSites = [];
         }
       }
+      if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
       boot();
     });
   } else {
@@ -2494,6 +2495,7 @@
         settings.disabledSites = [];
       }
     } catch (e) {}
+    if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
     boot();
   }
 
