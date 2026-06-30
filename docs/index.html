@@ -243,22 +243,25 @@
 
     /* ── Effect demo ──────────────────────────── */
     .effect-demo {
+      position: relative;
       background: #0f0f11;
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 36px 48px;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
       overflow: hidden;
     }
 
     .ed-text {
+      position: relative;
+      z-index: 2;
       font-size: 15px;
       line-height: 2;
-      color: #2a2a2e;
       user-select: none;
     }
 
-    .ed-mid { color: var(--subtle); }
+    .ed-dim  { color: #2a2a2e; }
+    .ed-line { color: var(--subtle); }
 
     .ed-target {
       position: relative;
@@ -266,62 +269,75 @@
       color: #e4e4e7;
     }
 
-    .ed-target-bg {
+    @keyframes hud-flash {
+      0%   { transform: scale(0.1); opacity: 0; }
+      12%  { transform: scale(1.3); opacity: 1; }
+      78%  { transform: scale(0.85); opacity: 0.85; }
+      100% { transform: scale(1.8) scaleY(0); opacity: 0; }
+    }
+
+    .ed-flash {
       position: absolute;
-      inset: -3px -7px;
-      background: rgba(251,191,36,0.15);
-      border-radius: 3px;
+      inset: -22px -28px;
+      background: radial-gradient(circle, #ffffff 8%, #fbbf24 40%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+      animation: hud-flash 3s cubic-bezier(0.19, 1, 0.22, 1) infinite;
+    }
+
+    .ed-spark {
+      position: absolute;
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: #fff;
+      top: 50%; left: 50%;
+      box-shadow: 0 0 6px #fbbf24, 0 0 10px #fbbf24;
       pointer-events: none;
     }
 
-    @keyframes hud-box {
-      0%   { transform: scale(1.35); opacity: 0; }
-      18%  { transform: scale(1);    opacity: 1; }
-      75%  { transform: scale(1);    opacity: 1; }
-      100% { transform: scale(1.35); opacity: 0; }
-    }
+    @keyframes sp1 { 0%{transform:translate(-50%,-50%) scale(1.5);opacity:1} 28%{transform:translate(calc(-50% + 88px),calc(-50% - 52px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% + 88px),calc(-50% - 52px)) scale(0);opacity:0} }
+    @keyframes sp2 { 0%{transform:translate(-50%,-50%) scale(1.5);opacity:1} 28%{transform:translate(calc(-50% - 88px),calc(-50% - 52px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% - 88px),calc(-50% - 52px)) scale(0);opacity:0} }
+    @keyframes sp3 { 0%{transform:translate(-50%,-50%) scale(1.2);opacity:1} 30%{transform:translate(calc(-50% + 4px),calc(-50% - 95px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% + 4px),calc(-50% - 95px)) scale(0);opacity:0} }
+    @keyframes sp4 { 0%{transform:translate(-50%,-50%) scale(1.2);opacity:1} 30%{transform:translate(calc(-50% + 4px),calc(-50% + 95px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% + 4px),calc(-50% + 95px)) scale(0);opacity:0} }
+    @keyframes sp5 { 0%{transform:translate(-50%,-50%) scale(1.3);opacity:1} 26%{transform:translate(calc(-50% + 100px),calc(-50% + 28px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% + 100px),calc(-50% + 28px)) scale(0);opacity:0} }
+    @keyframes sp6 { 0%{transform:translate(-50%,-50%) scale(1.3);opacity:1} 26%{transform:translate(calc(-50% - 100px),calc(-50% + 28px)) scale(0);opacity:0} 100%{transform:translate(calc(-50% - 100px),calc(-50% + 28px)) scale(0);opacity:0} }
 
-    @keyframes hud-scan {
-      0%, 15%   { top: -3px; opacity: 0; }
-      20%        { top: -3px; opacity: 1; }
-      82%        { top: calc(100% + 3px); opacity: 1; }
-      90%, 100%  { top: calc(100% + 3px); opacity: 0; }
-    }
+    .sp1 { animation: sp1 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
+    .sp2 { animation: sp2 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
+    .sp3 { animation: sp3 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
+    .sp4 { animation: sp4 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
+    .sp5 { animation: sp5 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
+    .sp6 { animation: sp6 3s cubic-bezier(0.1,0.8,0.2,1) infinite; }
 
-    .ed-box {
+    /* Full-width beams — top values place center at line 2 of ed-text (81px from top of demo) */
+    .laser-sheath {
       position: absolute;
-      inset: -4px -8px;
-      border: 1.5px solid #fbbf24;
-      border-radius: 3px;
-      animation: hud-box 2.8s ease-in-out infinite;
+      left: 0; right: 0; height: 20px; top: 71px;
+      background: linear-gradient(90deg, transparent, #fbbf24 20%, #fbbf24 80%, transparent);
+      filter: blur(3px);
       pointer-events: none;
+      z-index: 1;
+      animation: hud-beam 3s cubic-bezier(0.19,1,0.22,1) infinite;
     }
 
-    .ed-scan {
+    .laser-core {
       position: absolute;
-      left: -8px; right: -8px; height: 1.5px;
-      background: linear-gradient(90deg, transparent, #fbbf24, transparent);
-      box-shadow: 0 0 6px 1px rgba(251,191,36,0.5);
-      animation: hud-scan 2.8s ease-in-out infinite;
+      left: 0; right: 0; height: 8px; top: 77px;
+      background: linear-gradient(90deg, transparent, #fbbf24 10%, #fff 40%, #fff 60%, #fbbf24 90%, transparent);
+      box-shadow: 0 0 15px #fbbf24, 0 0 35px #fbbf24;
       pointer-events: none;
+      z-index: 1;
+      animation: hud-beam 3s cubic-bezier(0.19,1,0.22,1) infinite;
     }
 
-    .effect-chips { display: flex; flex-wrap: wrap; gap: 10px; }
-
-    .effect-chip {
-      font-size: 13px; color: var(--muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 100px;
-      padding: 5px 14px;
+    @keyframes hud-beam {
+      0%   { transform: scaleY(0); opacity: 0; }
+      10%  { transform: scaleY(2.2); opacity: 1; }
+      80%  { transform: scaleY(1); opacity: 0.65; }
+      100% { transform: scaleY(0); opacity: 0; }
     }
 
-    .effect-chip.active {
-      color: #09090b;
-      background: var(--accent);
-      border-color: var(--accent);
-      font-weight: 600;
-    }
+    .effect-also { font-size: 14px; color: var(--subtle); }
 
     /* ── Trust pills ──────────────────────────── */
     .trust-pills { display:flex; flex-wrap:wrap; gap:12px; }
@@ -508,21 +524,15 @@
 
     <div class="effect-demo" aria-hidden="true">
       <div class="ed-text">
-        <p>The process known as photosynthesis converts light energy into chemical energy.</p>
-        <p class="ed-mid">Most plants, algae, and cyanobacteria use this process to produce food from</p>
-        <p class="ed-mid">sunlight. <span class="ed-target">Chlorophyll<span class="ed-target-bg"></span><span class="ed-box"></span><span class="ed-scan"></span></span> absorbs light primarily in the blue and red wavelengths.</p>
-        <p>The green wavelengths are reflected, which is why plants appear green to us.</p>
+        <p class="ed-dim">Photosynthesis converts sunlight into chemical energy that sustains nearly all life on Earth.</p>
+        <p class="ed-line">Most plants, algae, and <span class="ed-target">cyanobacteria<span class="ed-flash"></span><span class="ed-spark sp1"></span><span class="ed-spark sp2"></span><span class="ed-spark sp3"></span><span class="ed-spark sp4"></span><span class="ed-spark sp5"></span><span class="ed-spark sp6"></span></span> perform this process to produce food from light.</p>
+        <p class="ed-dim">The oxygen we breathe is a byproduct released during this reaction in plant cells.</p>
       </div>
+      <div class="laser-sheath"></div>
+      <div class="laser-core"></div>
     </div>
 
-    <div class="effect-chips">
-      <div class="effect-chip active">Anime Laser</div>
-      <div class="effect-chip">Spotlight</div>
-      <div class="effect-chip">Warp Drive</div>
-      <div class="effect-chip">Inferno Flame</div>
-      <div class="effect-chip">Lightning</div>
-      <div class="effect-chip">Electron Cloud</div>
-    </div>
+    <p class="effect-also">Showing: Anime Laser (default) &nbsp;·&nbsp; Also included: Spotlight, Warp Drive, Inferno Flame, Lightning, Electron Cloud</p>
   </div>
 </section>
 
@@ -592,6 +602,19 @@
     </nav>
   </footer>
 </div>
+
+<script>
+  function positionBeams() {
+    var t = document.querySelector('.ed-target');
+    var d = document.querySelector('.effect-demo');
+    if (!t || !d) return;
+    var cy = t.getBoundingClientRect().top - d.getBoundingClientRect().top + t.offsetHeight / 2;
+    document.querySelector('.laser-sheath').style.top = (cy - 10) + 'px';
+    document.querySelector('.laser-core').style.top   = (cy - 4)  + 'px';
+  }
+  positionBeams();
+  new ResizeObserver(positionBeams).observe(document.querySelector('.effect-demo'));
+</script>
 
 </body>
 </html>
