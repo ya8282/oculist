@@ -80,8 +80,7 @@
     effectWarpDrive: 'Warp Drive',
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
-    effectElectronCloud: 'Electron Cloud',
-    effectSoftGlow: 'Soft Glow'
+    effectElectronCloud: 'Electron Cloud'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -125,8 +124,7 @@
     sweep: { label: i18n.effectWarpDrive, run: animateWarpDrive },
     flame: { label: i18n.effectInfernoFlame, run: animateFlame },
     lightning: { label: i18n.effectLightning, run: animateLightning },
-    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
-    glow: { label: i18n.effectSoftGlow, run: animateSoftGlow }
+    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -189,6 +187,7 @@
   function cancelBeacons() {
     var beacons = document.querySelectorAll('.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
+      if (beacons[i].__rafId) cancelAnimationFrame(beacons[i].__rafId);
       beacons[i].remove();
     }
     activeBeacons = 0;
@@ -391,45 +390,6 @@
       overlay.remove();
       ring.remove();
     }, 2100);
-  }
-
-  // Subtle: a soft halo hugging the match that settles, holds, and fades. No screen dim.
-  function animateSoftGlow(rect) {
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-
-    var pad = 4;
-    var x = rect.left + window.scrollX - pad;
-    var y = rect.top + window.scrollY - pad;
-    var w = rect.width + pad * 2;
-    var h = rect.height + pad * 2;
-    var color = settings.beaconColor || '#fbbf24';
-
-    var glow = document.createElement('div');
-    glow.className = 'oc-beacon';
-    glow.style.cssText = [
-      'position:absolute',
-      'left:' + x + 'px', 'top:' + y + 'px',
-      'width:' + w + 'px', 'height:' + h + 'px',
-      'border-radius:5px',
-      'box-shadow:0 0 0 2px ' + color + ', 0 0 14px 3px ' + color,
-      'transform-origin:center',
-      'pointer-events:none', 'z-index:2147483642',
-      'opacity:0'
-    ].join(';');
-    document.documentElement.appendChild(glow);
-
-    glow.animate([
-      { opacity: 0, transform: 'scale(1.5)' },
-      { opacity: 0.85, transform: 'scale(1)', offset: 0.25 },
-      { opacity: 0.85, transform: 'scale(1)', offset: 0.65 },
-      { opacity: 0, transform: 'scale(1)' }
-    ], {
-      duration: 1100,
-      easing: 'ease-out',
-      fill: 'forwards'
-    });
-
-    setTimeout(function () { glow.remove(); }, 1200);
   }
 
   function animateWarpDrive(rect) {
@@ -1059,9 +1019,11 @@
       }
 
       animFrameId = requestAnimationFrame(render);
+      container.__rafId = animFrameId;
     }
 
     animFrameId = requestAnimationFrame(render);
+    container.__rafId = animFrameId;
   }
 
   function animate(rect) {
