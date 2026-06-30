@@ -46,6 +46,30 @@ try {
     fs.unlinkSync(tmpPath);
   }
 
+  console.log('6. Packaging extension for Chrome Web Store...');
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'extension', 'manifest.json'), 'utf8'));
+  const extVersion = manifest.version;
+  const zipName = `oculist---high-visibility-finder-v${extVersion}.zip`;
+  const zipPath = path.join(__dirname, 'dist', zipName);
+  const extFiles = [
+    'manifest.json',
+    'background.js',
+    'content.js',
+    'popup.html',
+    'popup.js',
+    'welcome.html',
+    'icon16.png',
+    'icon48.png',
+    'icon128.png',
+  ];
+  if (!fs.existsSync(path.join(__dirname, 'dist'))) {
+    fs.mkdirSync(path.join(__dirname, 'dist'));
+  }
+  if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  const fileArgs = extFiles.map(f => `"${f}"`).join(' ');
+  execSync(`zip -j "${zipPath}" ${fileArgs}`, { cwd: path.join(__dirname, 'extension') });
+  console.log(`Extension zip created: dist/${zipName}`);
+
   console.log('Build completed successfully!');
 } catch (err) {
   console.error('Build failed:', err);
