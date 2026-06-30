@@ -916,7 +916,7 @@
     var ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
 
-    var r = Math.max(rect.width, rect.height, 40) * 0.9;
+    var r = Math.max(rect.width, rect.height, 60) * 1.35;
     var a = r * 1.5;
     var b = r * 0.6;
 
@@ -947,8 +947,8 @@
       ctx.clearRect(0, 0, vw, vh);
 
       var pulse = 1 + 0.1 * Math.sin(elapsed * 0.01);
-      var nucleusRadius = 12 * pulse;
-      var grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, nucleusRadius);
+      var nucleusRadius = 18 * pulse;
+      var grad = ctx.createRadialGradient(cx, cy, 3, cx, cy, nucleusRadius);
       grad.addColorStop(0, '#ffffff');
       grad.addColorStop(0.2, '#ffffff');
       grad.addColorStop(0.6, color);
@@ -960,7 +960,7 @@
       ctx.fill();
 
       ctx.shadowBlur = 0;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.strokeStyle = color;
       ctx.globalAlpha = 0.22;
       for (var i = 0; i < 3; i++) {
@@ -998,7 +998,7 @@
         var history = histories[i];
         for (var k = 0; k < history.length; k++) {
           var ratio = k / history.length;
-          var radius = 1.5 + ratio * 2.5;
+          var radius = 2.25 + ratio * 3.75;
           ctx.beginPath();
           ctx.arc(history[k].x, history[k].y, radius, 0, 2 * Math.PI);
           ctx.fillStyle = color;
@@ -1009,10 +1009,10 @@
 
         ctx.save();
         ctx.shadowColor = color;
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = 15;
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
-        ctx.arc(ex, ey, 4.5, 0, 2 * Math.PI);
+        ctx.arc(ex, ey, 6.75, 0, 2 * Math.PI);
         ctx.fill();
         ctx.restore();
       }
