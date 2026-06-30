@@ -77,7 +77,6 @@
     siteToggleDesc: 'Toggle Oculist for this domain',
     enabled: 'Enabled',
     disabled: 'Disabled',
-    pinExtensionTip: 'Tip: Pin Oculist to your browser toolbar to easily access the site-specific toggle next to the address bar!',
 
     // Highlight Effects
     effectAnimeLaser: 'Anime Laser',
@@ -131,46 +130,6 @@
     lightning: { label: i18n.effectLightning, run: animateLightning },
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud }
   };
-
-  window.Oculist = window.Oculist || {};
-  window.Oculist.registerEffect = function (id, label, drawFunction) {
-    if (typeof id !== 'string' || typeof drawFunction !== 'function') return;
-    effectsRegistry[id] = { label: label, run: drawFunction };
-    if (settingsPanel) {
-      settingsPanel.remove();
-      settingsPanel = null;
-      buildSettingsPanel();
-    }
-  };
-
-  function loadCustomEffects() {
-    try {
-      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
-      for (var id in saved) {
-        if (saved.hasOwnProperty(id)) {
-          var item = saved[id];
-          if (item && item.label && item.code) {
-            try {
-              effectsRegistry[id] = {
-                label: item.label,
-                run: new Function('rect', item.code)
-              };
-            } catch (e) {
-              console.warn('Oculist: Failed to compile custom effect ' + id, e);
-            }
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
-  function saveCustomEffect(id, label, code) {
-    try {
-      var saved = JSON.parse(localStorage.getItem('oc-custom-effects') || '{}');
-      saved[id] = { label: label, code: code };
-      localStorage.setItem('oc-custom-effects', JSON.stringify(saved));
-    } catch (e) {}
-  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -235,6 +194,7 @@
   function cancelBeacons() {
     var beacons = document.querySelectorAll('.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
+      if (beacons[i].__rafId) cancelAnimationFrame(beacons[i].__rafId);
       beacons[i].remove();
     }
   }
@@ -1058,9 +1018,11 @@
       }
 
       animFrameId = requestAnimationFrame(render);
+      container.__rafId = animFrameId;
     }
 
     animFrameId = requestAnimationFrame(render);
+    container.__rafId = animFrameId;
   }
 
   function animate(rect) {
@@ -1499,7 +1461,7 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange, isEffectList) {
+  function makeRadioList(items, currentVal, onChange) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
 
@@ -1529,105 +1491,7 @@
       list.appendChild(row);
     });
 
-    if (false && isEffectList) { // Backlog: Hide from UI for now
-      var addRow = document.createElement('button');
-      addRow.className = 'oc-radio-item';
-      addRow.style.borderTop = '1px dashed var(--oc-input-border)';
-      addRow.style.marginTop = '4px';
-      addRow.style.paddingTop = '8px';
-      addRow.style.color = 'var(--oc-subtle)';
-      addRow.style.opacity = '0.7';
-      
-      var plusDot = document.createElement('span');
-      plusDot.className = 'oc-radio-dot';
-      plusDot.textContent = '+';
-      plusDot.style.fontWeight = 'bold';
-      
-      var plusLbl = document.createElement('span');
-      plusLbl.textContent = 'Add Custom Effect...';
-      plusLbl.style.fontStyle = 'italic';
-      
-      addRow.appendChild(plusDot);
-      addRow.appendChild(plusLbl);
-      
-      addRow.addEventListener('click', function () {
-        promptForCustomEffect(onChange);
-      });
-      list.appendChild(addRow);
-    }
-
     return list;
-  }
-
-  function promptForCustomEffect(onChange) {
-    var label = prompt("Enter a name for your custom highlight effect:", "My Cool Effect");
-    if (!label) return;
-
-    var id = 'custom_' + label.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    if (effectsRegistry[id]) {
-      alert("An effect with that name already exists!");
-      return;
-    }
-
-    var defaultCode = [
-      "// rect is the bounding client rect of the match on screen",
-      "// settings contains user color preferences (e.g. settings.beaconColor)",
-      "if (!rect || rect.width === 0 || rect.height === 0) return;",
-      "",
-      "var cx = rect.left + rect.width / 2 + window.scrollX;",
-      "var cy = rect.top + rect.height / 2 + window.scrollY;",
-      "var color = settings.beaconColor || '#fbbf24';",
-      "",
-      "// Create and inject custom beacon element",
-      "var el = document.createElement('div');",
-      "el.className = 'oc-beacon';",
-      "el.style.cssText = [",
-      "  'position: absolute',",
-      "  'left: ' + (cx - 50) + 'px',",
-      "  'top: ' + (cy - 50) + 'px',",
-      "  'width: 100px',",
-      "  'height: 100px',",
-      "  'border: 4px solid ' + color,",
-      "  'border-radius: 50%',",
-      "  'pointer-events: none',",
-      "  'z-index: 2147483643',",
-      "  'opacity: 1'",
-      "].join(';');",
-      "document.documentElement.appendChild(el);",
-      "",
-      "// Web Animations API",
-      "el.animate([",
-      "  { transform: 'scale(0.2)', opacity: 1 },",
-      "  { transform: 'scale(2.5)', opacity: 0 }",
-      "], {",
-      "  duration: 1000,",
-      "  easing: 'cubic-bezier(0.1, 0.8, 0.3, 1)',",
-      "  fill: 'forwards'",
-      "});",
-      "",
-      "setTimeout(function() { el.remove(); }, 1100);"
-    ].join("\\n");
-
-    var fnBody = prompt("Enter the JavaScript code for your custom effect:", defaultCode.replace(/\\\\n/g, '\\n'));
-    if (!fnBody) return;
-
-    try {
-      var runFn = new Function('rect', fnBody);
-      window.Oculist.registerEffect(id, label, runFn);
-      saveCustomEffect(id, label, fnBody);
-      settings.effect = id;
-      saveSettings();
-      if (typeof onChange === 'function') {
-        onChange(id);
-      }
-      if (settingsPanel) {
-        settingsPanel.remove();
-        settingsPanel = null;
-        buildSettingsPanel();
-      }
-    } catch (e) {
-      alert("Error compiling custom animation function:\\n" + e.message);
-    }
   }
 
   function makeSettingsField(labelText, descText, controlEl) {
@@ -1696,14 +1560,6 @@
       settings.beaconColor = '#fbbf24';
       settings.scrollBehavior = 'smooth';
       saveSettings();
-      try {
-        localStorage.removeItem('oc-custom-effects');
-      } catch (e) {}
-      for (var k in effectsRegistry) {
-        if (effectsRegistry.hasOwnProperty(k) && k !== 'hud' && k !== 'iris' && k !== 'sweep' && k !== 'flame') {
-          delete effectsRegistry[k];
-        }
-      }
       applyWrapPosition();
       injectHighlightStyles();
       settingsPanel.remove();
@@ -1712,11 +1568,6 @@
     });
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
-
-    var pinTip = document.createElement('div');
-    pinTip.className = 'oc-pin-tip';
-    pinTip.textContent = i18n.pinExtensionTip;
-    settingsPanel.appendChild(pinTip);
 
     // Grid Container
     var grid = document.createElement('div');
@@ -1762,8 +1613,7 @@
       settings.effect,
       function (v) {
         settings.effect = v; saveSettings();
-      },
-      true
+      }
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -1988,6 +1838,7 @@
       btn.appendChild(svg);
     }
     btn.title = title;
+    btn.setAttribute('aria-label', title);
     return btn;
   }
 
@@ -2003,6 +1854,7 @@
     input = document.createElement('input');
     input.type = 'text';
     input.placeholder = i18n.findPlaceholder;
+    input.setAttribute('aria-label', 'Find in page');
     input.className = 'oc-input';
     input.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -2630,7 +2482,6 @@
           settings.disabledSites = [];
         }
       }
-      loadCustomEffects();
       boot();
     });
   } else {
@@ -2643,7 +2494,6 @@
         settings.disabledSites = [];
       }
     } catch (e) {}
-    loadCustomEffects();
     boot();
   }
 
