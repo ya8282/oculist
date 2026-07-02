@@ -1,5 +1,7 @@
 # oculist
 
+[Chrome Web Store - Oculist](https://chromewebstore.google.com/detail/inghjgagoegkoejncaecgfoagkhidaan?utm_source=item-share-cb)
+
 This Chrome bookmarklet adds a high-visibility page text search experience. When performing searches with the search bar it activates, it instantly locates the matches and fires animated beacons to help you instantly spot text occurrences without interfering with host-page styles, layouts, or security policies.
 
 ## How it Works
