@@ -1213,6 +1213,32 @@
     }
   }
 
+  // ── Validation ────────────────────────────────────────────────────────────────
+
+  function isRangeValid(range) {
+    try {
+      var rects = range.getClientRects();
+      for (var i = 0; i < rects.length; i++) {
+        if (rects[i].width > 0 && rects[i].height > 0) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function validateSearchRanges() {
+    if (searchRanges.length === 0) return true;
+    for (var i = 0; i < searchRanges.length; i++) {
+      if (!isRangeValid(searchRanges[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // ── Navigation ────────────────────────────────────────────────────────────────
 
   function findNext(backwards) {
@@ -1227,7 +1253,7 @@
       return;
     }
 
-    if (term !== lastTerm || searchRanges.length === 0) {
+    if (term !== lastTerm || searchRanges.length === 0 || !validateSearchRanges()) {
       lastTerm = term;
       performSearch(term);
     }
@@ -1259,6 +1285,16 @@
   // Display the active match with the high-visibility visual animation
   function highlightActiveRange(shouldAnimate) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
+
+    if (!validateSearchRanges()) {
+      performSearch(input.value);
+      if (searchRanges.length === 0) {
+        countEl.textContent = i18n.noMatch;
+        setNavEnabled(false);
+        return;
+      }
+      activeIndex = 0;
+    }
 
     var activeRange = searchRanges[activeIndex];
 
@@ -1867,15 +1903,30 @@
       e.stopPropagation();
     });
 
+    input.addEventListener('focus', function () {
+      if (input.value && !validateSearchRanges()) {
+        performSearch(input.value);
+        if (searchRanges.length > 0) {
+          activeIndex = 0;
+          highlightActiveRange(false);
+        } else {
+          countEl.textContent = i18n.noMatch;
+          setNavEnabled(false);
+        }
+      }
+    });
+
     input.addEventListener('input', function () {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function () {
         var term = input.value;
-        lastTerm = term;
-        performSearch(term);
-        if (searchRanges.length > 0) {
-          activeIndex = 0;
-          highlightActiveRange(false);
+        if (term !== lastTerm || !validateSearchRanges()) {
+          lastTerm = term;
+          performSearch(term);
+          if (searchRanges.length > 0) {
+            activeIndex = 0;
+            highlightActiveRange(false);
+          }
         }
       }, 150);
     });
