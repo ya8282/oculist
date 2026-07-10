@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openFinderBtn = document.getElementById('open-finder');
   const shortcutText = document.getElementById('shortcut-text');
   const reloadTip = document.getElementById('reload-tip');
+  const toggleLiteMode = document.getElementById('toggle-lite-mode');
+  const liteModeText = document.getElementById('lite-mode-text');
 
   // Detect platform to show the correct shortcut. Prefer userAgentData (navigator.platform is deprecated).
   const uaPlatform = navigator.userAgentData && navigator.userAgentData.platform;
@@ -15,6 +17,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     ? uaPlatform.toLowerCase().includes('mac')
     : navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   shortcutText.textContent = isMac ? '⌘+Shift+F' : 'Ctrl+Shift+F';
+
+  // Lite Mode is a global setting (not per-site), so wire it up independent of
+  // the activeTab/hostname checks below — it should work even on restricted pages.
+  (async () => {
+    let liteSettings = {};
+    try {
+      const data = await chrome.storage.sync.get('oc-settings');
+      if (data && data['oc-settings']) liteSettings = data['oc-settings'];
+    } catch (e) {
+      console.error('Failed to load settings:', e);
+    }
+
+    toggleLiteMode.checked = !!liteSettings.performanceMode;
+    liteModeText.textContent = toggleLiteMode.checked ? 'On' : 'Off';
+
+    toggleLiteMode.addEventListener('change', async () => {
+      liteModeText.textContent = toggleLiteMode.checked ? 'On' : 'Off';
+      try {
+        const data = await chrome.storage.sync.get('oc-settings');
+        const settings = (data && data['oc-settings']) || {};
+        settings.performanceMode = toggleLiteMode.checked;
+        await chrome.storage.sync.set({ 'oc-settings': settings });
+      } catch (e) {
+        console.error('Failed to save settings:', e);
+      }
+    });
+  })();
 
   // 1. Get the current active tab
   let activeTab;
