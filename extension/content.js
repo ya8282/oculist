@@ -13,8 +13,11 @@
     activeColor: '#f59e0b',
     beaconColor: '#fbbf24',
     scrollBehavior: 'smooth',
-    disabledSites: []
+    disabledSites: [],
+    performanceMode: false
   };
+
+  var SETTINGS_KEYS = ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'performanceMode'];
 
   function saveSettings() {
     chrome.storage.sync.set({ 'oc-settings': settings });
@@ -139,10 +142,28 @@
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
+  var domObserver           = null;
+  var domObserverTimer      = null;
+  var noticeEl              = null;
+  var noticeDismissed       = false;
+
+  // Sites known to render page text outside the accessible DOM (canvas, custom
+  // virtualized editors) where Oculist's text-node search can't find anything.
+  var KNOWN_OVERRIDE_DOMAINS = [
+    'docs.google.com', 'sheets.google.com', 'slides.google.com', 'notion.so', 'www.notion.so'
+  ];
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
   window.__ocDestroy = function () {
+    if (domObserver) {
+      domObserver.disconnect();
+      domObserver = null;
+    }
+    if (domObserverTimer) {
+      clearTimeout(domObserverTimer);
+      domObserverTimer = null;
+    }
     if (activeScrollTimeout) {
       clearTimeout(activeScrollTimeout);
       activeScrollTimeout = null;
@@ -174,12 +195,12 @@
 
     cancelBeacons();
     if (wrap) wrap.remove();
-    
+
     var s = document.getElementById('oc-global-highlight-styles');
     if (s) s.remove();
-    
-    wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false;
+
+    wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
+    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -1029,7 +1050,11 @@
   function animate(rect) {
     if (!wrap) return;
     cancelBeacons();
-    var effectObj = effectsRegistry[settings.effect] || effectsRegistry.hud;
+    // Lite Mode: skip the canvas/rAF-driven particle effects (warp, flame, lightning,
+    // electron cloud) and always use Spotlight — it's Web Animations API only, no
+    // per-frame JS work, so it stays cheap on low-spec devices.
+    var effectKey = settings.performanceMode ? 'iris' : settings.effect;
+    var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
       activeBeacons++;
       effectObj.run(rect);
@@ -1213,6 +1238,101 @@
     } else {
       countEl.textContent = i18n.noMatch;
       setNavEnabled(false);
+    }
+
+    checkSiteOverride(searchRanges.length === 0);
+  }
+
+  // ── Dynamic content re-scan (infinite scroll / DOM mutation) ───────────────────
+  //
+  // performSearch() rebuilds match Ranges from scratch on every call, but nothing
+  // previously re-triggered it when the page's own DOM changed (e.g. reddit.com's
+  // virtualized feed swaps out text nodes as you scroll). The old Ranges silently
+  // detach, so highlights "vanish" without any visible error. A debounced
+  // MutationObserver re-runs the last search whenever the page mutates.
+
+  function isOculistNode(node) {
+    if (!node) return false;
+    if (node === wrap) return true;
+    if (node.nodeType === 1) {
+      if (node.id === 'oc-wrap' || node.id === 'oc-global-highlight-styles') return true;
+      if (typeof node.classList !== 'undefined' && node.classList.contains('oc-beacon')) return true;
+    }
+    return false;
+  }
+
+  function rescanAfterMutation() {
+    if (!wrap || !lastTerm) return;
+    var previousActiveIndex = activeIndex;
+    performSearch(lastTerm);
+    if (searchRanges.length > 0) {
+      activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
+      firstEnter = false;
+      highlightActiveRange(false);
+    }
+  }
+
+  function startDomObserver() {
+    if (domObserver || !window.MutationObserver) return;
+    domObserver = new window.MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var m = mutations[i];
+        if (isOculistNode(m.target)) continue;
+        if (domObserverTimer) clearTimeout(domObserverTimer);
+        domObserverTimer = setTimeout(rescanAfterMutation, 350);
+        return;
+      }
+    });
+    domObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ── Site override detection ─────────────────────────────────────────────────
+  //
+  // Some sites (Google Docs/Sheets/Slides, Notion) render page text outside the
+  // real DOM (canvas, custom virtualized editors) so Oculist's text-node search
+  // can never find anything there — not because it's "blocked", just invisible
+  // to it. We warn the user instead of leaving them wondering why 0 matches.
+
+  function removeNotice() {
+    if (noticeEl) {
+      noticeEl.remove();
+      noticeEl = null;
+    }
+  }
+
+  function showNotice(text) {
+    if (!wrapRoot || noticeDismissed || noticeEl) return;
+    noticeEl = document.createElement('div');
+    noticeEl.className = 'oc-notice';
+
+    var textEl = document.createElement('span');
+    textEl.className = 'oc-notice-text';
+    textEl.textContent = text;
+
+    var closeEl = document.createElement('span');
+    closeEl.className = 'oc-notice-close';
+    closeEl.textContent = '✕';
+    closeEl.addEventListener('click', function () {
+      noticeDismissed = true;
+      removeNotice();
+    });
+
+    noticeEl.appendChild(textEl);
+    noticeEl.appendChild(closeEl);
+    wrapRoot.appendChild(noticeEl);
+  }
+
+  function checkSiteOverride(zeroMatches) {
+    if (!wrap) return;
+    var hostname = window.location.hostname;
+    if (KNOWN_OVERRIDE_DOMAINS.indexOf(hostname) !== -1) {
+      showNotice('Oculist may not find text on ' + hostname + ' — it renders content in a way standard page search can\'t scan.');
+      return;
+    }
+    if (zeroMatches && document.body && document.body.innerText && document.body.innerText.trim().length > 500) {
+      showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.');
+    } else {
+      removeNotice();
     }
   }
 
@@ -1838,7 +1958,7 @@
           activeIndex = 0;
           highlightActiveRange(false);
         }
-      }, 150);
+      }, settings.performanceMode ? 400 : 150);
     });
 
     countEl = document.createElement('span');
@@ -2388,6 +2508,30 @@
         '  cursor: pointer;',
         '  padding: 0;',
         '  border: none;',
+        '}',
+        '.oc-notice {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  gap: 8px;',
+        '  padding: 6px 10px;',
+        '  font: 12px/1.4 system-ui, -apple-system, sans-serif;',
+        '  background: ' + t.bg + ';',
+        '  color: ' + t.text + ';',
+        '  border-top: 1px solid ' + t.divider + ';',
+        '  border-left: 3px solid var(--oc-accent);',
+        '}',
+        '.oc-notice-text {',
+        '  flex: 1;',
+        '  opacity: 0.85;',
+        '}',
+        '.oc-notice-close {',
+        '  flex-shrink: 0;',
+        '  opacity: 0.6;',
+        '  cursor: pointer;',
+        '  font-size: 13px;',
+        '}',
+        '.oc-notice-close:hover {',
+        '  opacity: 1;',
         '}'
       ].join('\n');
 
@@ -2418,6 +2562,8 @@
       } else {
         buildUI();
         injectHighlightStyles();
+        startDomObserver();
+        checkSiteOverride(false);
         if (input) {
           input.focus();
           input.select();
@@ -2434,7 +2580,7 @@
       if (!changes['oc-settings']) return;
       var nv = changes['oc-settings'].newValue;
       if (!nv) return;
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites'].forEach(function(k) {
+      SETTINGS_KEYS.forEach(function(k) {
         if (k in nv) settings[k] = nv[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
@@ -2455,7 +2601,7 @@
   chrome.storage.sync.get('oc-settings', function (data) {
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];
-      ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites'].forEach(function (k) {
+      SETTINGS_KEYS.forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];

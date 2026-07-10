@@ -43,5 +43,17 @@ async function injectAndToggle(tabId) {
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+
+    // Auto-enable Lite Mode for low-spec devices. hardwareConcurrency is the only
+    // capability signal available in a service worker (no rAF/DOM here for an FPS
+    // sample), so cores is the whole heuristic — good enough as a starting default,
+    // and the user can always flip it manually in the popup.
+    if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4) {
+      chrome.storage.sync.get('oc-settings', (data) => {
+        const settings = (data && data['oc-settings']) || {};
+        settings.performanceMode = true;
+        chrome.storage.sync.set({ 'oc-settings': settings });
+      });
+    }
   }
 });
