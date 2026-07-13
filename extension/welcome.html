@@ -56,6 +56,129 @@
     }
     .links { margin-top: 36px; display: flex; gap: 20px; font-size: 13px; }
     a { color: #f59e0b; }
+
+    /* Wizard Onboarding Styles */
+    .action-btn {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #09090b;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+    }
+    .action-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(245, 158, 11, 0.3);
+    }
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(9, 9, 11, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 680px;
+      padding: 32px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      color: #fafafa;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .wizard-step {
+      display: none;
+    }
+    .wizard-step.active {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .wizard-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f59e0b;
+    }
+    .wizard-desc {
+      color: #a1a1aa;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+    .wizard-options {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .wizard-option {
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+      color: #fafafa;
+      outline: none;
+    }
+    .wizard-option:hover {
+      background: #3f3f46;
+      border-color: #52525b;
+    }
+    .wizard-option.selected {
+      background: rgba(245, 158, 11, 0.1);
+      border-color: #f59e0b;
+    }
+    .wizard-nav {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 24px;
+    }
+    .nav-btn {
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      color: #fafafa;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+      outline: none;
+    }
+    .nav-btn:hover {
+      background: #3f3f46;
+    }
+    .nav-btn.primary {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #09090b;
+      border: none;
+    }
+    .nav-btn.primary:hover {
+      opacity: 0.9;
+    }
+    *:focus-visible {
+      outline: 2px solid #f59e0b;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
@@ -66,6 +189,13 @@
   <div class="ext-badge">Chrome Extension</div>
 
   <p class="lead">Stop squinting. Use Oculist to find text on any page and see it instantly.</p>
+
+  <!-- Setup Wizard Hero Banner -->
+  <div style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 12px; padding: 24px; margin: 24px 0 32px; text-align: center; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.05);">
+    <h3 style="font-size: 18px; font-weight: 700; color: #f59e0b; margin-bottom: 8px;">Optimize Oculist for your vision</h3>
+    <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 16px; line-height: 1.5;">Take a quick 3-question setup wizard to adjust size, speed, and colors for low vision, color blindness, or eye strain.</p>
+    <button id="start-wizard" class="action-btn" style="max-width: 240px; margin: 0 auto; width: 100%;">Start Setup Wizard</button>
+  </div>
 
   <h2>What it does</h2>
   <p>Tired of searching for a text match in a dense sea of text? This extension replaces the subtle default highlight with eye-catching, animated visual beacons. Locate exactly what you’re looking for with style.</p>
@@ -95,5 +225,92 @@
     <a href="https://tally.so/r/Xx9GdL" target="_blank" rel="noopener noreferrer">Share feedback</a>
     <a href="https://buymeacoffee.com/brewsforchris" target="_blank" rel="noopener noreferrer">☕ Buy me a coffee</a>
   </div>
+
+  <!-- Wizard Modal Overlay -->
+  <div id="wizard-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      
+      <!-- Step 1: Color Blindness -->
+      <div id="step-1" class="wizard-step active">
+        <h2 class="wizard-title">Step 1 of 4: Color Blindness</h2>
+        <p class="wizard-desc">Do you experience color blindness?</p>
+        <div class="wizard-options">
+          <button class="wizard-option" data-value="none">No, I do not</button>
+          <button class="wizard-option" data-value="deuteranopia">Yes, Deuteranopia (Red-Green)</button>
+          <button class="wizard-option" data-value="protanopia">Yes, Protanopia (Red-Green)</button>
+          <button class="wizard-option" data-value="tritanopia">Yes, Tritanopia (Blue-Yellow)</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Sizing / Clarity (Low Vision) -->
+      <div id="step-2" class="wizard-step">
+        <h2 class="wizard-title">Step 2 of 4: Sizing & Clarity</h2>
+        <p class="wizard-desc">Do you have difficulty tracking small details or highlights on dense pages?</p>
+        <div class="wizard-options">
+          <button class="wizard-option" data-value="false">No, standard highlights are fine</button>
+          <button class="wizard-option" data-value="true">Yes, make indicators larger and add borders</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Comfort (Eye Strain) -->
+      <div id="step-3" class="wizard-step">
+        <h2 class="wizard-title">Step 3 of 4: Visual Comfort</h2>
+        <p class="wizard-desc">Do you experience eye strain, or prefer quiet, reduced-motion animations?</p>
+        <div class="wizard-options">
+          <button class="wizard-option" data-value="false">No, default animations are fine</button>
+          <button class="wizard-option" data-value="true">Yes, reduce motion and use warm sepia colors</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Interactive Live Preview -->
+      <div id="step-4" class="wizard-step">
+        <h2 class="wizard-title">Step 4 of 4: Live Preview</h2>
+        <p class="wizard-desc">Here is a live simulation of Oculist highlights running with your vision profile settings.</p>
+        
+        <div class="preview-layout" style="display: flex; gap: 24px; min-height: 280px; margin-top: 10px;">
+          <!-- Left: Summary -->
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #27272a; padding-right: 20px;">
+            <h3 style="font-size: 15px; font-weight: 600; color: #f59e0b;">Vision Profile Selection</h3>
+            <div id="profile-badge" style="display: inline-block; background: rgba(245, 158, 11, 0.1); color: #f59e0b; padding: 4px 8px; border-radius: 6px; font-weight: 700; font-size: 13px; margin-bottom: 8px; border: 1px solid rgba(245, 158, 11, 0.25);">
+              Detecting...
+            </div>
+            <ul id="summary-list" style="list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: #a1a1aa;">
+              <!-- Dynamic items -->
+            </ul>
+            <div style="margin-top: auto;">
+              <label for="preview-effect" class="form-label" style="font-size: 12px; margin-bottom: 4px; display: block; color: #a1a1aa;">Preview Beacon Effect:</label>
+              <select id="preview-effect" class="select-control" style="background:#27272a; border-color:#3f3f46; color:#fafafa; font-size:12px; width: 100%; border-radius: 6px; padding: 6px;" aria-label="Preview beacon effect">
+                <option value="hud">Spotlight (HUD)</option>
+                <option value="laser">Anime Laser</option>
+                <option value="warp">Warp Drive</option>
+                <option value="flame">Inferno Flame</option>
+                <option value="lightning">Lightning Bolt</option>
+                <option value="electron">Electron Cloud</option>
+                <option value="arrows">Pointing Arrows</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Right: Live Mockup Card -->
+          <div id="mockup-card" style="flex: 1.2; background: #09090b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center;">
+            <p style="font-size: 11px; color: #71717a; margin-bottom: 12px;">Query: <span style="background: #27272a; color: #fafafa; padding: 1px 6px; border-radius: 4px; font-family: monospace;">comfort</span></p>
+            <div style="font-size: 14px; line-height: 1.6; color: #fafafa; position: relative; z-index: 100;">
+              Oculist helps you search large pages. When you select a profile, Oculist optimizes the style of indicators to give you maximum <span id="preview-target" style="background: rgba(245, 158, 11, 0.3); color: #f59e0b; font-weight: 600; padding: 2px 4px; border-radius: 2px; position: relative; display: inline-block;">comfort</span> when searching text.
+            </div>
+            <button id="trigger-preview-beacon" class="nav-btn" style="margin-top: 24px; font-size: 12px; padding: 6px 12px; align-self: flex-start;">Replay Animation</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation Footer -->
+      <div class="wizard-nav">
+        <button id="wizard-back" class="nav-btn" style="visibility: hidden;">Back</button>
+        <button id="wizard-next" class="nav-btn primary">Next</button>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="welcome.js"></script>
 </body>
 </html>
