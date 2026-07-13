@@ -36,10 +36,10 @@ try {
   }
 
   if (!replaced) {
-    throw new Error('Could not find the "javascript:" line in README.md to replace.');
+    console.warn('Warning: Could not find the "javascript:" line in README.md to replace. Skipping README.md update.');
+  } else {
+    fs.writeFileSync(readmePath, lines.join('\n'), 'utf8');
   }
-
-  fs.writeFileSync(readmePath, lines.join('\n'), 'utf8');
 
   console.log('5. Cleaning up temporary files...');
   if (fs.existsSync(tmpPath)) {

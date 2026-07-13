@@ -14,13 +14,69 @@
     beaconColor: '#fbbf24',
     scrollBehavior: 'smooth',
     disabledSites: [],
-    performanceMode: false
+    performanceMode: false,
+    visionProfile: null,
+    visionSettings: {
+      beaconSize: 'm',
+      animationSpeed: 'normal',
+      textLabels: false,
+      motionSensitivity: 'full',
+      colorPalette: 'default',
+      borderStyle: 'none',
+      customColors: {
+        matchColor: '#fef08a',
+        activeColor: '#f59e0b',
+        beaconColor: '#fbbf24'
+      }
+    },
+    setupWizardCompleted: false
   };
 
-  var SETTINGS_KEYS = ['effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 'scrollBehavior', 'disabledSites', 'performanceMode'];
+  var SETTINGS_KEYS = [
+    'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 
+    'scrollBehavior', 'disabledSites', 'performanceMode', 
+    'visionProfile', 'visionSettings', 'setupWizardCompleted'
+  ];
 
   function saveSettings() {
     chrome.storage.sync.set({ 'oc-settings': settings });
+  }
+
+  function getEffectiveColors() {
+    var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
+    var mc = settings.matchColor || '#fef08a';
+    var ac = settings.activeColor || '#f59e0b';
+    var bc = settings.beaconColor || '#fbbf24';
+
+    if (palette === 'deuteranopia') {
+      mc = '#fef08a'; ac = '#0284c7'; bc = '#0284c7';
+    } else if (palette === 'protanopia') {
+      mc = '#fef08a'; ac = '#2563eb'; bc = '#2563eb';
+    } else if (palette === 'tritanopia') {
+      mc = '#ffcbd1'; ac = '#06b6d4'; bc = '#06b6d4';
+    } else if (palette === 'warm') {
+      mc = '#fef08a'; ac = '#d97706'; bc = '#eab308';
+    } else if (palette === 'custom' && settings.visionSettings && settings.visionSettings.customColors) {
+      mc = settings.visionSettings.customColors.matchColor || mc;
+      ac = settings.visionSettings.customColors.activeColor || ac;
+      bc = settings.visionSettings.customColors.beaconColor || bc;
+    }
+    return { match: mc, active: ac, beacon: bc };
+  }
+
+  function getBeaconScale() {
+    var size = (settings.visionSettings && settings.visionSettings.beaconSize) ? settings.visionSettings.beaconSize : 'm';
+    if (size === 's') return 0.7;
+    if (size === 'l') return 1.5;
+    if (size === 'xl') return 2.25;
+    return 1.0;
+  }
+
+  function getBeaconDuration(baseDuration) {
+    var speed = (settings.visionSettings && settings.visionSettings.animationSpeed) ? settings.visionSettings.animationSpeed : 'normal';
+    if (speed === 'fast') return baseDuration * 0.5;
+    if (speed === 'slow') return baseDuration * 1.75;
+    return baseDuration;
   }
 
   // ── Central i18n Localization Dictionary ─────────────────────────────────────
@@ -83,7 +139,8 @@
     effectWarpDrive: 'Warp Drive',
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
-    effectElectronCloud: 'Electron Cloud'
+    effectElectronCloud: 'Electron Cloud',
+    effectPointingArrows: 'Pointing Arrows'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -127,7 +184,8 @@
     sweep: { label: i18n.effectWarpDrive, run: animateWarpDrive },
     flame: { label: i18n.effectInfernoFlame, run: animateFlame },
     lightning: { label: i18n.effectLightning, run: animateLightning },
-    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud }
+    electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
+    arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -156,6 +214,14 @@
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
   window.__ocDestroy = function () {
+    clearViewportMarkers();
+    if (viewportMarkersTimer) {
+      clearTimeout(viewportMarkersTimer);
+      viewportMarkersTimer = null;
+    }
+    try {
+      window.removeEventListener('resize', scheduleViewportMarkersUpdate, { passive: true });
+    } catch (e) {}
     if (domObserver) {
       domObserver.disconnect();
       domObserver = null;
@@ -225,7 +291,8 @@
     var h = rect.height;
     var cx = rect.left + rect.width / 2 + window.scrollX;
     var cy = rect.top + rect.height / 2 + window.scrollY;
-    var color = settings.beaconColor || '#fbbf24';
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var scale = getBeaconScale();
 
     var containerHeight = 200;
     var scrollHeight = Math.max(
@@ -245,7 +312,8 @@
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
-    document.documentElement.appendChild(laserContainer);
+    laserContainer.style.transform = 'scale(' + scale + ')';
+    laserContainer.style.transformOrigin = cx + 'px ' + offsetY + 'px';
 
     // 1. Primary main core beam (thick outer aura sheath)
     var sheath = document.createElement('div');
@@ -264,7 +332,7 @@
       { transform: 'scaleY(1)', opacity: 0.4, offset: 0.8 },
       { transform: 'scaleY(0)', opacity: 0 }
     ], {
-      duration: 2000,
+      duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
@@ -287,7 +355,7 @@
       { transform: 'scaleY(1.2)', opacity: 0.85, offset: 0.8 },
       { transform: 'scaleY(0)', opacity: 0 }
     ], {
-      duration: 2000,
+      duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
@@ -312,16 +380,16 @@
       { transform: 'scale(1)', opacity: 0.9, offset: 0.8 },
       { transform: 'scale(1.5) scaleY(0)', opacity: 0 }
     ], {
-      duration: 2000,
+      duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
     });
 
     // 4. Spark explosion
-    var sparkCount = 20;
+    var sparkCount = settings.performanceMode ? Math.round(5 * scale) : Math.round(20 * (scale > 1 ? 1.5 : scale));
     for (var i = 0; i < sparkCount; i++) {
       var spark = document.createElement('div');
-      var size = Math.random() * 5 + 3;
+      var size = (Math.random() * 5 + 3) * scale;
       spark.style.cssText = [
         'position:absolute',
         'left:' + cx + 'px', 'top:' + offsetY + 'px',
@@ -334,7 +402,7 @@
       laserContainer.appendChild(spark);
 
       var angle = Math.random() * Math.PI * 2;
-      var distance = Math.random() * 110 + 50;
+      var distance = (Math.random() * 110 + 50) * scale;
       var dx = Math.cos(angle) * distance;
       var dy = Math.sin(angle) * distance;
 
@@ -342,24 +410,28 @@
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(1.5)', opacity: 1 },
         { transform: 'translate(-50%, -50%) translate(' + dx + 'px, ' + dy + 'px) scale(0)', opacity: 0 }
       ], {
-        duration: 1500 + Math.random() * 500,
+        duration: getBeaconDuration(1500 + Math.random() * 500),
         easing: 'cubic-bezier(0.1, 0.8, 0.2, 1)',
         fill: 'forwards'
       });
     }
 
+    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
+    document.documentElement.appendChild(laserContainer);
+
     setTimeout(function() {
       laserContainer.remove();
-    }, 2100);
+    }, getBeaconDuration(2100));
   }
 
   function animateIris(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
+    var scale = getBeaconScale();
     var cx = rect.left + rect.width / 2;
     var cy = rect.top + rect.height / 2;
-    var w = Math.max(rect.width + 50, 90);
-    var h = Math.max(rect.height + 30, 50);
+    var w = Math.max(rect.width + 50, 90) * scale;
+    var h = Math.max(rect.height + 30, 50) * scale;
 
     var overlay = document.createElement('div');
     overlay.className = 'oc-beacon';
@@ -376,12 +448,12 @@
       { opacity: 1, offset: 0.8 },
       { opacity: 0 }
     ], {
-      duration: 2000,
+      duration: getBeaconDuration(2000),
       easing: 'ease-out',
       fill: 'forwards'
     });
 
-    var color = settings.beaconColor || '#38bdf8';
+    var color = getEffectiveColors().beacon || '#38bdf8';
 
     var ring = document.createElement('div');
     ring.className = 'oc-beacon';
@@ -402,7 +474,7 @@
       { opacity: 0.85, transform: 'scale(0.95)', offset: 0.8 },
       { opacity: 0, transform: 'scale(0.75)' }
     ], {
-      duration: 2000,
+      duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
       fill: 'forwards'
     });
@@ -410,7 +482,82 @@
     setTimeout(function() {
       overlay.remove();
       ring.remove();
-    }, 2100);
+    }, getBeaconDuration(2100));
+  }
+
+  function animatePointingArrows(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+
+    var scale = getBeaconScale();
+    var leftArrow = document.createElement('div');
+    leftArrow.className = 'oc-beacon';
+    leftArrow.textContent = '▶';
+    var arrowSize = Math.max(20, 24 * scale);
+    leftArrow.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 36 * scale) + 'px',
+      'top:' + (y + h/2 - arrowSize/2) + 'px',
+      'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+      'line-height:' + arrowSize + 'px',
+      'font-size:' + arrowSize + 'px',
+      'font-weight:bold',
+      'color:' + color,
+      'pointer-events:none',
+      'z-index:2147483642',
+      'text-align:right',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(leftArrow);
+
+    var rightArrow = document.createElement('div');
+    rightArrow.className = 'oc-beacon';
+    rightArrow.textContent = '◀';
+    rightArrow.style.cssText = [
+      'position:absolute',
+      'left:' + (x + w + 6 * scale) + 'px',
+      'top:' + (y + h/2 - arrowSize/2) + 'px',
+      'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+      'line-height:' + arrowSize + 'px',
+      'font-size:' + arrowSize + 'px',
+      'font-weight:bold',
+      'color:' + color,
+      'pointer-events:none',
+      'z-index:2147483642',
+      'text-align:left',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(rightArrow);
+
+    var duration = getBeaconDuration(2000);
+
+    var anim = leftArrow.animate([
+      { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
+      { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
+      { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
+      { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
+    ], { duration: duration, fill: 'forwards' });
+
+    rightArrow.animate([
+      { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
+      { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
+      { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
+      { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
+    ], { duration: duration, fill: 'forwards' });
+
+    anim.finished.then(function () {
+      leftArrow.remove();
+      rightArrow.remove();
+    }).catch(function () {
+      leftArrow.remove();
+      rightArrow.remove();
+    });
   }
 
   function animateWarpDrive(rect) {
@@ -418,7 +565,8 @@
 
     var cx = rect.left + rect.width / 2 + window.scrollX;
     var cy = rect.top + rect.height / 2 + window.scrollY;
-    var color = settings.beaconColor || '#fbbf24';
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var scale = getBeaconScale();
 
     var containerWidth = 300;
     var containerHeight = 300;
@@ -446,10 +594,11 @@
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
-    document.documentElement.appendChild(container);
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
     // 1. Triple Staggered Expanding Warp Rings
-    var ringCount = 3;
+    var ringCount = settings.performanceMode ? 1 : 3;
     for (var r = 0; r < ringCount; r++) {
       var ring = document.createElement('div');
       ring.style.cssText = [
@@ -468,19 +617,19 @@
         { transform: 'scale(1)', opacity: 1, offset: 0.1 },
         { transform: 'scale(15)', opacity: 0 }
       ], {
-        duration: 1600,
-        delay: r * 150,
+        duration: getBeaconDuration(1600),
+        delay: r * getBeaconDuration(150),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
       });
     }
 
     // 2. Warp Speed Radial Star Streaks
-    var streakCount = 120;
+    var streakCount = settings.performanceMode ? Math.round(15 * scale) : Math.round(120 * (scale > 1 ? 1.5 : scale));
     for (var i = 0; i < streakCount; i++) {
       var streak = document.createElement('div');
-      var thick = Math.random() * 2.2 + 1;
-      var len = Math.random() * 55 + 25;
+      var thick = (Math.random() * 2.2 + 1) * scale;
+      var len = (Math.random() * 55 + 25) * scale;
       var angle = Math.random() * Math.PI * 2;
 
       streak.style.cssText = [
@@ -494,7 +643,7 @@
       ].join(';');
       container.appendChild(streak);
 
-      var travel = Math.random() * 240 + 130;
+      var travel = (Math.random() * 240 + 130) * scale;
       var startDelay = Math.random() * 550;
 
       streak.animate([
@@ -503,16 +652,19 @@
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.7) + 'px, 0) scaleX(7.0)', opacity: 1, offset: 0.7 },
         { transform: 'rotate(' + angle + 'rad) translate(' + travel + 'px, 0) scaleX(10.0)', opacity: 0 }
       ], {
-        duration: 750 + Math.random() * 550,
-        delay: startDelay,
+        duration: getBeaconDuration(750 + Math.random() * 550),
+        delay: getBeaconDuration(startDelay),
         easing: 'cubic-bezier(0.1, 0.8, 0.25, 1)',
         fill: 'forwards'
       });
     }
 
+    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
+    document.documentElement.appendChild(container);
+
     setTimeout(function() {
       container.remove();
-    }, 2200);
+    }, getBeaconDuration(2200));
   }
 
   function animateFlame(rect) {
@@ -522,7 +674,7 @@
     var y = rect.top + window.scrollY;
     var w = rect.width;
     var h = rect.height;
-    var color = settings.beaconColor || '#f97316';
+    var color = getEffectiveColors().beacon || '#f97316';
     var _fhsl = hexToHsl(color);
     var _fh = _fhsl[0], _fs = _fhsl[1], _fl = _fhsl[2];
     // Offsets mirror the original orange-flame palette relative to the base
@@ -530,6 +682,7 @@
     var colorMid  = hslToHex(_fh + 14, _fs -  3, Math.max(0,   _fl - 3));
     var colorWarm = hslToHex(_fh + 24, _fs +  2, _fl);
     var colorTip  = hslToHex(_fh + 28, _fs +  4, Math.min(100, _fl + 24));
+    var scale = getBeaconScale();
 
     var containerWidth = w + 160;
     var containerHeight = h + 280;
@@ -557,7 +710,8 @@
       'pointer-events:none', 'z-index:2147483643',
       'overflow:visible'
     ].join(';');
-    document.documentElement.appendChild(container);
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
     // 1. Fiery glowing outline
     var outline = document.createElement('div');
@@ -577,7 +731,7 @@
       { opacity: 0.8, transform: 'scale(1)', offset: 0.85 },
       { opacity: 0, transform: 'scale(0.95)' }
     ], {
-      duration: 1800,
+      duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
     });
@@ -600,17 +754,17 @@
       { opacity: 0.8, transform: 'scale(1.05)', offset: 0.85 },
       { opacity: 0, transform: 'scale(1.1)' }
     ], {
-      duration: 1800,
+      duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
     });
 
     // 3. Flame particles rising
     var colors = [colorDeep, color, colorMid, colorWarm, colorTip];
-    var particleCount = 25;
+    var particleCount = settings.performanceMode ? Math.round(5 * scale) : Math.round(25 * (scale > 1 ? 1.4 : scale));
     for (var i = 0; i < particleCount; i++) {
       var p = document.createElement('div');
-      var pSize = Math.random() * 48 + 24;
+      var pSize = (Math.random() * 48 + 24) * scale;
       var px = offsetX + Math.random() * w;
       var py = offsetY + h;
 
@@ -620,14 +774,14 @@
         'width:' + pSize + 'px', 'height:' + pSize + 'px',
         'background:' + colors[Math.floor(Math.random() * colors.length)],
         'border-radius:50% 50% 20% 80%',
-        'filter:blur(' + (Math.random() * 8 + 4) + 'px)',
+        'filter:blur(' + ((Math.random() * 8 + 4) * scale) + 'px)',
         'transform-origin:center bottom',
         'opacity:0', 'pointer-events:none'
       ].join(';');
       container.appendChild(p);
 
-      var riseHeight = Math.random() * 180 + 120;
-      var swayX = (Math.random() - 0.5) * 100;
+      var riseHeight = (Math.random() * 180 + 120) * scale;
+      var swayX = (Math.random() - 0.5) * 100 * scale;
       var randomRotate = Math.random() * 360;
 
       p.animate([
@@ -636,18 +790,18 @@
         { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.7) + 'px, -' + (riseHeight * 0.7) + 'px) rotate(' + (randomRotate + 90) + 'deg) scale(0.8)', opacity: 0.6, offset: 0.7 },
         { transform: 'translate(-50%, -50%) translate(' + swayX + 'px, -' + riseHeight + 'px) rotate(' + (randomRotate + 180) + 'deg) scale(0)', opacity: 0 }
       ], {
-        duration: 1000 + Math.random() * 600,
-        delay: Math.random() * 400,
+        duration: getBeaconDuration(1000 + Math.random() * 600),
+        delay: getBeaconDuration(Math.random() * 400),
         easing: 'cubic-bezier(0.21, 0.61, 0.35, 1)',
         fill: 'forwards'
       });
     }
 
     // 4. Gray smoke particles
-    var smokeCount = 8;
+    var smokeCount = settings.performanceMode ? Math.round(2 * scale) : Math.round(8 * (scale > 1 ? 1.3 : scale));
     for (var j = 0; j < smokeCount; j++) {
       var s = document.createElement('div');
-      var sSize = Math.random() * 60 + 40;
+      var sSize = (Math.random() * 60 + 40) * scale;
       var sx = offsetX + Math.random() * w;
       var sy = offsetY + h / 2;
 
@@ -657,29 +811,32 @@
         'width:' + sSize + 'px', 'height:' + sSize + 'px',
         'background:rgba(120, 113, 108, 0.25)',
         'border-radius:50%',
-        'filter:blur(' + (Math.random() * 12 + 8) + 'px)',
+        'filter:blur(' + ((Math.random() * 12 + 8) * scale) + 'px)',
         'opacity:0', 'pointer-events:none'
       ].join(';');
       container.appendChild(s);
 
-      var sRise = Math.random() * 240 + 200;
-      var sSway = (Math.random() - 0.5) * 160;
+      var sRise = (Math.random() * 240 + 200) * scale;
+      var sSway = (Math.random() - 0.5) * 160 * scale;
 
       s.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(0.5)', opacity: 0 },
         { transform: 'translate(-50%, -50%) translate(' + (sSway * 0.4) + 'px, -' + (sRise * 0.4) + 'px) scale(1.2)', opacity: 0.3, offset: 0.3 },
         { transform: 'translate(-50%, -50%) translate(' + sSway + 'px, -' + sRise + 'px) scale(2)', opacity: 0 }
       ], {
-        duration: 1400 + Math.random() * 600,
-        delay: Math.random() * 500,
+        duration: getBeaconDuration(1400 + Math.random() * 600),
+        delay: getBeaconDuration(Math.random() * 500),
         easing: 'ease-out',
         fill: 'forwards'
       });
     }
 
+    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
+    document.documentElement.appendChild(container);
+
     setTimeout(function() {
       container.remove();
-    }, 2200);
+    }, getBeaconDuration(2200));
   }
 
   function animateLightning(rect) {
@@ -689,7 +846,8 @@
     var vh = window.innerHeight;
     var cx = rect.left + rect.width / 2;
     var cy = rect.top + rect.height / 2;
-    var color = settings.beaconColor || '#a855f7';
+    var color = getEffectiveColors().beacon || '#a855f7';
+    var scale = getBeaconScale();
 
     var container = document.createElement('div');
     container.className = 'oc-beacon';
@@ -699,6 +857,8 @@
       'pointer-events:none', 'z-index:2147483643',
       'overflow:hidden'
     ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = cx + 'px ' + cy + 'px';
     document.documentElement.appendChild(container);
 
     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -723,7 +883,10 @@
     defs.appendChild(filter);
     svg.appendChild(defs);
 
-    var corners = [
+    var corners = settings.performanceMode ? [
+      { x: 0, y: 0 },
+      { x: vw, y: 0 }
+    ] : [
       { x: 0, y: 0 },
       { x: vw, y: 0 },
       { x: 0, y: vh },
@@ -733,8 +896,8 @@
     var paths = [];
 
     corners.forEach(function (corner) {
-      var segments = 12;
-      var displace = 45;
+      var segments = settings.performanceMode ? 6 : 12;
+      var displace = settings.performanceMode ? 25 : 45;
       var points = [];
       points.push({ x: corner.x, y: corner.y });
 
@@ -785,7 +948,7 @@
       paths.push({ glow: glowPath, core: corePath });
     });
 
-    var travelDuration = 350;
+    var travelDuration = getBeaconDuration(350);
 
     paths.forEach(function (p) {
       var totalLength = 1500;
@@ -828,7 +991,7 @@
         { opacity: 0.3 },
         { opacity: 0, offset: 0.8 }
       ], {
-        duration: 300,
+        duration: getBeaconDuration(300),
         easing: 'ease-out',
         fill: 'forwards'
       });
@@ -854,7 +1017,7 @@
         { transform: 'scale(1.1)', opacity: 0.9, offset: 0.7 },
         { transform: 'scale(1.8) scaleY(0)', opacity: 0 }
       ], {
-        duration: 700,
+        duration: getBeaconDuration(700),
         easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
         fill: 'forwards'
       });
@@ -891,20 +1054,20 @@
           { opacity: 0 }
         ];
 
-        flickerGlow.animate(flickAnim, { duration: 400, fill: 'forwards' });
-        flickerCore.animate(flickAnim, { duration: 400, fill: 'forwards' });
+        flickerGlow.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
+        flickerCore.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
       }
 
       paths.forEach(function (p) {
-        p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: 150, fill: 'forwards' });
-        p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'forwards' });
+        p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
+        p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
       });
 
     }, travelDuration);
 
     setTimeout(function () {
       container.remove();
-    }, travelDuration + 1000);
+    }, travelDuration + getBeaconDuration(1000));
   }
 
   function animateElectronCloud(rect) {
@@ -914,7 +1077,8 @@
     var vh = window.innerHeight;
     var cx = rect.left + rect.width / 2;
     var cy = rect.top + rect.height / 2;
-    var color = settings.beaconColor || '#38bdf8';
+    var color = getEffectiveColors().beacon || '#38bdf8';
+    var scale = getBeaconScale();
 
     var container = document.createElement('div');
     container.className = 'oc-beacon';
@@ -924,6 +1088,8 @@
       'pointer-events:none', 'z-index:2147483643',
       'overflow:hidden'
     ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = cx + 'px ' + cy + 'px';
     document.documentElement.appendChild(container);
 
     var canvas = document.createElement('canvas');
@@ -948,14 +1114,15 @@
       5 * Math.PI / 6
     ];
 
-    var speed = 0.007;
+    var duration = getBeaconDuration(1800);
+    var speed = 0.007 * (1800 / duration);
     var phaseOffsets = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3];
 
+    var orbitalCount = settings.performanceMode ? 1 : 3;
     var histories = [[], [], []];
-    var maxHistory = 15;
+    var maxHistory = settings.performanceMode ? 4 : 15;
 
     var startTime = performance.now();
-    var duration = 1800;
     var animFrameId;
 
     function render(now) {
@@ -985,7 +1152,7 @@
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = color;
       ctx.globalAlpha = 0.22;
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < orbitalCount; i++) {
         ctx.beginPath();
         if (typeof ctx.ellipse === 'function') {
           ctx.ellipse(cx, cy, a, b, thetas[i], 0, 2 * Math.PI);
@@ -1004,7 +1171,7 @@
       }
       ctx.globalAlpha = 1.0;
 
-      for (var i = 0; i < 3; i++) {
+      for (var i = 0; i < orbitalCount; i++) {
         var t = speed * elapsed + phaseOffsets[i];
         var x_unrot = a * Math.cos(t);
         var y_unrot = b * Math.sin(t);
@@ -1047,13 +1214,339 @@
     container.__rafId = animFrameId;
   }
 
+  function drawStaticActiveBorder(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+
+    var borderEl = document.createElement('div');
+    borderEl.className = 'oc-beacon';
+    borderEl.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 3) + 'px', 'top:' + (y - 3) + 'px',
+      'width:' + (w + 6) + 'px', 'height:' + (h + 6) + 'px',
+      'border:3px solid ' + color,
+      'border-radius:4px',
+      'pointer-events:none',
+      'z-index:2147483640'
+    ].join(';');
+    document.documentElement.appendChild(borderEl);
+  }
+
+  function animateReducedMotion(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+
+    if (settings.visionProfile === 'eye-strain') {
+      var scale = getBeaconScale();
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top + rect.height / 2;
+      var sw = Math.max(rect.width + 40, 80) * scale;
+      var sh = Math.max(rect.height + 24, 40) * scale;
+
+      var overlay = document.createElement('div');
+      overlay.className = 'oc-beacon';
+      overlay.style.cssText = [
+        'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+        'pointer-events:none', 'z-index:2147483641',
+        'background:radial-gradient(ellipse ' + (sw * 2) + 'px ' + (sh * 2) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(28, 25, 22, 0.45) 80%)'
+      ].join(';');
+      document.documentElement.appendChild(overlay);
+
+      var glow = document.createElement('div');
+      glow.className = 'oc-beacon';
+      glow.style.cssText = [
+        'position:absolute',
+        'left:' + (x - 6) + 'px', 'top:' + (y - 6) + 'px',
+        'width:' + (w + 12) + 'px', 'height:' + (h + 12) + 'px',
+        'background:' + hexToRgba(color, 0.15),
+        'border:2.5px solid ' + color,
+        'border-radius:4px',
+        'box-shadow:0 0 16px ' + color,
+        'pointer-events:none',
+        'z-index:2147483640'
+      ].join(';');
+      document.documentElement.appendChild(glow);
+
+      var leftArrow = document.createElement('div');
+      leftArrow.className = 'oc-beacon';
+      leftArrow.textContent = '▶';
+      var arrowSize = Math.max(20, 24 * scale);
+      leftArrow.style.cssText = [
+        'position:absolute',
+        'left:' + (x - 36 * scale) + 'px',
+        'top:' + (y + h/2 - arrowSize/2) + 'px',
+        'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+        'line-height:' + arrowSize + 'px',
+        'font-size:' + arrowSize + 'px',
+        'font-weight:bold',
+        'color:' + color,
+        'pointer-events:none',
+        'z-index:2147483642',
+        'text-align:right',
+        'opacity:0'
+      ].join(';');
+      document.documentElement.appendChild(leftArrow);
+
+      var rightArrow = document.createElement('div');
+      rightArrow.className = 'oc-beacon';
+      rightArrow.textContent = '◀';
+      rightArrow.style.cssText = [
+        'position:absolute',
+        'left:' + (x + w + 6 * scale) + 'px',
+        'top:' + (y + h/2 - arrowSize/2) + 'px',
+        'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+        'line-height:' + arrowSize + 'px',
+        'font-size:' + arrowSize + 'px',
+        'font-weight:bold',
+        'color:' + color,
+        'pointer-events:none',
+        'z-index:2147483642',
+        'text-align:left',
+        'opacity:0'
+      ].join(';');
+      document.documentElement.appendChild(rightArrow);
+
+      var duration = getBeaconDuration(2500);
+
+      overlay.animate([
+        { opacity: 0 },
+        { opacity: 1, offset: 0.15 },
+        { opacity: 1, offset: 0.85 },
+        { opacity: 0 }
+      ], { duration: duration, fill: 'forwards' });
+
+      var anim = glow.animate([
+        { opacity: 0 },
+        { opacity: 1, offset: 0.15 },
+        { opacity: 1, offset: 0.85 },
+        { opacity: 0 }
+      ], { duration: duration, fill: 'forwards' });
+
+      leftArrow.animate([
+        { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
+        { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
+        { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
+        { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
+      ], { duration: duration, fill: 'forwards' });
+
+      rightArrow.animate([
+        { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
+        { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
+        { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
+        { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
+      ], { duration: duration, fill: 'forwards' });
+
+      anim.finished.then(function () {
+        overlay.remove();
+        glow.remove();
+        leftArrow.remove();
+        rightArrow.remove();
+      }).catch(function () {
+        overlay.remove();
+        glow.remove();
+        leftArrow.remove();
+        rightArrow.remove();
+      });
+      return;
+    }
+
+    var glow = document.createElement('div');
+    glow.className = 'oc-beacon';
+    glow.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 4) + 'px', 'top:' + (y - 4) + 'px',
+      'width:' + (w + 8) + 'px', 'height:' + (h + 8) + 'px',
+      'background:' + hexToRgba(color, 0.25),
+      'border:2px solid ' + color,
+      'border-radius:4px',
+      'box-shadow:0 0 12px ' + color,
+      'pointer-events:none',
+      'z-index:2147483640'
+    ].join(';');
+    document.documentElement.appendChild(glow);
+
+    var anim = glow.animate([
+      { opacity: 0 },
+      { opacity: 1, offset: 0.15 },
+      { opacity: 1, offset: 0.85 },
+      { opacity: 0 }
+    ], {
+      duration: 3000,
+      easing: 'ease-in-out',
+      fill: 'forwards'
+    });
+
+    anim.finished.then(function () {
+      glow.remove();
+    }).catch(function () {
+      glow.remove();
+    });
+  }
+
+  function drawActiveMatchBorder(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+    var borderStyle = (settings.visionSettings && settings.visionSettings.borderStyle) ? settings.visionSettings.borderStyle : 'none';
+    if (borderStyle === 'none') return;
+
+    var borderWidth = '2px';
+    if (borderStyle === 'thin') borderWidth = '1px';
+    else if (borderStyle === 'thick') borderWidth = '4px';
+
+    var x = rect.left + window.scrollX;
+    var y = rect.top + window.scrollY;
+    var w = rect.width;
+    var h = rect.height;
+    var colors = getEffectiveColors();
+    var color = colors.active;
+
+    var borderEl = document.createElement('div');
+    borderEl.className = 'oc-beacon';
+    borderEl.style.cssText = [
+      'position:absolute',
+      'left:' + (x - 2) + 'px', 'top:' + (y - 2) + 'px',
+      'width:' + (w + 4) + 'px', 'height:' + (h + 4) + 'px',
+      'border:' + borderWidth + ' solid ' + color,
+      'border-radius:4px',
+      'pointer-events:none',
+      'z-index:2147483640',
+      'box-shadow:0 0 8px ' + color,
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(borderEl);
+
+    borderEl.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], {
+      duration: 200,
+      fill: 'forwards'
+    });
+  }
+
+  function drawActiveMatchShape(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+    
+    var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
+    var isColorBlind = (palette === 'deuteranopia' || palette === 'protanopia' || palette === 'tritanopia');
+    if (!isColorBlind) return;
+
+    var colors = getEffectiveColors();
+    var activeColor = colors.active;
+
+    var shape = document.createElement('div');
+    shape.className = 'oc-beacon';
+    
+    var mx = rect.right + window.scrollX + 4;
+    var my = rect.top + window.scrollY + rect.height / 2 - 4;
+
+    shape.style.cssText = [
+      'position:absolute',
+      'left:' + mx + 'px', 'top:' + my + 'px',
+      'width:10px', 'height:10px',
+      'background:' + activeColor,
+      'border-radius:50%',
+      'pointer-events:none',
+      'z-index:2147483640',
+      'box-shadow:0 0 6px ' + activeColor
+    ].join(';');
+    
+    document.documentElement.appendChild(shape);
+  }
+
+  function drawActiveMatchLabel(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+    if (!settings.visionSettings || !settings.visionSettings.textLabels) return;
+
+    var existing = document.getElementById('oc-active-match-label');
+    if (existing) existing.remove();
+
+    var label = document.createElement('div');
+    label.id = 'oc-active-match-label';
+    label.className = 'oc-beacon';
+    
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+    
+    label.style.cssText = [
+      'position:absolute',
+      'background:#0f172a',
+      'color:#ffffff',
+      'border:2px solid ' + color,
+      'border-radius:4px',
+      'padding:4px 8px',
+      'font-family:system-ui, -apple-system, sans-serif',
+      'font-size:11px',
+      'font-weight:700',
+      'z-index:2147483645',
+      'pointer-events:none',
+      'white-space:nowrap',
+      'box-shadow:0 4px 10px rgba(0,0,0,0.4)',
+      'opacity:0'
+    ].join(';');
+
+    label.textContent = 'Match #' + (activeIndex + 1) + ' of ' + searchRanges.length;
+    document.documentElement.appendChild(label);
+
+    var lw = label.offsetWidth || 100;
+    var lh = label.offsetHeight || 22;
+    var lx = rect.left + window.scrollX + rect.width / 2 - lw / 2;
+    var ly = rect.top + window.scrollY - lh - 8;
+    
+    var maxLeft = Math.max(0, document.documentElement.scrollWidth - lw - 10);
+    var maxTop = Math.max(0, document.documentElement.scrollHeight - lh - 10);
+    lx = Math.min(Math.max(10, lx), maxLeft);
+    ly = Math.min(Math.max(10, ly), maxTop);
+
+    label.style.left = lx + 'px';
+    label.style.top = ly + 'px';
+
+    label.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], {
+      duration: 250,
+      fill: 'forwards'
+    });
+  }
+
   function animate(rect) {
     if (!wrap) return;
     cancelBeacons();
-    // Lite Mode: skip the canvas/rAF-driven particle effects (warp, flame, lightning,
-    // electron cloud) and always use Spotlight — it's Web Animations API only, no
-    // per-frame JS work, so it stays cheap on low-spec devices.
-    var effectKey = settings.performanceMode ? 'iris' : settings.effect;
+
+    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+
+    // Draw accessibility overlays (border + label) if motion is not completely off
+    if (motion !== 'off') {
+      drawActiveMatchBorder(rect);
+    }
+    drawActiveMatchLabel(rect);
+    drawActiveMatchShape(rect);
+
+    if (motion === 'off') {
+      drawStaticActiveBorder(rect);
+      return;
+    }
+
+    if (motion === 'reduced') {
+      animateReducedMotion(rect);
+      return;
+    }
+
+    // Lite Mode uses the selected effect but scales down the particle counts
+    // and complex geometries inside each effect function.
+    var effectKey = settings.effect;
     var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
       activeBeacons++;
@@ -1469,6 +1962,7 @@
         }, 50);
       }
     }
+    updateViewportMarkers();
   }
 
   function setNavEnabled(enabled) {
@@ -1516,9 +2010,89 @@
     }, 50);
   }
 
+  var viewportMarkers = [];
+  var viewportMarkersTimer = null;
+
+  function clearViewportMarkers() {
+    for (var i = 0; i < viewportMarkers.length; i++) {
+      if (viewportMarkers[i] && viewportMarkers[i].parentNode) {
+        viewportMarkers[i].remove();
+      }
+    }
+    viewportMarkers = [];
+  }
+
+  function updateViewportMarkers() {
+    clearViewportMarkers();
+    if (!wrap || searchRanges.length === 0) return;
+
+    var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
+    var isColorBlind = (palette === 'deuteranopia' || palette === 'protanopia' || palette === 'tritanopia');
+    if (!isColorBlind) return;
+
+    var colors = getEffectiveColors();
+    var markerColor = colors.match;
+
+    // Batch DOM Reads first to avoid forced layout reflows (layout thrashing)
+    var visibleMatches = [];
+    var viewHeight = window.innerHeight || document.documentElement.clientHeight;
+    var viewWidth = window.innerWidth || document.documentElement.clientWidth;
+
+    for (var i = 0; i < searchRanges.length; i++) {
+      if (i === activeIndex) continue;
+
+      var range = searchRanges[i];
+      var rect = range.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+
+      var isVisible = (
+        rect.bottom >= 0 &&
+        rect.top <= viewHeight &&
+        rect.right >= 0 &&
+        rect.left <= viewWidth
+      );
+
+      if (isVisible) {
+        visibleMatches.push({
+          left: rect.right + window.scrollX + 4,
+          top: rect.top + window.scrollY + rect.height / 2 - 4
+        });
+      }
+    }
+
+    // Batch DOM Writes using a DocumentFragment
+    if (visibleMatches.length > 0) {
+      var fragment = document.createDocumentFragment();
+      for (var j = 0; j < visibleMatches.length; j++) {
+        var pos = visibleMatches[j];
+        var marker = document.createElement('div');
+        marker.className = 'oc-viewport-marker';
+        marker.style.cssText = [
+          'position:absolute',
+          'left:' + pos.left + 'px', 'top:' + pos.top + 'px',
+          'width:6px', 'height:6px',
+          'border:2px solid ' + markerColor,
+          'border-radius:50%',
+          'background:transparent',
+          'pointer-events:none',
+          'z-index:2147483640'
+        ].join(';');
+        fragment.appendChild(marker);
+        viewportMarkers.push(marker);
+      }
+      document.documentElement.appendChild(fragment);
+    }
+  }
+
+  function scheduleViewportMarkersUpdate() {
+    if (viewportMarkersTimer) clearTimeout(viewportMarkersTimer);
+    viewportMarkersTimer = setTimeout(updateViewportMarkers, 100);
+  }
+
   function handleScroll() {
     if (isAutoScrolling) return;
     fadeActiveBeacons();
+    scheduleViewportMarkersUpdate();
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────────
@@ -1526,7 +2100,8 @@
   function keydownHandler(e) {
     // Plain Ctrl/Cmd+F opens the finder in-page. Ctrl/Cmd+Shift+F is reserved for the
     // extension command (handled by background.js) — let it pass through to the browser.
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
+    var isFKey = (e.key && e.key.toLowerCase() === 'f') || e.keyCode === 70 || e.code === 'KeyF';
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && isFKey) {
       var isCurrentSiteDisabled = settings.disabledSites && settings.disabledSites.indexOf(window.location.hostname) !== -1;
       var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
       if (isCurrentSiteDisabled || isStandalone) {
@@ -1534,6 +2109,7 @@
       }
       try { e.preventDefault(); } catch (err) {}
       e.stopPropagation();
+      e.stopImmediatePropagation();
       if (typeof window.__ocToggle === 'function') {
         if (wrap) {
           input.focus();
@@ -1547,9 +2123,12 @@
     if (!wrap) return;
     if (e.key === 'Escape') { window.__ocDestroy(); return; }
     
-    if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') || e.key === 'F3') {
+    var isGKey = (e.key && e.key.toLowerCase() === 'g') || e.keyCode === 71 || e.code === 'KeyG';
+    var isF3Key = e.key === 'F3' || e.keyCode === 114;
+    if (((e.ctrlKey || e.metaKey) && isGKey) || isF3Key) {
       try { e.preventDefault(); } catch (err) {}
       e.stopPropagation();
+      e.stopImmediatePropagation();
       findNext(e.shiftKey);
       return;
     }
@@ -1598,13 +2177,21 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange) {
+  function makeRadioList(items, currentVal, onChange, disabled) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
+    if (disabled) {
+      list.style.opacity = '0.5';
+      list.style.pointerEvents = 'none';
+    }
 
     items.forEach(function (item) {
       var row = document.createElement('button');
       row.className = 'oc-radio-item' + (item.value === currentVal ? ' active' : '');
+      if (disabled) {
+        row.disabled = true;
+        row.style.cursor = 'not-allowed';
+      }
 
       var dot = document.createElement('span');
       dot.className = 'oc-radio-dot';
@@ -1615,16 +2202,18 @@
 
       row.appendChild(dot);
       row.appendChild(lbl);
-      row.addEventListener('click', function () {
-        list.querySelectorAll('.oc-radio-item').forEach(function (r) {
-          r.classList.remove('active');
-          var d = r.querySelector('.oc-radio-dot');
-          if (d) d.textContent = '○';
+      if (!disabled) {
+        row.addEventListener('click', function () {
+          list.querySelectorAll('.oc-radio-item').forEach(function (r) {
+            r.classList.remove('active');
+            var d = r.querySelector('.oc-radio-dot');
+            if (d) d.textContent = '○';
+          });
+          row.classList.add('active');
+          dot.textContent = '●';
+          onChange(item.value);
         });
-        row.classList.add('active');
-        dot.textContent = '●';
-        onChange(item.value);
-      });
+      }
       list.appendChild(row);
     });
 
@@ -1652,6 +2241,14 @@
     field.appendChild(meta);
     field.appendChild(controlEl);
     return field;
+  }
+
+  function getProfileConstraints() {
+    var p = settings.visionProfile;
+    return {
+      effectDisabled: !!(p === 'eye-strain'),
+      colorsDisabled: !!(p && (p === 'eye-strain' || p.indexOf('color-blind') === 0))
+    };
   }
 
   function buildSettingsPanel() {
@@ -1702,6 +2299,16 @@
     });
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
+
+    if (settings.visionProfile) {
+      var banner = document.createElement('div');
+      banner.className = 'oc-settings-profile-banner';
+      banner.style.cssText = 'background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.2); padding: 8px 12px; font-size: 11px; color: #fbbf24; margin: 8px 16px 0; border-radius: 6px; display: flex; align-items: center; gap: 6px; font-weight: 500;';
+      
+      var profileDisplay = settings.visionProfile === 'eye-strain' ? 'Eye Strain' : settings.visionProfile === 'low-vision' ? 'Low Vision' : 'Color Blind';
+      banner.textContent = '⚠️ ' + profileDisplay + ' Profile overrides active settings.';
+      settingsPanel.appendChild(banner);
+    }
 
     // Grid Container
     var grid = document.createElement('div');
@@ -1758,10 +2365,14 @@
       return a.label.localeCompare(b.label);
     });
 
+    var constraints = getProfileConstraints();
+    var effColors = getEffectiveColors();
+
     var effectField = makeSettingsField(i18n.highlightEffect, i18n.effectDesc, makeRadioList(
       effectOptions,
       settings.effect,
-      function (v) { settings.effect = v; saveSettings(); }
+      function (v) { settings.effect = v; saveSettings(); },
+      constraints.effectDisabled
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -1786,13 +2397,13 @@
     pickerGroup.className = 'oc-settings-picker-group';
 
     var items = [
-      { label: i18n.matchLabel, val: settings.matchColor, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.activeLabel, val: settings.activeColor, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.beaconLabel, val: settings.beaconColor, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
+      { label: i18n.matchLabel, val: effColors.match, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
+      { label: i18n.activeLabel, val: effColors.active, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
+      { label: i18n.beaconColorLabel || i18n.beaconLabel, val: effColors.beacon, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
     ];
 
     items.forEach(function (item) {
-      var picker = makeColorPicker(item.label, item.val, item.title, item.cb);
+      var picker = makeColorPicker(item.label, item.val, item.title, item.cb, constraints.colorsDisabled);
       pickerGroup.appendChild(picker);
     });
 
@@ -1840,10 +2451,15 @@
     });
   }
 
-  function makeColorPicker(label, val, title, onChange) {
+  function makeColorPicker(label, val, title, onChange, disabled) {
     var badge = document.createElement('div');
     badge.className = 'oc-color-badge';
     badge.title = title;
+    if (disabled) {
+      badge.style.opacity = '0.5';
+      badge.style.pointerEvents = 'none';
+      badge.style.cursor = 'not-allowed';
+    }
     
     var swatch = document.createElement('div');
     swatch.className = 'oc-color-badge-swatch';
@@ -1857,13 +2473,18 @@
     input.type = 'color';
     input.value = val;
     input.className = 'oc-color-input';
+    if (disabled) {
+      input.disabled = true;
+    }
     
-    input.addEventListener('keydown', function (e) { e.stopPropagation(); });
-    input.addEventListener('input', function () {
-      var newColor = input.value;
-      swatch.style.backgroundColor = newColor;
-      onChange(newColor);
-    });
+    if (!disabled) {
+      input.addEventListener('keydown', function (e) { e.stopPropagation(); });
+      input.addEventListener('input', function () {
+        var newColor = input.value;
+        swatch.style.backgroundColor = newColor;
+        onChange(newColor);
+      });
+    }
     
     badge.appendChild(swatch);
     badge.appendChild(text);
@@ -2045,8 +2666,9 @@
     var globalStyleId = 'oc-global-highlight-styles';
     var globalEl = document.getElementById(globalStyleId);
 
-    var matchColor = settings.matchColor || '#fef08a';
-    var activeColor = settings.activeColor || '#f59e0b';
+    var colors = getEffectiveColors();
+    var matchColor = colors.match;
+    var activeColor = colors.active;
     var matchTextColor = getContrastColor(matchColor);
     var activeTextColor = getContrastColor(activeColor);
 
@@ -2100,7 +2722,7 @@
         '  --oc-btn-active-bg: ' + (activeTheme === 'dark' ? '#27272a' : '#ffffff') + ';',
         '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
         '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
-        '  --oc-accent-alpha: ' + hexToRgba(settings.beaconColor || '#fbbf24', 0.2) + ';',
+        '  --oc-accent-alpha: ' + hexToRgba(colors.beacon, 0.2) + ';',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
         '.oc-bar {',
@@ -2553,7 +3175,7 @@
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
   function boot() {
-    document.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
+    window.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
     window.addEventListener('scroll', handleScroll, { passive: true });
 
     window.__ocToggle = function () {
@@ -2564,6 +3186,7 @@
         injectHighlightStyles();
         startDomObserver();
         checkSiteOverride(false);
+        window.addEventListener('resize', scheduleViewportMarkersUpdate, { passive: true });
         if (input) {
           input.focus();
           input.select();
@@ -2589,6 +3212,7 @@
       } else {
         injectHighlightStyles();
         applyWrapPosition();
+        updateViewportMarkers();
         if (settingsPanel) {
           settingsPanel.remove();
           settingsPanel = null;
