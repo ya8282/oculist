@@ -20,6 +20,27 @@ Unlike typical search overlays, oculist is designed to run safely on complex, mo
 * **Web Animations API:** All search beacon animations are executed programmatically via JavaScript. This avoids injecting stylesheet `@keyframes`, making the bookmarklet fully compatible with secure websites enforcing strict Content Security Policies (CSPs) that block inline style elements (such as GitHub, Twitter, and Google).
 * **Deterministic Navigation State:** Match navigation indices are bound directly to standard in-memory `Range` collections. This ensures the search counter ("Match X of Y") is completely accurate and synchronized, even if you click around the page or change focus manually.
 * **Scroll-Locked Beacons:** Animation elements are positioned absolutely using page scroll offsets. When you scroll the page manually or programmatically, the beacon remains physically anchored to the target word rather than floating static on the viewport.
+* **Stale Range Re-validation:** Match ranges can detach from the DOM during dynamic re-renders. Before navigation or input focus, Oculist re-validates cached ranges and scans the page again automatically if they have become stale.
+
+## Vision Accessibility Suite (since v1.5.0)
+
+Oculist features a comprehensive suite of vision-specific enhancements to support users with low vision, color blindness, or eye strain:
+
+* **Onboarding Setup Wizard:** On first installation, a 3-question interactive setup guide displays live-animated mockups to help users calibrate and select their perfect profile settings.
+* **Predefined Presets:**
+  * **Low Vision:** Enables extra-large (`xl`) scale beacons, maximum opacity, floating active match-count labels, and high-contrast active borders.
+  * **Color Blindness (Deuteranopia/Protanopia/Tritanopia):** Switches to optimized, high-contrast color palettes and renders small circular outline markers in the viewport margins for all matches to provide redundant shape encoding.
+  * **Eye Strain / Comfort:** Bypasses rapid motion in favor of a soft, slow opacity fade and Sepia/Warm Amber color palettes.
+* **Granular Custom Settings:** Adjust individual parameters including beacon size, animation speed, floating match-count labels, motion sensitivity (`off`, `reduced`, `full`), borders, and custom palettes.
+* **Lock Override Protection:** Activating an accessibility profile injects a lock overlay in the settings popup to protect users against accidental overrides of accessibility parameters.
+* **WCAG 2.1 AA Certified:** Fully keyboard navigable (with clear `:focus-visible` states), screen-reader friendly (using explicit ARIA labels), and compliant with text contrast ratios.
+
+## Reliability & Performance Features (since v1.5.0)
+
+* **MutationObserver Infinite-Scroll Scanning:** Listens for DOM changes and dynamically re-scans match collections when virtual feeds (like Reddit or Twitter) swap text nodes, ensuring highlights never vanish.
+* **Lite Mode Auto-Throttling:** Automatically detects low-core count devices (or runs via manual settings) to extend the debounce threshold and replace complex GPU/canvas animations with the lightweight CSS-only "Spotlight" effect.
+* **Unsupported Site Override Warnings:** Detects and alerts when visiting canvas-rendered text areas or rich text editors (like Google Docs or Notion) where standard browser DOM traversing and key interception are blocked.
+
 
 ## Installation
 
