@@ -12,10 +12,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Vision Accessibility controls
   const visionProfileSelect = document.getElementById('vision-profile');
+  const profileGuidanceText = document.getElementById('profile-guidance');
   const overrideBanner = document.getElementById('override-banner');
+  const profileNameBadge = document.getElementById('profile-name-badge');
   const unlockProfileBtn = document.getElementById('unlock-profile');
   const configureDrawer = document.getElementById('configure-drawer');
-  const drawerContent = document.getElementById('drawer-content');
+  const configureSummary = document.querySelector('.configure-summary');
+
+  const effectsSection = document.getElementById('effects-section');
+  const effectsLockBadge = document.getElementById('effects-lock-badge');
+  const colorsSection = document.getElementById('colors-section');
+  const colorsLockBadge = document.getElementById('colors-lock-badge');
 
   const beaconSizeSelect = document.getElementById('beacon-size');
   const animationSpeedSelect = document.getElementById('animation-speed');
@@ -80,6 +87,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  // Display name used in the override banner and lock badges.
+  const PROFILE_NAMES = {
+    'low-vision': 'Low Vision Profile',
+    'color-blind-deuteranopia': 'Deuteranopia Profile',
+    'color-blind-protanopia': 'Protanopia Profile',
+    'color-blind-tritanopia': 'Tritanopia Profile',
+    'eye-strain': 'Eye Strain Profile'
+  };
+
+  // Helper guidance text shown under the profile dropdown (VA-10).
+  const PROFILE_GUIDANCE = {
+    'low-vision': 'Maximizes beacon scale (2.25x), adds match-count labels, and draws thick outlines for maximum visibility.',
+    'color-blind-deuteranopia': 'Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.',
+    'color-blind-protanopia': 'Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.',
+    'color-blind-tritanopia': 'Optimized red/cyan palette with shape indicators for blue-yellow color blindness.',
+    'eye-strain': 'Warm amber color palette with reduced motion and quiet pulse transitions to prevent visual fatigue.'
+  };
+
+  // Mirrors content.js getProfileConstraints() so the popup locks the same
+  // sections that the on-page settings panel locks for a given profile.
+  function getProfileConstraints(profile) {
+    return {
+      effectDisabled: profile === 'eye-strain',
+      colorsDisabled: !!(profile && (profile === 'eye-strain' || profile.indexOf('color-blind') === 0))
+    };
+  }
+
   // Detect platform to show the correct shortcut.
   const uaPlatform = navigator.userAgentData && navigator.userAgentData.platform;
   const isMac = uaPlatform
@@ -123,6 +157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Fill custom settings fields
   updateCustomFieldsUI(settings.visionSettings);
   updateOverridesUI(activeProfile);
+  updateProfileGuidance(activeProfile);
 
   // Profile Change Listener
   visionProfileSelect.addEventListener('change', async () => {
@@ -139,16 +174,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     updateOverridesUI(selected);
+    updateProfileGuidance(selected);
     await saveSettings();
   });
 
-  // Unlock / Customize Profile
-  unlockProfileBtn.addEventListener('click', async () => {
+  // Unlock / Customize Profile - shared by the top banner and the per-section lock badges
+  async function unlockToCustom() {
     visionProfileSelect.value = 'custom';
     settings.visionProfile = 'custom';
     updateOverridesUI('custom');
+    updateProfileGuidance('custom');
     await saveSettings();
+  }
+
+  unlockProfileBtn.addEventListener('click', unlockToCustom);
+  document.querySelector('.unlock-effects-btn').addEventListener('click', unlockToCustom);
+  document.querySelector('.unlock-colors-btn').addEventListener('click', unlockToCustom);
+
+  // Keep aria-expanded in sync with the drawer's open state
+  configureDrawer.addEventListener('toggle', () => {
+    configureSummary.setAttribute('aria-expanded', String(configureDrawer.open));
   });
+
+  function updateProfileGuidance(profile) {
+    profileGuidanceText.textContent = PROFILE_GUIDANCE[profile] || '';
+  }
 
   // Listeners for individual custom inputs
   const customControls = [
@@ -234,12 +284,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateOverridesUI(profile) {
-    if (profile === 'none' || profile === 'custom') {
-      overrideBanner.style.display = 'none';
-      drawerContent.classList.remove('drawer-locked');
-    } else {
-      overrideBanner.style.display = 'flex';
-      drawerContent.classList.add('drawer-locked');
+    const isPreset = profile !== 'none' && profile !== 'custom';
+    const profileLabel = PROFILE_NAMES[profile] || 'Custom Profile';
+
+    overrideBanner.style.display = isPreset ? 'flex' : 'none';
+    if (isPreset) {
+      profileNameBadge.textContent = profileLabel;
+    }
+
+    // Lock badges mirror content.js's getProfileConstraints() so the popup
+    // only locks the sections the active profile actually overrides.
+    const constraints = getProfileConstraints(profile);
+
+    effectsSection.classList.toggle('drawer-locked', constraints.effectDisabled);
+    effectsLockBadge.style.display = constraints.effectDisabled ? 'flex' : 'none';
+    if (constraints.effectDisabled) {
+      effectsLockBadge.querySelector('.lock-badge-profile').textContent = profileLabel;
+    }
+
+    colorsSection.classList.toggle('drawer-locked', constraints.colorsDisabled);
+    colorsLockBadge.style.display = constraints.colorsDisabled ? 'flex' : 'none';
+    if (constraints.colorsDisabled) {
+      colorsLockBadge.querySelector('.lock-badge-profile').textContent = profileLabel;
     }
   }
 

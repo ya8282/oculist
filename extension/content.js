@@ -1579,6 +1579,7 @@
     searchRanges = [];
     activeIndex = -1;
     firstEnter = false;
+    clearViewportMarkers();
 
     if (!term) {
       countEl.textContent = '';
@@ -2070,7 +2071,7 @@
         marker.style.cssText = [
           'position:absolute',
           'left:' + pos.left + 'px', 'top:' + pos.top + 'px',
-          'width:6px', 'height:6px',
+          'width:8px', 'height:8px',
           'border:2px solid ' + markerColor,
           'border-radius:50%',
           'background:transparent',
@@ -2523,6 +2524,7 @@
     wrap.style.color = t.text;
     wrap.style.border = '1px solid ' + t.divider;
     wrap.style.boxShadow = '0 10px 30px -10px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.05)';
+    wrap.style.outline = 'none';
     wrap.style.backdropFilter = 'blur(16px) saturate(180%)';
     wrap.style.webkitBackdropFilter = 'blur(16px) saturate(180%)';
     wrap.style.transition = 'border-radius 200ms, box-shadow 200ms, backdrop-filter 200ms';
@@ -2568,6 +2570,12 @@
         return;
       }
       e.stopPropagation();
+    });
+    input.addEventListener('focus', function () {
+      wrap.setAttribute('contenteditable', 'true');
+    });
+    input.addEventListener('blur', function () {
+      wrap.removeAttribute('contenteditable');
     });
     input.addEventListener('input', function () {
       clearTimeout(debounceTimer);
@@ -2672,7 +2680,36 @@
     var matchTextColor = getContrastColor(matchColor);
     var activeTextColor = getContrastColor(activeColor);
 
+    var designTokensCss = [
+      ':root {',
+      '  --oc-size-scale-s: 0.7;',
+      '  --oc-size-scale-m: 1.0;',
+      '  --oc-size-scale-l: 1.5;',
+      '  --oc-size-scale-xl: 2.25;',
+      '  --oc-duration-fast: 1000ms;',
+      '  --oc-duration-normal: 2000ms;',
+      '  --oc-duration-slow: 3500ms;',
+      '  --oc-border-width-none: 0px;',
+      '  --oc-border-width-thin: 1px;',
+      '  --oc-border-width-medium: 2px;',
+      '  --oc-border-width-thick: 4px;',
+      '  --oc-palette-deuteranopia-match: #fef08a;',
+      '  --oc-palette-deuteranopia-active: #0284c7;',
+      '  --oc-palette-deuteranopia-beacon: #0284c7;',
+      '  --oc-palette-protanopia-match: #fef08a;',
+      '  --oc-palette-protanopia-active: #2563eb;',
+      '  --oc-palette-protanopia-beacon: #2563eb;',
+      '  --oc-palette-tritanopia-match: #ffcbd1;',
+      '  --oc-palette-tritanopia-active: #06b6d4;',
+      '  --oc-palette-tritanopia-beacon: #06b6d4;',
+      '  --oc-palette-warm-match: #fef08a;',
+      '  --oc-palette-warm-active: #d97706;',
+      '  --oc-palette-warm-beacon: #eab308;',
+      '}'
+    ].join('\n');
+
     var highlightCss = [
+      designTokensCss,
       '::highlight(oculist-match) { background-color: ' + matchColor + '; color: ' + matchTextColor + '; }',
       '::highlight(oculist-active-match) { background-color: ' + activeColor + '; color: ' + activeTextColor + '; }',
       '.oc-beacon { will-change: transform, opacity; transition: opacity 50ms ease-out; }'
@@ -3176,7 +3213,6 @@
 
   function boot() {
     window.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
-    window.addEventListener('scroll', handleScroll, { passive: true });
 
     window.__ocToggle = function () {
       if (wrap) {
@@ -3186,6 +3222,7 @@
         injectHighlightStyles();
         startDomObserver();
         checkSiteOverride(false);
+        window.addEventListener('scroll', handleScroll, { passive: true });
         window.addEventListener('resize', scheduleViewportMarkersUpdate, { passive: true });
         if (input) {
           input.focus();

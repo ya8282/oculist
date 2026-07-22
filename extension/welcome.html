@@ -45,7 +45,7 @@
     }
     .shortcut-table { margin: 12px 0 16px; border-collapse: collapse; width: 100%; }
     .shortcut-table td { padding: 5px 0; color: #d4d4d8; }
-    .shortcut-table td:first-child { width: 90px; color: #71717a; font-size: 13px; }
+    .shortcut-table td:first-child { width: 90px; color: #a1a1aa; font-size: 13px; }
     .tip {
       background: rgba(245, 158, 11, 0.08);
       border-left: 3px solid #f59e0b;
@@ -144,6 +144,10 @@
       background: #3f3f46;
       border-color: #52525b;
     }
+    .wizard-option:focus-visible {
+      outline: 2px solid #f59e0b;
+      outline-offset: 2px;
+    }
     .wizard-option.selected {
       background: rgba(245, 158, 11, 0.1);
       border-color: #f59e0b;
@@ -166,6 +170,10 @@
     }
     .nav-btn:hover {
       background: #3f3f46;
+    }
+    .nav-btn:focus-visible {
+      outline: 2px solid #f59e0b;
+      outline-offset: 2px;
     }
     .nav-btn.primary {
       background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
@@ -236,9 +244,9 @@
         <p class="wizard-desc">Do you experience color blindness?</p>
         <div class="wizard-options">
           <button class="wizard-option" data-value="none">No, I do not</button>
-          <button class="wizard-option" data-value="deuteranopia">Yes, Deuteranopia (Red-Green)</button>
-          <button class="wizard-option" data-value="protanopia">Yes, Protanopia (Red-Green)</button>
-          <button class="wizard-option" data-value="tritanopia">Yes, Tritanopia (Blue-Yellow)</button>
+          <button class="wizard-option" data-value="deuteranopia" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Yes, Deuteranopia (Red-Green)</button>
+          <button class="wizard-option" data-value="protanopia" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Yes, Protanopia (Red-Green)</button>
+          <button class="wizard-option" data-value="tritanopia" title="Optimized red/cyan palette with shape indicators for blue-yellow color blindness.">Yes, Tritanopia (Blue-Yellow)</button>
         </div>
       </div>
 
@@ -248,7 +256,7 @@
         <p class="wizard-desc">Do you have difficulty tracking small details or highlights on dense pages?</p>
         <div class="wizard-options">
           <button class="wizard-option" data-value="false">No, standard highlights are fine</button>
-          <button class="wizard-option" data-value="true">Yes, make indicators larger and add borders</button>
+          <button class="wizard-option" data-value="true" title="Maximizes beacon scale (2.25x), adds match-count labels, and draws thick outlines for maximum visibility.">Yes, make indicators larger and add borders</button>
         </div>
       </div>
 
@@ -258,7 +266,7 @@
         <p class="wizard-desc">Do you experience eye strain, or prefer quiet, reduced-motion animations?</p>
         <div class="wizard-options">
           <button class="wizard-option" data-value="false">No, default animations are fine</button>
-          <button class="wizard-option" data-value="true">Yes, reduce motion and use warm sepia colors</button>
+          <button class="wizard-option" data-value="true" title="Warm amber color palette with reduced motion and quiet pulse transitions to prevent visual fatigue.">Yes, reduce motion and use warm sepia colors</button>
         </div>
       </div>
 
@@ -293,7 +301,7 @@
 
           <!-- Right: Live Mockup Card -->
           <div id="mockup-card" style="flex: 1.2; background: #09090b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center;">
-            <p style="font-size: 11px; color: #71717a; margin-bottom: 12px;">Query: <span style="background: #27272a; color: #fafafa; padding: 1px 6px; border-radius: 4px; font-family: monospace;">comfort</span></p>
+            <p style="font-size: 11px; color: #a1a1aa; margin-bottom: 12px;">Query: <span style="background: #27272a; color: #fafafa; padding: 1px 6px; border-radius: 4px; font-family: monospace;">comfort</span></p>
             <div style="font-size: 14px; line-height: 1.6; color: #fafafa; position: relative; z-index: 100;">
               Oculist helps you search large pages. When you select a profile, Oculist optimizes the style of indicators to give you maximum <span id="preview-target" style="background: rgba(245, 158, 11, 0.3); color: #f59e0b; font-weight: 600; padding: 2px 4px; border-radius: 2px; position: relative; display: inline-block;">comfort</span> when searching text.
             </div>
