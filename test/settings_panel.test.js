@@ -616,5 +616,51 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find exactly 1 match inside Shadow DOM in content.js');
     });
 
+    test('Should render 8px viewport shape markers for inactive matches under a color blind palette and clear them when search is emptied', async () => {
+      const dom = createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+
+      const p1 = document.createElement('p');
+      p1.textContent = 'shape marker one';
+      document.body.appendChild(p1);
+
+      const p2 = document.createElement('p');
+      p2.textContent = 'shape marker two';
+      document.body.appendChild(p2);
+
+      // Simulate a saved deuteranopia color blind profile being loaded on boot.
+      global.chrome.storage.sync.get = (key, cb) => cb({
+        'oc-settings': { visionSettings: { colorPalette: 'deuteranopia' } }
+      });
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const input = wrap.shadowRoot.querySelector('.oc-input');
+
+      input.value = 'shape marker';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const countEl = wrap.shadowRoot.querySelector('.oc-count');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 2', 'Should find exactly 2 matches in content.js');
+
+      const markers = document.documentElement.querySelectorAll('.oc-viewport-marker');
+      assert.strictEqual(markers.length, 1, 'Should draw exactly one viewport shape marker for the inactive match');
+      assert.strictEqual(markers[0].style.width, '8px', 'Viewport shape marker should be 8px per VA-03 spec');
+
+      // Clearing the search term should remove stale viewport markers.
+      input.value = '';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const markersAfterClear = document.documentElement.querySelectorAll('.oc-viewport-marker');
+      assert.strictEqual(markersAfterClear.length, 0, 'Viewport shape markers should be cleared once the search is emptied');
+    });
+
   });
 });

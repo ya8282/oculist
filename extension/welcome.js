@@ -202,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       const lblSpan = document.createElement('span');
       lblSpan.textContent = f.label;
-      lblSpan.style.color = '#71717a';
+      lblSpan.style.color = '#a1a1aa';
 
       const valSpan = document.createElement('span');
       valSpan.textContent = f.val;

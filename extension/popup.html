@@ -16,6 +16,40 @@
       --accent-green: #10b981;
       --accent-red: #ef4444;
       --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+      /* Beacon Scale Tokens */
+      --oc-size-scale-s: 0.7;
+      --oc-size-scale-m: 1.0;
+      --oc-size-scale-l: 1.5;
+      --oc-size-scale-xl: 2.25;
+
+      /* Animation Duration Tokens */
+      --oc-duration-fast: 1000ms;
+      --oc-duration-normal: 2000ms;
+      --oc-duration-slow: 3500ms;
+
+      /* Border Width Tokens */
+      --oc-border-width-none: 0px;
+      --oc-border-width-thin: 1px;
+      --oc-border-width-medium: 2px;
+      --oc-border-width-thick: 4px;
+
+      /* Accessible Palette Tokens */
+      --oc-palette-deuteranopia-match: #fef08a;
+      --oc-palette-deuteranopia-active: #0284c7;
+      --oc-palette-deuteranopia-beacon: #0284c7;
+
+      --oc-palette-protanopia-match: #fef08a;
+      --oc-palette-protanopia-active: #2563eb;
+      --oc-palette-protanopia-beacon: #2563eb;
+
+      --oc-palette-tritanopia-match: #ffcbd1;
+      --oc-palette-tritanopia-active: #06b6d4;
+      --oc-palette-tritanopia-beacon: #06b6d4;
+
+      --oc-palette-warm-match: #fef08a;
+      --oc-palette-warm-active: #d97706;
+      --oc-palette-warm-beacon: #eab308;
     }
 
     * {
@@ -226,6 +260,11 @@
       border-color: var(--primary);
     }
 
+    .select-control:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
     /* Override Banner */
     .override-banner {
       background-color: rgba(245, 158, 11, 0.1);
@@ -282,6 +321,11 @@
       outline: none;
     }
 
+    summary.configure-summary:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
     summary.configure-summary::-webkit-details-marker {
       display: none;
     }
@@ -307,6 +351,47 @@
     .drawer-locked {
       opacity: 0.5;
       pointer-events: none;
+    }
+
+    .settings-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .section-lock-badge {
+      background-color: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.4;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: #fbbf24;
+      /* Keep the badge (and its unlock button) clickable even though the
+         parent section has pointer-events:none while .drawer-locked. */
+      pointer-events: auto;
+    }
+
+    .section-lock-badge .btn-link {
+      background: none;
+      border: none;
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+      flex-shrink: 0;
+    }
+
+    .field-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
     }
 
     .color-picker-input {
@@ -393,93 +478,109 @@
     <div class="form-group">
       <label for="vision-profile" class="domain-label">Active Vision Profile</label>
       <select id="vision-profile" class="select-control" aria-label="Select vision profile">
-        <option value="none">None (Standard)</option>
-        <option value="low-vision">Low Vision</option>
-        <option value="color-blind-deuteranopia">Color Blind (Deuteranopia)</option>
-        <option value="color-blind-protanopia">Color Blind (Protanopia)</option>
-        <option value="color-blind-tritanopia">Color Blind (Tritanopia)</option>
-        <option value="eye-strain">Eye Strain (Reduced Motion)</option>
-        <option value="custom">Custom Configuration</option>
+        <option value="none" title="Standard highlighting with no vision accommodations.">None (Standard)</option>
+        <option value="low-vision" title="Maximizes beacon scale (2.25x), adds match-count labels, and draws thick outlines for maximum visibility.">Low Vision</option>
+        <option value="color-blind-deuteranopia" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Color Blind (Deuteranopia)</option>
+        <option value="color-blind-protanopia" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Color Blind (Protanopia)</option>
+        <option value="color-blind-tritanopia" title="Optimized red/cyan palette with shape indicators for blue-yellow color blindness.">Color Blind (Tritanopia)</option>
+        <option value="eye-strain" title="Warm amber color palette with reduced motion and quiet pulse transitions to prevent visual fatigue.">Eye Strain (Reduced Motion)</option>
+        <option value="custom" title="Manually configure every setting below.">Custom Configuration</option>
       </select>
+      <p id="profile-guidance" class="field-hint"></p>
     </div>
 
     <!-- Active Override Banner -->
     <div id="override-banner" class="override-banner" style="display: none;">
-      <span class="override-text">⚠️ Profile overrides standard effects & colors.</span>
-      <button id="unlock-profile" class="customize-btn">Customize Settings</button>
+      <span class="override-text">🔒 Overridden by <strong id="profile-name-badge">Profile</strong></span>
+      <button id="unlock-profile" class="customize-btn" aria-label="Unlock profile to customize settings">Customize Settings</button>
     </div>
   </div>
 
   <!-- Custom Vision Settings Drawer (Accordion) -->
   <details class="configure-drawer" id="configure-drawer">
-    <summary class="configure-summary" aria-controls="drawer-content" aria-expanded="false">
+    <summary class="configure-summary" aria-controls="drawer-content" aria-expanded="false" aria-label="Toggle custom vision settings panel">
       Custom Vision Settings
     </summary>
     <div class="drawer-content" id="drawer-content">
-      <div class="form-group">
-        <label for="beacon-size" class="form-label">Beacon Size</label>
-        <select id="beacon-size" class="select-control">
-          <option value="s">Small</option>
-          <option value="m">Medium</option>
-          <option value="l">Large</option>
-          <option value="xl">Extra Large</option>
-        </select>
+      <!-- Effects Section: beacon size, speed, labels, motion, border -->
+      <div class="settings-section" id="effects-section">
+        <div class="section-lock-badge" id="effects-lock-badge">
+          <span>🔒 Overridden by <strong class="lock-badge-profile">Profile</strong></span>
+          <button type="button" class="btn-link unlock-effects-btn" aria-label="Unlock effects settings to customize">Unlock to Customize</button>
+        </div>
+
+        <div class="form-group">
+          <label for="beacon-size" class="form-label">Beacon Size</label>
+          <select id="beacon-size" class="select-control" aria-label="Beacon size">
+            <option value="s">Small</option>
+            <option value="m">Medium</option>
+            <option value="l">Large</option>
+            <option value="xl">Extra Large</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="animation-speed" class="form-label">Animation Speed</label>
+          <select id="animation-speed" class="select-control" aria-label="Animation speed">
+            <option value="off">Off</option>
+            <option value="slow">Slow</option>
+            <option value="normal">Normal</option>
+            <option value="fast">Fast</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="match-labels" class="form-label">Match Labels</label>
+          <select id="match-labels" class="select-control" aria-label="Match labels">
+            <option value="false">Off</option>
+            <option value="true">On</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="motion-sensitivity" class="form-label">Motion Sensitivity</label>
+          <select id="motion-sensitivity" class="select-control" aria-label="Motion sensitivity">
+            <option value="off">Off</option>
+            <option value="reduced">Reduced</option>
+            <option value="full">Full</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="border-style" class="form-label">Border Style</label>
+          <select id="border-style" class="select-control" aria-label="Border style">
+            <option value="none">None</option>
+            <option value="thin">Thin</option>
+            <option value="medium">Medium</option>
+            <option value="thick">Thick</option>
+          </select>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label for="animation-speed" class="form-label">Animation Speed</label>
-        <select id="animation-speed" class="select-control">
-          <option value="off">Off</option>
-          <option value="slow">Slow</option>
-          <option value="normal">Normal</option>
-          <option value="fast">Fast</option>
-        </select>
-      </div>
+      <!-- Colors Section: palette + custom color pickers -->
+      <div class="settings-section" id="colors-section">
+        <div class="section-lock-badge" id="colors-lock-badge">
+          <span>🔒 Overridden by <strong class="lock-badge-profile">Profile</strong></span>
+          <button type="button" class="btn-link unlock-colors-btn" aria-label="Unlock color settings to customize">Unlock to Customize</button>
+        </div>
 
-      <div class="form-group">
-        <label for="match-labels" class="form-label">Match Labels</label>
-        <select id="match-labels" class="select-control">
-          <option value="false">Off</option>
-          <option value="true">On</option>
-        </select>
-      </div>
+        <div class="form-group">
+          <label for="color-palette" class="form-label">Color Palette</label>
+          <select id="color-palette" class="select-control" aria-label="Color palette">
+            <option value="default">Default</option>
+            <option value="deuteranopia">Deuteranopia</option>
+            <option value="protanopia">Protanopia</option>
+            <option value="tritanopia">Tritanopia</option>
+            <option value="warm">Warm (Sepia)</option>
+            <option value="custom">Custom Colors</option>
+          </select>
+        </div>
 
-      <div class="form-group">
-        <label for="motion-sensitivity" class="form-label">Motion Sensitivity</label>
-        <select id="motion-sensitivity" class="select-control">
-          <option value="off">Off</option>
-          <option value="reduced">Reduced</option>
-          <option value="full">Full</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="border-style" class="form-label">Border Style</label>
-        <select id="border-style" class="select-control">
-          <option value="none">None</option>
-          <option value="thin">Thin</option>
-          <option value="medium">Medium</option>
-          <option value="thick">Thick</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="color-palette" class="form-label">Color Palette</label>
-        <select id="color-palette" class="select-control">
-          <option value="default">Default</option>
-          <option value="deuteranopia">Deuteranopia</option>
-          <option value="protanopia">Protanopia</option>
-          <option value="tritanopia">Tritanopia</option>
-          <option value="warm">Warm (Sepia)</option>
-          <option value="custom">Custom Colors</option>
-        </select>
-      </div>
-
-      <!-- Custom Color Pickers -->
-      <div class="form-group" id="custom-colors-group" style="display: none;">
-        <label class="form-label">Custom Hex Colors</label>
-        <div style="display: flex; gap: 8px;">
-          <div style="flex: 1;">
+        <!-- Custom Color Pickers -->
+        <div class="form-group" id="custom-colors-group" style="display: none;">
+          <label class="form-label">Custom Hex Colors</label>
+          <div style="display: flex; gap: 8px;">
+            <div style="flex: 1;">
             <label for="custom-match-color" class="form-label" style="font-size: 9px;">Match</label>
             <input type="color" id="custom-match-color" class="color-picker-input" aria-label="Custom match color">
           </div>
@@ -493,6 +594,7 @@
           </div>
         </div>
       </div>
+    </div>
     </div>
   </details>
 
