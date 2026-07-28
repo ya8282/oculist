@@ -161,6 +161,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Listen for tab activation changes
 chrome.tabs.onActivated.addListener((activeInfo) => {
   chrome.tabs.get(activeInfo.tabId, (tab) => {
+    // The tab can be gone before this callback runs (closing tabs in a burst activates
+    // each neighbour in turn, and a sleeping service worker adds wake-up latency).
+    // Reading lastError is what marks it handled — without this Chrome logs
+    // "Unchecked runtime.lastError: No tab with id" on the extensions page.
+    if (chrome.runtime.lastError) return;
     if (tab && tab.url) {
       updateIcon(activeInfo.tabId, tab.url);
     }
