@@ -1,6 +1,6 @@
 # Privacy Policy — Oculist
 
-**Last updated:** 2026-06-21
+**Last updated:** 2026-07-28
 
 Oculist does not collect, transmit, sell, or share any personal data. There are
 no analytics, no tracking, and no external servers.
@@ -8,7 +8,8 @@ no analytics, no tracking, and no external servers.
 ## What is stored
 
 Oculist stores your preferences — theme, highlight effect, beacon colors,
-per-site enable/disable list, and the tab-icon option — using Chrome's
+per-site enable/disable list, and your vision accessibility profile and
+settings — using Chrome's
 `chrome.storage.sync` API. These settings live in your browser. If you are
 signed into Chrome, they sync across your own devices through your Google
 account; they are never sent to the developer or any third party.
