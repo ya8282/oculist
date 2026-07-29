@@ -3170,9 +3170,15 @@
         '}',
         '.oc-notice {',
         '  display: flex;',
-        '  align-items: center;',
+        '  align-items: flex-start;',
         '  gap: 8px;',
         '  padding: 6px 10px;',
+        // ponytail: width:0 keeps the notice out of the shadow host's intrinsic
+        // width so it can't stretch the bar; min-width:100% then fills whatever
+        // width the bar settled on, and the text wraps inside it.
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  box-sizing: border-box;',
         '  font: 12px/1.4 system-ui, -apple-system, sans-serif;',
         '  background: ' + t.bg + ';',
         '  color: ' + t.text + ';',
