@@ -29,13 +29,19 @@
         beaconColor: '#fbbf24'
       }
     },
-    setupWizardCompleted: false
+    setupWizardCompleted: false,
+    // Written by background.js, never read here. It has to round-trip through this list
+    // anyway: saveSettings() writes the whole settings object, so a key missing from
+    // SETTINGS_KEYS would be dropped from storage on the next write and the default
+    // blocklist would re-seed itself on every extension update.
+    seededDefaultBlocklist: false
   };
 
   var SETTINGS_KEYS = [
-    'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor', 
-    'scrollBehavior', 'disabledSites', 'performanceMode', 
-    'visionProfile', 'visionSettings', 'setupWizardCompleted'
+    'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
+    'scrollBehavior', 'disabledSites', 'performanceMode',
+    'visionProfile', 'visionSettings', 'setupWizardCompleted',
+    'seededDefaultBlocklist'
   ];
 
   // Every write we make echoes back through chrome.storage.onChanged in this same tab.
@@ -2988,7 +2994,13 @@
         '  flex-direction: column;',
         '  gap: 14px;',
         '  box-sizing: border-box;',
-        '  width: 100%;',
+        // Same trick as .oc-notice: width:0 keeps the panel out of the shadow host's
+        // intrinsic width so opening Settings cannot widen the bar, and min-width:100%
+        // then fills whatever width the bar settled on. Without it the panel's own
+        // horizontal padding was added on top of a content box already as wide as the
+        // bar, so the whole popover jumped ~33px.
+        '  width: 0;',
+        '  min-width: 100%;',
         '}',
         ':host(.is-bottom) #oc-settings-panel {',
         '  border-bottom: 1px solid var(--oc-divider);',
