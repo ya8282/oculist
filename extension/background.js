@@ -39,8 +39,33 @@ async function injectAndToggle(tabId) {
   }
 }
 
+// Sites Oculist is switched off on out of the box. github.com re-renders through its
+// own client-side router in a way the finder cannot reliably follow — the bar goes
+// missing and matches stop highlighting mid-session — so it starts disabled and Ctrl+F
+// falls through to the browser's native find. This is a default, not a hard block: the
+// popup's per-site toggle still turns it on, and seededDefaultBlocklist makes sure a
+// later extension update does not undo that choice.
+const DEFAULT_DISABLED_SITES = ['github.com'];
+
+function seedDefaultBlocklist() {
+  chrome.storage.sync.get('oc-settings', (data) => {
+    const settings = (data && data['oc-settings']) || {};
+    if (settings.seededDefaultBlocklist) return;
+    if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+    DEFAULT_DISABLED_SITES.forEach((host) => {
+      if (settings.disabledSites.indexOf(host) === -1) settings.disabledSites.push(host);
+    });
+    settings.seededDefaultBlocklist = true;
+    chrome.storage.sync.set({ 'oc-settings': settings });
+  });
+}
+
 // First-run onboarding.
 chrome.runtime.onInstalled.addListener((details) => {
+  // Runs on update too, so existing installs pick the default up once. The flag inside
+  // keeps it to exactly once.
+  seedDefaultBlocklist();
+
   if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 
