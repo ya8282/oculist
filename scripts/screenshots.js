@@ -94,8 +94,6 @@ const INPUT = '#oc-wrap >> .oc-input';
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { timeout: 15000 });
   const extId = sw.url().split('/')[2];
 
-  const backdrop = (await page.screenshot()).toString('base64');
-
   const popupPage = await ctx.newPage();
   await popupPage.setViewportSize({ width: 320, height: 700 });
   await popupPage.goto(`chrome-extension://${extId}/popup.html`);
@@ -108,13 +106,32 @@ const INPUT = '#oc-wrap >> .oc-input';
   const popupShot = (await popupPage.screenshot()).toString('base64');
   await popupPage.close();
 
+  // The backdrop is shot AFTER the profile lands, not before — otherwise the popup
+  // advertises Low Vision over a page rendered with default settings. The storage
+  // listener re-injects styles but does not re-run the search, so retype the term to
+  // repaint matches with thick outlines and count labels. Then wait out the beacon:
+  // its animation is transient, the outlines and labels are what the profile is
+  // actually selling, and a settled frame captures them deterministically.
+  await page.bringToFront();
+  await page.waitForTimeout(500);
+  await page.locator(INPUT).fill('');
+  await page.locator(INPUT).type('browser', { delay: 30 });
+  await page.waitForTimeout(600);
+  // Enter is what draws the thick border and the "Match #n of m" label — they hang off
+  // the beacon draw cycle, not the highlight pass. Both fade in with fill:'forwards' and
+  // persist until the next search, so the long wait outlives the transient beacon rings
+  // (animationSpeed is 'slow' under this profile) and leaves only the durable overlays.
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(3000);
+  const backdrop = (await page.screenshot()).toString('base64');
+
   const composite = await ctx.newPage();
   await composite.setViewportSize({ width: 1280, height: 800 });
   await composite.setContent(`
     <style>
       html,body { margin:0; padding:0; width:1280px; height:800px; overflow:hidden; }
       .bg { position:absolute; inset:0; width:1280px; height:800px; }
-      .dim { position:absolute; inset:0; background:rgba(9,9,11,0.45); }
+      .dim { position:absolute; inset:0; background:rgba(9,9,11,0.28); }
       .popup {
         position:absolute; top:16px; right:24px; width:320px;
         border-radius:10px; box-shadow:0 18px 50px rgba(0,0,0,0.55);
