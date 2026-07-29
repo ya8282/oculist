@@ -38,8 +38,36 @@
     'visionProfile', 'visionSettings', 'setupWizardCompleted'
   ];
 
+  // Every write we make echoes back through chrome.storage.onChanged in this same tab.
+  // Recording each payload lets the listener recognise its own echo and ignore it. Value
+  // comparison alone is not enough: two colour picks in one tick queue two writes, and by
+  // the time the first echo lands memory already holds the second value, so the echo
+  // looks like a foreign change and tears the panel down mid-interaction.
+  var pendingSelfWrites = [];
+
   function saveSettings() {
+    pendingSelfWrites.push(stableStringify(settings));
+    // Purely a leak guard. An echo that never arrives would otherwise pin an entry here
+    // forever; nobody queues twenty writes ahead of the first echo in practice.
+    if (pendingSelfWrites.length > 20) pendingSelfWrites.shift();
     chrome.storage.sync.set({ 'oc-settings': settings });
+  }
+
+  // chrome.storage hands objects back with their keys sorted alphabetically, while the
+  // in-memory copy keeps insertion order, so a plain JSON.stringify compare reports a
+  // difference between two identical values. Sort keys at every level before comparing.
+  // Arrays keep their order — for disabledSites a reorder is not a meaningful change,
+  // and treating one as a change is harmless anyway.
+  function stableStringify(value) {
+    return JSON.stringify(value, function (k, v) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        return Object.keys(v).sort().reduce(function (acc, key) {
+          acc[key] = v[key];
+          return acc;
+        }, {});
+      }
+      return v;
+    });
   }
 
   function getEffectiveColors() {
@@ -1787,12 +1815,43 @@
     if (node === wrap) return true;
     if (node.nodeType === 1) {
       if (node.id === 'oc-wrap' || node.id === 'oc-global-highlight-styles') return true;
-      if (typeof node.classList !== 'undefined' && node.classList.contains('oc-beacon')) return true;
+      if (typeof node.classList === 'undefined') return false;
+      // Beacons and viewport markers are mounted on documentElement, which the observer
+      // now watches, so both have to be recognised or our own drawing retriggers a scan.
+      if (node.classList.contains('oc-beacon')) return true;
+      if (node.classList.contains('oc-viewport-marker')) return true;
     }
     return false;
   }
 
+  // A mutation is ours if it happened inside our UI, or if every node it added or
+  // removed is ours. Without the node check, drawing a beacon on documentElement would
+  // schedule a rescan, which redraws the beacon, which schedules another rescan.
+  function isOculistMutation(m) {
+    if (isOculistNode(m.target)) return true;
+    var total = m.addedNodes.length + m.removedNodes.length;
+    if (total === 0) return false;
+    for (var i = 0; i < m.addedNodes.length; i++) {
+      if (!isOculistNode(m.addedNodes[i])) return false;
+    }
+    for (var j = 0; j < m.removedNodes.length; j++) {
+      if (!isOculistNode(m.removedNodes[j])) return false;
+    }
+    return true;
+  }
+
+  // SPA frameworks like Turbo (GitHub) navigate by swapping in a whole new <body>. That
+  // takes our bar down with it while `wrap` still points at the detached element, so the
+  // finder looked closed-but-unopenable. Put it back on the current body instead.
+  function remountIfDetached() {
+    if (!wrap || wrap.isConnected || !document.body) return false;
+    document.body.appendChild(wrap);
+    injectHighlightStyles();
+    return true;
+  }
+
   function rescanAfterMutation() {
+    remountIfDetached();
     if (!wrap || !lastTerm) return;
     var previousActiveIndex = activeIndex;
     performSearch(lastTerm);
@@ -1807,14 +1866,15 @@
     if (domObserver || !window.MutationObserver) return;
     domObserver = new window.MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {
-        var m = mutations[i];
-        if (isOculistNode(m.target)) continue;
+        if (isOculistMutation(mutations[i])) continue;
         if (domObserverTimer) clearTimeout(domObserverTimer);
         domObserverTimer = setTimeout(rescanAfterMutation, 350);
         return;
       }
     });
-    domObserver.observe(document.body, { childList: true, subtree: true });
+    // documentElement, not body — an observer bound to a body that gets swapped out goes
+    // deaf, and the swap itself is a mutation we need to see.
+    domObserver.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   // ── Site override detection ─────────────────────────────────────────────────
@@ -2158,7 +2218,7 @@
       e.stopPropagation();
       e.stopImmediatePropagation();
       if (typeof window.__ocToggle === 'function') {
-        if (wrap) {
+        if (wrap && wrap.isConnected) {
           input.focus();
           input.select();
         } else {
@@ -3267,6 +3327,10 @@
     window.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
 
     window.__ocToggle = function () {
+      // A detached wrap means an SPA swapped the body out from under us. Tear the stale
+      // state down first so this reads as "closed" and the branch below rebuilds it,
+      // instead of toggling an element that is no longer in the document.
+      if (wrap && !wrap.isConnected) window.__ocDestroy();
       if (wrap) {
         window.__ocDestroy();
       } else {
@@ -3292,9 +3356,26 @@
       if (!changes['oc-settings']) return;
       var nv = changes['oc-settings'].newValue;
       if (!nv) return;
+      // Our own writes echo back here. Rebuilding the panel on that echo detaches the
+      // live <input type="color">, dismissing the native colour dialog mid-interaction.
+      // Drop the matching entry and everything queued before it — a coalesced write can
+      // swallow the earlier echoes, and those are stale by definition. Applying an echo's
+      // values is skipped too: for our own write memory is already current or newer, so
+      // copying an older payload back in would undo the most recent pick.
+      var echo = stableStringify(nv);
+      var selfIndex = pendingSelfWrites.indexOf(echo);
+      if (selfIndex !== -1) {
+        pendingSelfWrites.splice(0, selfIndex + 1);
+        return;
+      }
+
+      var changed = false;
       SETTINGS_KEYS.forEach(function(k) {
-        if (k in nv) settings[k] = nv[k];
+        if (!(k in nv)) return;
+        if (stableStringify(nv[k]) !== stableStringify(settings[k])) changed = true;
+        settings[k] = nv[k];
       });
+      if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
       if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
         window.__ocDestroy();
