@@ -204,6 +204,7 @@
   var domObserverTimer      = null;
   var noticeEl              = null;
   var noticeDismissed       = false;
+  var overlayResizeTimer    = null;
 
   // Sites known to render page text outside the accessible DOM (canvas, custom
   // virtualized editors) where Oculist's text-node search can't find anything.
@@ -219,8 +220,12 @@
       clearTimeout(viewportMarkersTimer);
       viewportMarkersTimer = null;
     }
+    if (overlayResizeTimer) {
+      clearTimeout(overlayResizeTimer);
+      overlayResizeTimer = null;
+    }
     try {
-      window.removeEventListener('resize', scheduleViewportMarkersUpdate, { passive: true });
+      window.removeEventListener('resize', handleResize, { passive: true });
     } catch (e) {}
     if (domObserver) {
       domObserver.disconnect();
@@ -1521,10 +1526,10 @@
     });
   }
 
-  function animate(rect) {
-    if (!wrap) return;
-    cancelBeacons();
-
+  // The accessibility overlays (border, label, shape) are absolutely positioned in
+  // document coordinates from a one-shot rect, so any reflow strands them. Split out
+  // from animate() so a resize can redraw them in place without replaying the beacon.
+  function drawActiveOverlays(rect) {
     var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
 
     // Draw accessibility overlays (border + label) if motion is not completely off
@@ -1536,6 +1541,38 @@
 
     if (motion === 'off') {
       drawStaticActiveBorder(rect);
+    }
+  }
+
+  // Resize reflows the page and moves the active match, but the overlays keep their
+  // old document coordinates. Redraw them at the match's current rect. Deliberately
+  // does not re-run the beacon effect: that is transient, and replaying it on every
+  // resize is noise for exactly the low-vision and reduced-motion users who rely on
+  // these overlays.
+  function repositionActiveOverlays() {
+    if (!wrap || activeIndex < 0 || activeIndex >= searchRanges.length) return;
+    var range = searchRanges[activeIndex];
+    if (!range) return;
+    var rect;
+    try {
+      rect = range.getBoundingClientRect();
+    } catch (e) {
+      return;
+    }
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+    cancelBeacons();
+    drawActiveOverlays(rect);
+  }
+
+  function animate(rect) {
+    if (!wrap) return;
+    cancelBeacons();
+
+    drawActiveOverlays(rect);
+
+    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+
+    if (motion === 'off') {
       return;
     }
 
@@ -2088,6 +2125,15 @@
   function scheduleViewportMarkersUpdate() {
     if (viewportMarkersTimer) clearTimeout(viewportMarkersTimer);
     viewportMarkersTimer = setTimeout(updateViewportMarkers, 100);
+  }
+
+  // Bound to resize only, not folded into scheduleViewportMarkersUpdate — that one is
+  // shared with handleScroll, which fades the overlays out on purpose, and redrawing
+  // them 100ms later would resurrect what the scroll just dismissed.
+  function handleResize() {
+    scheduleViewportMarkersUpdate();
+    if (overlayResizeTimer) clearTimeout(overlayResizeTimer);
+    overlayResizeTimer = setTimeout(repositionActiveOverlays, 100);
   }
 
   function handleScroll() {
@@ -3229,7 +3275,7 @@
         startDomObserver();
         checkSiteOverride(false);
         window.addEventListener('scroll', handleScroll, { passive: true });
-        window.addEventListener('resize', scheduleViewportMarkersUpdate, { passive: true });
+        window.addEventListener('resize', handleResize, { passive: true });
         if (input) {
           input.focus();
           input.select();
