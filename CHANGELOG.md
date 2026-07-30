@@ -51,6 +51,12 @@ keeps landing here until it ships.
 
 ### Removed
 
+* **The bookmarklet.** Oculist is a Chrome extension only. `oculist.js` and
+  `bookmarklet.min.js` are gone, along with the terser and README-sync steps in the build.
+  Its install instructions had already been dropped from the README back in June, and the
+  source had fallen behind the extension — the no-match notice, SPA recovery, the colour
+  picker fix, and the default blocklist never landed in it. `npm run build` now just
+  packages the extension.
 * The custom effects plugin API, which evaluated `new Function()` over `localStorage` data.
   Removing it eliminated that sink along with ~150 lines of unreachable code.
 * The Soft Glow effect and the sunglasses tab-icon favicon swap.
