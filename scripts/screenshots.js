@@ -15,6 +15,35 @@ const OUT = path.resolve(__dirname, '../screenshots');
 const GEAR  = '#oc-wrap >> [aria-label="Options"]';
 const INPUT = '#oc-wrap >> .oc-input';
 
+// Beacon effects mount .oc-beacon elements on documentElement and remove them a moment
+// after their animation ends, so a shot taken too early catches streaks or a half-faded
+// spotlight vignette across the page.
+//
+// Ask the Web Animations API directly rather than watching the element count: Spotlight
+// holds a constant two elements for its whole 2-4s run (longer still under Low Vision's
+// "slow" speed), so a "count stopped changing" check reports settled while the effect is
+// mid-flight. Waiting for zero elements is no good either — Low Vision's border and match
+// label are meant to stay on screen. Running animations is the signal that means what we
+// want in both cases.
+async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
+  await page.waitForTimeout(300); // effects can be scheduled a tick after the keypress
+  await page
+    .waitForFunction(
+      () =>
+        document
+          .getAnimations()
+          .filter((a) => a.playState === 'running')
+          .every((a) => {
+            const target = a.effect && a.effect.target;
+            return !(target && target.classList && target.classList.contains('oc-beacon'));
+          }),
+      null,
+      { timeout: timeoutMs }
+    )
+    .catch(() => console.warn(`  ! beacon animations still running after ${timeoutMs}ms`));
+  await page.waitForTimeout(500); // effects clear their elements on a short timeout after
+}
+
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
 
@@ -70,9 +99,13 @@ const INPUT = '#oc-wrap >> .oc-input';
   await page.waitForTimeout(380);
   await page.screenshot({ path: `${OUT}/03-beacon-warp.png` });
 
-  // 04 — settings panel open
+  // 04 — settings panel open. This one is about the panel, so the page behind it must be
+  // quiet: let the Warp Drive beacon fired above finish before opening the gear, or its
+  // streaks are still crossing the page underneath.
+  await waitForBeaconsToSettle(page);
   await page.locator(GEAR).click();
-  await page.waitForTimeout(500);
+  await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
+  await page.waitForTimeout(600); // panel open animation
   await page.screenshot({ path: `${OUT}/04-settings.png` });
 
   // 05 — Spotlight effect beacon for variety
@@ -119,10 +152,11 @@ const INPUT = '#oc-wrap >> .oc-input';
   await page.waitForTimeout(600);
   // Enter is what draws the thick border and the "Match #n of m" label — they hang off
   // the beacon draw cycle, not the highlight pass. Both fade in with fill:'forwards' and
-  // persist until the next search, so the long wait outlives the transient beacon rings
-  // (animationSpeed is 'slow' under this profile) and leaves only the durable overlays.
+  // persist until the next search, so settling leaves the durable overlays on screen with
+  // the transient beacon (animationSpeed is 'slow' under this profile) already gone.
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(3000);
+  await waitForBeaconsToSettle(page);
+  await page.waitForTimeout(400); // let the border/label fade-in finish
   const backdrop = (await page.screenshot()).toString('base64');
 
   const composite = await ctx.newPage();
@@ -131,14 +165,16 @@ const INPUT = '#oc-wrap >> .oc-input';
     <style>
       html,body { margin:0; padding:0; width:1280px; height:800px; overflow:hidden; }
       .bg { position:absolute; inset:0; width:1280px; height:800px; }
-      .dim { position:absolute; inset:0; background:rgba(9,9,11,0.28); }
+      /* No dim layer over the backdrop. It made the popup pop, but in a shot whose whole
+         subject is the Low Vision profile it read as a product behaviour — as if picking
+         that profile greys the page out. The popup is dark on a light page and carries its
+         own shadow, so it separates fine on its own. */
       .popup {
         position:absolute; top:16px; right:24px; width:320px;
         border-radius:10px; box-shadow:0 18px 50px rgba(0,0,0,0.55);
       }
     </style>
     <img class="bg" src="data:image/png;base64,${backdrop}">
-    <div class="dim"></div>
     <img class="popup" src="data:image/png;base64,${popupShot}">
   `);
   await composite.waitForTimeout(400);

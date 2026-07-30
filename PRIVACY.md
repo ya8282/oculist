@@ -1,6 +1,6 @@
 # Privacy Policy — Oculist
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-30
 
 Oculist does not collect, transmit, sell, or share any personal data. There are
 no analytics, no tracking, and no external servers.
@@ -13,6 +13,12 @@ settings — using Chrome's
 `chrome.storage.sync` API. These settings live in your browser. If you are
 signed into Chrome, they sync across your own devices through your Google
 account; they are never sent to the developer or any third party.
+
+Oculist ships with `github.com` in the per-site disabled list by default,
+because GitHub's client-side navigation prevents the finder from working
+reliably there. This is only a starting default — you can enable Oculist on
+github.com from the toolbar popup at any time, and that choice is kept across
+extension updates. No other site is disabled out of the box.
 
 ## Page content
 
