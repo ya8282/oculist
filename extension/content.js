@@ -175,7 +175,8 @@
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
     effectPointingArrows: 'Pointing Arrows',
-    effectImpactBurst: 'Impact Burst'
+    effectImpactBurst: 'Impact Burst',
+    effectSpeedLines: 'Speed Lines'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -221,7 +222,8 @@
     lightning: { label: i18n.effectLightning, run: animateLightning },
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
     arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
-    burst: { label: i18n.effectImpactBurst, run: animateImpactBurst }
+    burst: { label: i18n.effectImpactBurst, run: animateImpactBurst },
+    speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -565,6 +567,97 @@
       ], {
         duration: getBeaconDuration(SPIKE_MS),
         easing: 'ease-out',
+        fill: 'forwards'
+      });
+    }
+
+    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
+    document.documentElement.appendChild(fragment);
+
+    setTimeout(function () {
+      for (var j = 0; j < elements.length; j++) {
+        elements[j].remove();
+      }
+    }, getBeaconDuration(totalMs + 100));
+  }
+
+  function animateSpeedLines(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var scale = getBeaconScale();
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+
+    // Raw (unscaled) base durations in ms — every animate() and the cleanup
+    // timeout wrap these through getBeaconDuration() so they respect the
+    // user's animationSpeed setting consistently, mirroring animateImpactBurst.
+    var FLASH_MS = 130;
+    var LINE_MS = 550;
+    var STAGGER_STEP_MS = 30;
+    var STAGGER_STEPS = 3;
+    var totalMs = Math.max(FLASH_MS, LINE_MS + STAGGER_STEP_MS * STAGGER_STEPS);
+
+    var elements = [];
+    var fragment = document.createDocumentFragment();
+
+    // 1. Brief hitstop flash-cut — lower peak opacity than a full flash effect
+    // since the radiating lines carry most of the visual weight here.
+    var flash = document.createElement('div');
+    flash.className = 'oc-beacon';
+    flash.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'background:#ffffff',
+      'pointer-events:none', 'z-index:2147483643',
+      'opacity:0'
+    ].join(';');
+    fragment.appendChild(flash);
+    elements.push(flash);
+
+    flash.animate([
+      { opacity: 0 },
+      { opacity: 0.5, offset: 0.4 },
+      { opacity: 0 }
+    ], {
+      duration: getBeaconDuration(FLASH_MS),
+      easing: 'ease-out',
+      fill: 'forwards'
+    });
+
+    // 2. Uniform manga-style speed lines radiating outward at evenly spaced
+    // angles from the match center — deliberately straight, thin, and evenly
+    // distributed (not a star polygon) to stay visually distinct from the
+    // sibling Impact Burst effect.
+    var lineCount = settings.performanceMode ? 8 : 16;
+    var lineWidth = Math.max(1, Math.min(3, 2 * scale));
+    var viewportDiagonal = Math.sqrt(window.innerWidth * window.innerWidth + window.innerHeight * window.innerHeight);
+    var lineLength = viewportDiagonal * 0.5 * scale;
+
+    for (var i = 0; i < lineCount; i++) {
+      var angle = (360 / lineCount) * i;
+      var delay = (i % (STAGGER_STEPS + 1)) * STAGGER_STEP_MS;
+      var line = document.createElement('div');
+      line.className = 'oc-beacon';
+      line.style.cssText = [
+        'position:fixed',
+        'left:' + cx + 'px', 'top:' + cy + 'px',
+        'width:' + lineLength + 'px', 'height:' + lineWidth + 'px',
+        'background:linear-gradient(90deg, #ffffff, ' + color + ' 18%, ' + color + ' 55%, transparent)',
+        'transform-origin:0 50%',
+        'pointer-events:none', 'z-index:2147483642',
+        'opacity:0'
+      ].join(';');
+      fragment.appendChild(line);
+      elements.push(line);
+
+      line.animate([
+        { transform: 'rotate(' + angle + 'deg) scaleX(0)', opacity: 0 },
+        { transform: 'rotate(' + angle + 'deg) scaleX(1)', opacity: 1, offset: 0.3 },
+        { transform: 'rotate(' + angle + 'deg) scaleX(0.3)', opacity: 0 }
+      ], {
+        duration: getBeaconDuration(LINE_MS),
+        delay: getBeaconDuration(delay),
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
         fill: 'forwards'
       });
     }
