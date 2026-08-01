@@ -174,8 +174,7 @@
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
-    effectPointingArrows: 'Pointing Arrows',
-    effectImpactBurst: 'Impact Burst'
+    effectPointingArrows: 'Pointing Arrows'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -220,8 +219,7 @@
     flame: { label: i18n.effectInfernoFlame, run: animateFlame },
     lightning: { label: i18n.effectLightning, run: animateLightning },
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
-    arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
-    burst: { label: i18n.effectImpactBurst, run: animateImpactBurst }
+    arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -463,120 +461,6 @@
     setTimeout(function() {
       laserContainer.remove();
     }, getBeaconDuration(2100));
-  }
-
-  function animateImpactBurst(rect) {
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-
-    var scale = getBeaconScale();
-    var color = getEffectiveColors().beacon || '#fbbf24';
-    var cx = rect.left + rect.width / 2;
-    var cy = rect.top + rect.height / 2;
-
-    // Raw (unscaled) base durations in ms — every animate() and the cleanup
-    // timeout wrap these through getBeaconDuration() so they respect the
-    // user's animationSpeed setting consistently, mirroring animateIris.
-    var FLASH_MS = 130;
-    var BURST_MS = 900;
-    var SPIKE_MS = 700;
-    var totalMs = Math.max(FLASH_MS, BURST_MS, SPIKE_MS);
-
-    var elements = [];
-    var fragment = document.createDocumentFragment();
-
-    // 1. Hard white "hitstop" flash-cut across the viewport
-    var flash = document.createElement('div');
-    flash.className = 'oc-beacon';
-    flash.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
-      'background:#ffffff',
-      'pointer-events:none', 'z-index:2147483643',
-      'opacity:0'
-    ].join(';');
-    fragment.appendChild(flash);
-    elements.push(flash);
-
-    flash.animate([
-      { opacity: 0 },
-      { opacity: 0.85, offset: 0.35 },
-      { opacity: 0 }
-    ], {
-      duration: getBeaconDuration(FLASH_MS),
-      easing: 'ease-out',
-      fill: 'forwards'
-    });
-
-    // 2. Jagged comic-style star burst snapped onto the active match
-    var burstSize = Math.max(rect.width, rect.height, 20) * 2.6 * scale;
-    var burst = document.createElement('div');
-    burst.className = 'oc-beacon';
-    burst.style.cssText = [
-      'position:fixed',
-      'left:' + (cx - burstSize / 2) + 'px',
-      'top:' + (cy - burstSize / 2) + 'px',
-      'width:' + burstSize + 'px', 'height:' + burstSize + 'px',
-      'background:' + color,
-      'clip-path:polygon(50% 0%, 61% 35%, 93% 15%, 72% 45%, 100% 50%, 72% 55%, 93% 85%, 61% 65%, 50% 100%, 39% 65%, 7% 85%, 28% 55%, 0% 50%, 28% 45%, 7% 15%, 39% 35%)',
-      'box-shadow:0 0 ' + (20 * scale) + 'px ' + color + ', 0 0 ' + (40 * scale) + 'px ' + color,
-      'pointer-events:none', 'z-index:2147483642',
-      'opacity:0'
-    ].join(';');
-    fragment.appendChild(burst);
-    elements.push(burst);
-
-    burst.animate([
-      { transform: 'scale(0.2)', opacity: 0 },
-      { transform: 'scale(1.3)', opacity: 1, offset: 0.3 },
-      { transform: 'scale(1)', opacity: 0.95, offset: 0.55 },
-      { transform: 'scale(1.05)', opacity: 0 }
-    ], {
-      duration: getBeaconDuration(BURST_MS),
-      easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
-      fill: 'forwards'
-    });
-
-    // 3. Short radiating spike lines evenly distributed around the match —
-    // same layered-loop pattern as animateAnimeLaser's spark generation,
-    // but evenly spaced angles (reads as "impact") instead of random ones
-    // (which read as "explosion").
-    var spikeCount = settings.performanceMode ? 4 : 8;
-    var spikeLength = Math.max(rect.width, rect.height, 20) * 1.4 * scale;
-    for (var i = 0; i < spikeCount; i++) {
-      var angle = (360 / spikeCount) * i;
-      var spike = document.createElement('div');
-      spike.className = 'oc-beacon';
-      spike.style.cssText = [
-        'position:fixed',
-        'left:' + cx + 'px', 'top:' + cy + 'px',
-        'width:' + spikeLength + 'px', 'height:' + (3 * scale) + 'px',
-        'background:linear-gradient(90deg, ' + color + ', transparent)',
-        'transform-origin:0 50%',
-        'pointer-events:none', 'z-index:2147483641',
-        'opacity:0'
-      ].join(';');
-      fragment.appendChild(spike);
-      elements.push(spike);
-
-      spike.animate([
-        { transform: 'rotate(' + angle + 'deg) scaleX(0)', opacity: 0 },
-        { transform: 'rotate(' + angle + 'deg) scaleX(1.15)', opacity: 1, offset: 0.35 },
-        { transform: 'rotate(' + angle + 'deg) scaleX(1)', opacity: 0.8, offset: 0.6 },
-        { transform: 'rotate(' + angle + 'deg) scaleX(0.7)', opacity: 0 }
-      ], {
-        duration: getBeaconDuration(SPIKE_MS),
-        easing: 'ease-out',
-        fill: 'forwards'
-      });
-    }
-
-    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
-    document.documentElement.appendChild(fragment);
-
-    setTimeout(function () {
-      for (var j = 0; j < elements.length; j++) {
-        elements[j].remove();
-      }
-    }, getBeaconDuration(totalMs + 100));
   }
 
   function animateIris(rect) {
