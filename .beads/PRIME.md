@@ -18,9 +18,12 @@ Add a one-line index entry here whenever you `bd remember` something new.
   the PARA project wrapper (backlog, plans, artifacts) and has **no remote**. The
   inner `repo/` is the code and pushes to `github.com/ya8282/oculist`. Always use
   `git -C <absolute-path>` so you do not commit to the wrong one.
-- Bead history syncs to `refs/dolt/data` on the `repo/` GitHub remote, driven by
-  the beads git hooks (`bd hooks list` to verify). It is not a Dolt remote —
-  `bd dolt remote list` is empty and that is correct.
+- Bead history syncs to `refs/dolt/data` on the `repo/` GitHub remote, but **only
+  when you run `bd dolt push`**. The git hooks do not do it — a normal `git push`
+  leaves the ref untouched, and the hook exits 0 silently either way, so there is
+  no warning that bead history is unsynced. `sync.remote` in `.beads/config.yaml`
+  names the target; `bd dolt push` derives the Dolt remote from git origin on the
+  fly, which is why `bd dolt show` reports `Remotes: (none)` even when sync works.
 - Task tracking is split: beads is the plan of record for code work, while
   `../artifacts/tasks/backlog.md` holds the longer-range product backlog (FI-*,
   RP-*, BUG-* ids). That file is gated to `/backlog`; do not hand-edit it.
@@ -72,6 +75,7 @@ Traps in the CLI itself:
 [ ] run the gate: npm test        # 22 tests; several launch real Chromium
 [ ] bd close <ids>
 [ ] bd export -o .beads/issues.jsonl      # see note below
+[ ] bd dolt push                          # bead history -> refs/dolt/data
 [ ] git -C <abs-path-to-repo> status, then report; do not push unbidden
 ```
 
