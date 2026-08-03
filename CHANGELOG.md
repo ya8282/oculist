@@ -9,6 +9,15 @@ below the 1.5.0 heading is what landed across that span.
 
 New work lands here until the next release.
 
+### Added
+
+* **Oculist now respects your operating system's "reduce motion" setting.** Previously the
+  beacon animation honoured only the extension's own Motion Sensitivity setting, so a system
+  configured for reduced motion still got the full effect until you found and changed that
+  setting yourself. The OS preference is treated as a downgrade only — it turns the full effect
+  into the reduced one, and never overrides an explicit Reduced or Off choice upward. Toggling
+  the system setting takes effect on the next match, with no page reload.
+
 ### Fixed
 
 * **Scrolling away from a match no longer snaps you back.** The rescan that re-attaches

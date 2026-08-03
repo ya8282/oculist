@@ -1560,11 +1560,24 @@
     });
   }
 
+  // The OS-level preference is a downgrade-only signal: it can turn 'full' into
+  // 'reduced', but it never overrides an explicit 'reduced'/'off' upward. Matching
+  // live (not once at load) means toggling the OS setting takes effect immediately.
+  var reducedMotionQuery = window.matchMedia
+    ? window.matchMedia('(prefers-reduced-motion: reduce)')
+    : null;
+
+  function effectiveMotion() {
+    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    if (motion === 'full' && reducedMotionQuery && reducedMotionQuery.matches) return 'reduced';
+    return motion;
+  }
+
   // The accessibility overlays (border, label, shape) are absolutely positioned in
   // document coordinates from a one-shot rect, so any reflow strands them. Split out
   // from animate() so a resize can redraw them in place without replaying the beacon.
   function drawActiveOverlays(rect) {
-    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    var motion = effectiveMotion();
 
     // Draw accessibility overlays (border + label) if motion is not completely off
     if (motion !== 'off') {
@@ -1604,7 +1617,7 @@
 
     drawActiveOverlays(rect);
 
-    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    var motion = effectiveMotion();
 
     if (motion === 'off') {
       return;
