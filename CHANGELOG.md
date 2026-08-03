@@ -5,10 +5,21 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [1.5.0] — unreleased
+## [1.6.0] — unreleased
 
-The accessibility and reliability release. Not yet published to the Chrome Web Store; new work
-keeps landing here until it ships.
+New work lands here until the next release.
+
+### Fixed
+
+* **Scrolling away from a match no longer snaps you back.** The rescan that re-attaches
+  highlights after the page's own DOM changes (lazy-loaded images, infinite feeds) also
+  re-ran the scroll-into-view, yanking the viewport back to the active match while you were
+  reading elsewhere. The rescan now re-highlights without navigating; typing a search and the
+  prev/next/replay controls still scroll as before.
+
+## [1.5.0] — 2026-07-31
+
+The accessibility and reliability release. Published to the Chrome Web Store.
 
 ### Added
 
