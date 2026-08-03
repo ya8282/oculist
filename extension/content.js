@@ -1864,7 +1864,9 @@
     if (searchRanges.length > 0) {
       activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
-      highlightActiveRange(false);
+      // skipScroll: a background rescan re-attaches highlights, it must not yank the
+      // viewport back to the match while the user is scrolling elsewhere.
+      highlightActiveRange(false, true);
     }
   }
 
@@ -1977,7 +1979,7 @@
   }
 
   // Display the active match with the high-visibility visual animation
-  function highlightActiveRange(shouldAnimate) {
+  function highlightActiveRange(shouldAnimate, skipScroll) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
 
     var activeRange = searchRanges[activeIndex];
@@ -2000,7 +2002,7 @@
       rect.right <= (window.innerWidth || document.documentElement.clientWidth)
     );
 
-    if (!isFullyInViewport) {
+    if (!isFullyInViewport && !skipScroll) {
       var element = activeRange.startContainer.parentElement;
       if (element) {
         triggerAutoScrollFlag();
