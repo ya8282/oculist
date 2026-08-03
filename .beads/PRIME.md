@@ -14,10 +14,16 @@ Add a one-line index entry here whenever you `bd remember` something new.
 
 - The DB lives in `repo/.beads`. Run `bd` from `repo/` or below; from the outer
   `oculist/` directory it resolves nothing. `bd where` confirms.
-- `oculist/` and `oculist/repo/` are **two separate git repos**. The outer one is
-  the PARA project wrapper (backlog, plans, artifacts) and has **no remote**. The
-  inner `repo/` is the code and pushes to `github.com/ya8282/oculist`. Always use
+- `oculist/` and `oculist/repo/` are **two separate git repos with different
+  visibility**. The inner `repo/` is the code and is **PUBLIC**
+  (`github.com/ya8282/oculist`). The outer wrapper holds the planning material
+  (backlog, plans, sessions, store assets) and is **PRIVATE**
+  (`github.com/ya8282/oculist-workspace`); it gitignores `repo/`. Always use
   `git -C <absolute-path>` so you do not commit to the wrong one.
+- **`repo/` is public — check before adding anything to it.** Bead tracking lives
+  here deliberately: it is the issue tracker for an open-source project. Anything
+  that should not be public belongs in the private wrapper instead. Note that
+  score-viewer, whose beads layout this copies, is a private repo.
 - Bead history syncs to `refs/dolt/data` on the `repo/` GitHub remote, but **only
   when you run `bd dolt push`**. The git hooks do not do it — a normal `git push`
   leaves the ref untouched, and the hook exits 0 silently either way, so there is
