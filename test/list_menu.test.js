@@ -1,0 +1,328 @@
+// List menu popover UI (oculist-l6m.9): the overlay surface for saved term lists, built
+// on top of the storage CRUD from oculist-l6m.8 (listSavedLists/saveList/renameList/
+// deleteList). This bead is UI only — every assertion here goes through real clicks,
+// fills, and keypresses against the popover's DOM, never through a window.__oc* hook
+// (those six exist purely for the storage layer's own tests to reach an isolated JS
+// world; the list-menu UI itself has no test hook of its own and none should be added).
+//
+// Needs a real browser for the same reasons as chip_row.test.js and list_storage.test.js:
+// real layout for the popover, and chrome.storage.sync/session round trips that only work
+// with the real extension loaded. CDP is used here only for out-of-band setup/teardown
+// (clearing saved lists and the working list between tests) — never to reach into
+// content.js's closure state or to drive the test's actual assertions.
+
+const { test, describe, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert');
+const http = require('node:http');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const EXTENSION = path.resolve(__dirname, '../extension');
+
+const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world, nothing else on this page.</p>';
+
+const INPUT = '#oc-wrap >> .oc-input';
+const COUNT = '#oc-wrap >> .oc-count';
+const PREV_BTN = '#oc-wrap >> .oc-up-btn';
+const NEXT_BTN = '#oc-wrap >> .oc-down-btn';
+const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
+
+const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
+const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
+
+const LISTS_BTN = '#oc-wrap >> button[title="Saved Lists"]';
+const LISTS_PANEL = '#oc-wrap >> #oc-lists-panel';
+const SAVE_INPUT = '#oc-wrap >> .oc-list-save-input';
+const SAVE_BTN = '#oc-wrap >> .oc-list-save-btn';
+const LIST_ITEM_NAME = '#oc-wrap >> .oc-list-item-name';
+const LIST_RENAME_BTN = '#oc-wrap >> .oc-list-rename-btn';
+const LIST_DELETE_BTN = '#oc-wrap >> .oc-list-delete-btn';
+const LIST_RENAME_INPUT = '#oc-wrap >> .oc-list-rename-input';
+const LIST_RENAME_CONFIRM = '#oc-wrap >> .oc-list-rename-confirm';
+const LIST_EMPTY = '#oc-wrap >> .oc-list-empty';
+const NOTICE = '#oc-wrap >> .oc-notice';
+
+describe('List menu popover (saved lists UI)', () => {
+  let server, ctx, page, client, isolatedContextId, origin;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // channel:'chromium' is load-bearing — the default bundled build is the headless
+    // shell, which silently loads no extensions at all.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+    assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
+
+  function clearSavedLists() {
+    return evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.get(null, (data) => {" +
+      "  var keys = Object.keys(data || {}).filter((k) => k.indexOf('oc-list-') === 0);" +
+      "  if (keys.length === 0) { resolve(); return; }" +
+      "  chrome.storage.sync.remove(keys, resolve);" +
+      "}))"
+    );
+  }
+
+  function clearWorkList() {
+    return evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
+  }
+
+  // Reads every oc-list-* entry directly out of chrome.storage.sync, bypassing the
+  // popover UI entirely — used to confirm a rename/delete genuinely persisted, rather
+  // than trusting the popover's own re-render (which an optimistic-UI-only bug could
+  // satisfy without ever writing anything to storage).
+  function rawSavedLists() {
+    return evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.get(null, (data) => {" +
+      "  var out = Object.keys(data || {}).filter((k) => k.indexOf('oc-list-') === 0).map((k) => data[k]);" +
+      "  resolve(out);" +
+      "}))"
+    );
+  }
+
+  // Every test starts from a closed overlay, an empty working list, and no saved lists,
+  // so nothing leaks between tests.
+  beforeEach(async () => {
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(100);
+    await clearSavedLists();
+    await clearWorkList();
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForTimeout(150);
+  });
+
+  async function addTerm(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+  }
+
+  function chipTerms() {
+    return page.locator(CHIP_TERM).allTextContents();
+  }
+
+  function activeChipTerm() {
+    return page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const el = root.querySelector('.oc-chip-term.active');
+      return el ? el.textContent : null;
+    });
+  }
+
+  async function openListsMenu() {
+    await page.locator(LISTS_BTN).click();
+    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+  }
+
+  async function saveCurrentAs(name) {
+    await page.locator(SAVE_INPUT).fill(name);
+    await page.locator(SAVE_BTN).click();
+    await page.waitForTimeout(250);
+  }
+
+  test('saving the working list and loading it back replaces the working list, with no scan', async () => {
+    // Terms deliberately absent from PAGE — if loading a saved list ever ran a scan, a
+    // "no matches" notice and non-blank counts would give it away, exactly the same tell
+    // chip_row.test.js's own carry-over-on-mount test relies on.
+    await addTerm('zzzalpha');
+    await addTerm('zzzbeta');
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta']);
+
+    await openListsMenu();
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), true, 'Save starts disabled on an empty name');
+    await saveCurrentAs('My List');
+
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['My List']);
+    assert.strictEqual(await page.locator(SAVE_INPUT).inputValue(), '', 'the save input clears itself after a successful save');
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), true, 'Save goes back to disabled once its input is empty again');
+
+    // Saving never touches the working list.
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta']);
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'popover should be closed');
+    assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
+
+    // Change the working list before loading the saved one back, so the load is the
+    // thing that visibly changes it.
+    await addTerm('zzzgamma');
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta', 'zzzgamma']);
+
+    await openListsMenu();
+    await page.locator(LIST_ITEM_NAME).click();
+    await page.waitForTimeout(250);
+
+    // The saved two-term list replaced the three-term working list outright, with no
+    // confirmation prompt anywhere in this flow.
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta']);
+    assert.strictEqual(await activeChipTerm(), null, 'a freshly loaded list has no active chip yet');
+    assert.deepStrictEqual(
+      await page.locator(CHIP_COUNT).allTextContents(),
+      ['', ''],
+      'chip hit counts must stay blank until the user clicks a chip to scan'
+    );
+    assert.strictEqual(await page.locator(COUNT).textContent(), '', 'the bar count must also stay blank — no scan ran');
+    assert.strictEqual(await page.locator(PREV_BTN).isDisabled(), true);
+    assert.strictEqual(await page.locator(NEXT_BTN).isDisabled(), true);
+    assert.strictEqual(await page.locator(INPUT).inputValue(), '', 'the find input is not touched by a load');
+    assert.strictEqual(await page.locator(NOTICE).count(), 0, 'loading a list must never raise a "no matches" notice');
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'the popover closes itself once a list is loaded');
+  });
+
+  test('rename and delete work through the popover', async () => {
+    await addTerm('roundtrip');
+    await openListsMenu();
+    await saveCurrentAs('Original Name');
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Original Name']);
+
+    await page.locator(LIST_RENAME_BTN).click();
+    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: 5000 });
+    await page.locator(LIST_RENAME_INPUT).fill('Renamed List');
+    await page.locator(LIST_RENAME_CONFIRM).click();
+    await page.waitForTimeout(250);
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Renamed List']);
+
+    // Confirm the rename genuinely reached chrome.storage.sync — not just an
+    // optimistic re-render of the popover's own in-memory copy.
+    const rawAfterRename = await rawSavedLists();
+    assert.strictEqual(rawAfterRename.length, 1);
+    assert.strictEqual(rawAfterRename[0].name, 'Renamed List');
+
+    // A close/reopen of the popover re-fetches from storage via listSavedLists() — the
+    // renamed name must survive that fresh read, not just linger in the still-open DOM.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    await openListsMenu();
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Renamed List']);
+
+    await page.locator(LIST_DELETE_BTN).click();
+    await page.waitForTimeout(250);
+    assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0, 'the deleted list must no longer be listed');
+    assert.strictEqual(
+      (await page.locator(LIST_EMPTY).textContent()).trim(),
+      'No saved lists yet.'
+    );
+
+    // Confirm the delete genuinely removed the oc-list-<id> key.
+    const rawAfterDelete = await rawSavedLists();
+    assert.strictEqual(rawAfterDelete.length, 0);
+  });
+
+  test('a blank or whitespace-only name keeps Save/Rename disabled instead of silently doing nothing', async () => {
+    await addTerm('blanktest');
+    await openListsMenu();
+
+    // Untouched (empty) input.
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), true);
+
+    // Whitespace-only is treated the same as empty — the control stays disabled, so a
+    // click (a native no-op on a disabled button) can never reach saveList()'s silent
+    // {ok:false, reason:'empty-name'} rejection.
+    await page.locator(SAVE_INPUT).fill('   ');
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), true);
+    // Nothing was actually saved by that whitespace-only attempt.
+    assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0);
+
+    // Real text re-enables it, proving the control is genuinely reactive rather than
+    // permanently stuck disabled.
+    await page.locator(SAVE_INPUT).fill('Real Name');
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), false);
+    await page.locator(SAVE_BTN).click();
+    await page.waitForTimeout(250);
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Real Name']);
+
+    // The identical guard on the rename control.
+    await page.locator(LIST_RENAME_BTN).click();
+    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: 5000 });
+    await page.locator(LIST_RENAME_INPUT).fill('   ');
+    assert.strictEqual(await page.locator(LIST_RENAME_CONFIRM).isDisabled(), true);
+    // The rename never went through — the list still shows its original saved name once
+    // the popover round-trips.
+    await page.locator(LIST_RENAME_INPUT).fill('Real Name');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'Escape must still close the popover from inside the rename field');
+  });
+
+  test('opening the list popover closes an open settings panel and the reverse; Escape closes only the popover', async () => {
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+
+    await page.locator(LISTS_BTN).click();
+    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    assert.strictEqual(await page.locator(SETTINGS_PANEL).count(), 0, 'opening the list popover must close settings');
+
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'opening settings must close the list popover');
+
+    // Close settings, reopen the list popover, and confirm the first Escape closes only it.
+    await page.locator(GEAR_BTN).click();
+    await page.waitForTimeout(100);
+    await page.locator(LISTS_BTN).click();
+    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'the first Escape should close only the popover');
+    assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open');
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    assert.strictEqual(await page.locator('#oc-wrap').count(), 0, 'the second Escape should close the whole overlay as before');
+  });
+});
