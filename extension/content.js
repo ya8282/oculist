@@ -2635,24 +2635,77 @@
 
   // ── Navigation ────────────────────────────────────────────────────────────────
 
+  // Ownership rule (oculist-l6m.19): lastTerm is kept in sync with whichever input value
+  // last actually produced the current searchRanges — a plain performSearch()/
+  // performDraftSearch() call sets it to the searched term, an Enter commit sets it to
+  // input.value, and the input's own debounce handler sets it to '' immediately before
+  // calling restoreActiveChip(). So term !== lastTerm is the ONLY reliable staleness
+  // signal: it is true precisely when the user typed something new and got here (Ctrl+G/
+  // F3/prev/next) before the debounced search ran, and false whenever the current
+  // searchRanges already reflects input.value, no matter which of those three paths built
+  // it. Two things that are NOT staleness on their own, and must never force a re-scan
+  // through this signal: an empty searchRanges (a real chip can legitimately have zero
+  // matches) and input.value not matching the active chip's term (leftover text from a
+  // previous commit, sitting untouched in the box after a chip click, still owns nothing).
+  // Treating either as "stale" is exactly what used to wipe oculist-dim-match (case 1) and
+  // desync the count/nav from what was actually highlighted after a restore (case 2).
   function findNext(backwards) {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
     var term = input.value;
-    if (!term) {
-      countEl.textContent = '';
-      setNavEnabled(false);
-      return;
+
+    if (term !== lastTerm) {
+      lastTerm = term;
+      if (term) {
+        // A working list in play must stay list-owned even for this catch-up search —
+        // performSearch() unconditionally deletes oculist-dim-match, which would blow
+        // away every other chip's dim ranges for a keystroke that has nothing to do with
+        // them.
+        if (workListTerms.length > 0) {
+          performDraftSearch(term);
+        } else {
+          performSearch(term);
+        }
+      } else {
+        // Mirrors the input's own debounce handler: an emptied input hands ownership
+        // back to whichever chip was active before (or blanks out via performSearch('')
+        // if there is none).
+        restoreActiveChip();
+      }
     }
 
-    if (term !== lastTerm || searchRanges.length === 0) {
-      lastTerm = term;
-      performSearch(term);
+    var hasActiveChip = activeTermIndex >= 0 && activeTermIndex < workListTerms.length;
+
+    if (!term) {
+      if (!hasActiveChip) {
+        // Nothing is or was being searched: no draft in the input, no chip to fall back
+        // on. Matches performSearch('')'s own blank (not "no match") count text.
+        countEl.textContent = '';
+        setNavEnabled(false);
+        return;
+      }
     }
 
     if (searchRanges.length === 0) {
+      // A restored-but-unscanned active chip (mount carry-over, or a saved list just
+      // loaded) has never had a real search run for it — termRanges[activeTermIndex] is
+      // undefined, not an empty array. Reporting "no match" here would be a false claim
+      // about the page; the carry-over contract is that restoring a list never scans
+      // until the user asks for one (see loadWorkList()/loadSavedList()), so this leaves
+      // the count blank instead, exactly like the pre-restore blank state. A chip that
+      // HAS been scanned and genuinely has zero matches (termRanges[activeTermIndex] is
+      // an array, just an empty one) still falls through to the real "no match" text below.
+      // Gated on !term as well: a non-empty draft with genuinely zero matches already got
+      // its own correct "no match" text from performDraftSearch() above, keyed off the
+      // draft's own scan, not off whatever an unrelated restored-but-unscanned chip's
+      // termRanges slot happens to hold — this branch must never clobber that.
+      if (!term && hasActiveChip && typeof termRanges[activeTermIndex] === 'undefined') {
+        countEl.textContent = '';
+        setNavEnabled(false);
+        return;
+      }
       countEl.textContent = i18n.noMatch;
       setNavEnabled(false);
       return;
