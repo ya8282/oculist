@@ -1910,6 +1910,36 @@
     return ranges;
   }
 
+  // Lite Mode's cheap path for an INACTIVE term (oculist-l6m.7): a plain indexOf scan
+  // over normalizedFlatText that counts matches without ever creating a Range or calling
+  // getClientRects — the layout-thrashing part of findRanges(). No visibility filtering
+  // happens here, so this count can be higher than what findRanges() would report for the
+  // same term (invisible matches are counted too); activating the term's chip runs
+  // findRanges() for it and corrects the count. Capped at 999, same ceiling as
+  // findRanges(), so one runaway term can't blow the count display up unboundedly.
+  //
+  // ponytail: 999/2000 are deliberate ceilings, not tuned limits — if a real page needs
+  // more, the fix is switching findRanges()/this function to a streaming/paged scan, not
+  // raising the numbers.
+  function countMatchesOnly(pageIndex, term) {
+    var normalizedFlatText = pageIndex.normalizedFlatText;
+    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+    var count = 0;
+    var index = 0;
+    while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
+      count++;
+      index += term.length;
+      if (count >= 999) break;
+    }
+    return count;
+  }
+
+  // Total match budget across every term in a performListSearch() scan (oculist-l6m.7),
+  // separate from findRanges()'s per-term 999 cap. The active term is always materialised
+  // first and is never subject to this cap (see performListSearch()), so the term the
+  // user is currently looking at can never be starved by other terms' matches.
+  var TOTAL_MATCH_CAP = 2000;
+
   function performSearch(term) {
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
@@ -1971,7 +2001,12 @@
         var termRangeList = ranges[i];
         if (!termRangeList) continue;
         for (var j = 0; j < termRangeList.length; j++) {
-          dimHighlight.add(termRangeList[j]);
+          // oculist-l6m.7's Lite Mode count-only placeholder (new Array(count)) is a
+          // sparse array of holes carrying only a .length — skip falsy entries rather
+          // than passing one to dimHighlight.add(), which throws on anything that is not
+          // a Range and would otherwise abort this whole loop, silently dropping every
+          // other (real) term's dim ranges too.
+          if (termRangeList[j]) dimHighlight.add(termRangeList[j]);
         }
       }
       dimHighlight.priority = 0;
@@ -2024,13 +2059,37 @@
 
     var pageIndex = buildPageIndex();
 
+    // Running total across every term this scan materialises, active term included (see
+    // TOTAL_MATCH_CAP above). The active term is always scanned first and unconditionally
+    // — it is exempt from the cap check below — so it can never be the term that gets
+    // starved.
+    var totalMatches = 0;
+    var termsStarved = false;
+
     var newTermRanges = new Array(terms.length);
     if (activeIdx >= 0 && activeIdx < terms.length) {
       newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
+      totalMatches += newTermRanges[activeIdx].length;
     }
     for (var i = 0; i < terms.length; i++) {
       if (i === activeIdx) continue;
-      newTermRanges[i] = findRanges(pageIndex, terms[i]);
+
+      // Budget already spent by earlier terms in this loop (plus the active term) — stop
+      // materialising any further inactive term entirely rather than truncating one mid-
+      // scan. termsStarved drives the "Showing the first 2000 matches" notice below.
+      if (totalMatches >= TOTAL_MATCH_CAP) {
+        termsStarved = true;
+        continue;
+      }
+
+      if (settings.performanceMode) {
+        // Lite Mode: count-only, no Range objects and no getClientRects for an inactive
+        // term — this is the layout-thrashing cost oculist-l6m.7 exists to bound.
+        newTermRanges[i] = new Array(countMatchesOnly(pageIndex, terms[i]));
+      } else {
+        newTermRanges[i] = findRanges(pageIndex, terms[i]);
+      }
+      totalMatches += newTermRanges[i].length;
     }
     termRanges = newTermRanges;
 
@@ -2038,8 +2097,11 @@
 
     // Single call site — this is the one line oculist-l6m.7's Lite Mode skips to turn
     // dimming off entirely, without touching the oculist-match/oculist-active-match logic
-    // below.
-    updateDimHighlight(terms, termRanges, activeIdx);
+    // below. No Ranges were built for inactive terms above in Lite Mode, so there would be
+    // nothing real to dim even if this ran.
+    if (!settings.performanceMode) {
+      updateDimHighlight(terms, termRanges, activeIdx);
+    }
 
     // A committed working list can legitimately have no active chip (activeIdx === -1,
     // e.g. a persisted/restored list before any chip has been (re-)activated — see
@@ -2074,6 +2136,14 @@
 
     checkSiteOverride(hasActiveTerm && searchRanges.length === 0);
 
+    // Shown after checkSiteOverride() on purpose: checkSiteOverride() unconditionally
+    // removeNotice()s whenever it isn't itself showing a notice (see its zeroMatches
+    // branch), so calling showNotice() any earlier would have this notice wiped out from
+    // under it in the same scan — the same ordering addChipTerm()'s cap message relies on.
+    if (termsStarved) {
+      showNotice('Showing the first 2000 matches. Remove a term for a complete count.');
+    }
+
     renderChipRow();
   }
 
@@ -2096,8 +2166,11 @@
         CSS.highlights.delete('oculist-active-match');
         // Only touch oculist-dim-match when there is a working list to keep dim — with
         // no chips at all (today's overwhelmingly common lone-search case) this must
-        // behave byte-for-byte like the old performSearch(), which left it deleted.
-        if (workListTerms.length === 0) CSS.highlights.delete('oculist-dim-match');
+        // behave byte-for-byte like the old performSearch(), which left it deleted. Lite
+        // Mode always deletes it too (oculist-l6m.7): it is never rebuilt below in that
+        // mode, so leaving a prior scan's registry in place would dim-highlight stale
+        // ranges during draft typing instead of showing none at all.
+        if (workListTerms.length === 0 || settings.performanceMode) CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -2109,7 +2182,7 @@
     var pageIndex = buildPageIndex();
     searchRanges = findRanges(pageIndex, term);
 
-    if (workListTerms.length > 0) {
+    if (workListTerms.length > 0 && !settings.performanceMode) {
       updateDimHighlight(workListTerms, termRanges, -1);
     }
 
@@ -2153,6 +2226,10 @@
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-active-match');
+        // Lite Mode never rebuilds oculist-dim-match below (oculist-l6m.7) — delete it
+        // explicitly here rather than leaving a prior (pre-toggle) scan's registry on
+        // screen, since this function otherwise only ever .set()s it, never .delete()s it.
+        if (settings.performanceMode) CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -2162,7 +2239,9 @@
 
     searchRanges = termRanges[activeTermIndex] || [];
 
-    updateDimHighlight(workListTerms, termRanges, activeTermIndex);
+    if (!settings.performanceMode) {
+      updateDimHighlight(workListTerms, termRanges, activeTermIndex);
+    }
 
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
@@ -4123,9 +4202,13 @@
       }
 
       var changed = false;
+      var performanceModeChanged = false;
       SETTINGS_KEYS.forEach(function(k) {
         if (!(k in nv)) return;
-        if (stableStringify(nv[k]) !== stableStringify(settings[k])) changed = true;
+        if (stableStringify(nv[k]) !== stableStringify(settings[k])) {
+          changed = true;
+          if (k === 'performanceMode') performanceModeChanged = true;
+        }
         settings[k] = nv[k];
       });
       if (!changed) return;
@@ -4140,6 +4223,14 @@
           settingsPanel.remove();
           settingsPanel = null;
           buildSettingsPanel();
+        }
+        // Toggling Lite Mode changes both which terms get Ranges (and thus counts) and
+        // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
+        // that is already on screen has to be rescanned immediately, or its dim
+        // highlights/counts stay stuck showing the mode that was active when it was last
+        // scanned instead of the one now in effect.
+        if (performanceModeChanged && workListTerms.length > 0) {
+          performListSearch();
         }
       }
     });

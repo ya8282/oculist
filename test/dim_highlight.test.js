@@ -150,6 +150,23 @@ describe('Dim highlight registry for inactive terms', () => {
     `);
   }
 
+  // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip) rather than a
+  // direct storage write, so content.js's chrome.storage.onChanged listener — and its
+  // oculist-l6m.7 rescan-on-toggle — is exercised exactly as production toggling is.
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
+  }
+
   test('dim set holds exactly the inactive terms\' ranges and excludes the active term\'s', async () => {
     await addTerm('cat');
     await addTerm('dog');
@@ -293,6 +310,78 @@ describe('Dim highlight registry for inactive terms', () => {
     await page.keyboard.press('Control+f');
     await page.waitForSelector(INPUT, { timeout: 5000 });
     await page.waitForTimeout(150);
+  });
+
+  test('Lite Mode builds no Range objects for inactive terms and sets no dim highlights (oculist-l6m.7)', async () => {
+    await setLiteMode(true);
+    try {
+      await addTerm('cat');
+      await addTerm('dog'); // 'dog' committed second -> active; 'cat' (7 matches) inactive
+
+      // Monkeypatch document.createRange *inside the content script's own isolated
+      // world* — findRanges() is the only place content.js calls it, so counting calls
+      // there is a direct proxy for "was a Range ever built for this term". Same
+      // isolated-world-local-assignment technique as list_search.test.js's
+      // window.getComputedStyle monkeypatch.
+      await evalInContentScript(`
+        (function () {
+          if (window.__ocCreateRangeInstalled) return true;
+          window.__ocCreateRangeInstalled = true;
+          window.__ocCreateRangeCalls = 0;
+          var orig = document.createRange.bind(document);
+          document.createRange = function () {
+            window.__ocCreateRangeCalls++;
+            return orig();
+          };
+          return true;
+        })()
+      `);
+
+      // Re-trigger a fresh performListSearch() scan without changing which chip is
+      // active, by clicking the already-active 'dog' chip again.
+      const before = await evalInContentScript('window.__ocCreateRangeCalls');
+      await page.locator(CHIP_TERM).nth(1).click(); // 'dog', already active
+      await page.waitForTimeout(250);
+      const after = await evalInContentScript('window.__ocCreateRangeCalls');
+
+      assert.strictEqual(
+        after - before,
+        1,
+        'only the active term ("dog", 1 match) should build a Range under Lite Mode — the inactive term ("cat", 7 matches) must build none'
+      );
+
+      const dimTexts = await rangeTexts('oculist-dim-match');
+      assert.deepStrictEqual(dimTexts, [], 'Lite Mode must never populate oculist-dim-match');
+
+      const present = await registriesPresent();
+      assert.strictEqual(present.dim, false, 'Lite Mode must not even leave an empty oculist-dim-match registry set');
+      assert.strictEqual(present.match, true, 'oculist-match (the active term) is unaffected by Lite Mode');
+    } finally {
+      await setLiteMode(false);
+    }
+  });
+
+  test('toggling Lite Mode with a list active adds and drops dim highlights (oculist-l6m.7)', async () => {
+    await addTerm('cat');
+    await addTerm('dog'); // 'dog' active, 'cat' (7 matches) inactive, Lite Mode off
+
+    let dimTexts = await rangeTexts('oculist-dim-match');
+    assert.strictEqual(dimTexts.length, 7, 'sanity check: "cat" is dim before Lite Mode is touched');
+
+    await setLiteMode(true);
+
+    const midPresent = await registriesPresent();
+    assert.strictEqual(midPresent.dim, false, 'enabling Lite Mode with a list already active must rescan and drop dim highlights');
+
+    await setLiteMode(false);
+
+    dimTexts = await rangeTexts('oculist-dim-match');
+    assert.strictEqual(
+      dimTexts.length,
+      7,
+      'disabling Lite Mode with a list already active must rescan and rebuild dim highlights — no stale empty registry'
+    );
+    assert.ok(dimTexts.every((t) => t === 'cat'));
   });
 
   // Kept last: it changes the persisted visionProfile setting (chrome.storage.sync, not
