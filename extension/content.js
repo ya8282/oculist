@@ -1652,26 +1652,10 @@
     return result;
   }
 
-  function performSearch(term) {
-    try {
-      if (typeof Highlight !== 'undefined' && CSS.highlights) {
-        CSS.highlights.delete('oculist-match');
-        CSS.highlights.delete('oculist-active-match');
-      }
-    } catch (e) {}
-
-    searchRanges = [];
-    activeIndex = -1;
-    firstEnter = false;
-    clearViewportMarkers();
-
-    if (!term) {
-      countEl.textContent = '';
-      setNavEnabled(false);
-      return;
-    }
-
-    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+  // Walks the DOM once per scan, returning the flattened/normalised page text
+  // and the text-node offset maps needed to resolve match ranges. Called once
+  // per scan (not once per term) so multiple terms can share the same index.
+  function buildPageIndex() {
     var flatText = '';
     var textNodeMaps = [];
 
@@ -1754,6 +1738,18 @@
     traverse(document.body);
 
     var normalizedFlatText = foldAccentsSafe(flatText.toLowerCase());
+
+    return { flatText: flatText, normalizedFlatText: normalizedFlatText, textNodeMaps: textNodeMaps };
+  }
+
+  // Finds every occurrence of term in a page index built by buildPageIndex()
+  // and returns the visible Ranges (capped at 999). Called once per term.
+  function findRanges(pageIndex, term) {
+    var normalizedFlatText = pageIndex.normalizedFlatText;
+    var textNodeMaps = pageIndex.textNodeMaps;
+    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+    var ranges = [];
+
     var index = 0;
     while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
       var matchStart = index;
@@ -1792,13 +1788,38 @@
           }
         }
         if (isVisible) {
-          searchRanges.push(range);
+          ranges.push(range);
         }
       }
 
       index += term.length;
-      if (searchRanges.length >= 999) break;
+      if (ranges.length >= 999) break;
     }
+
+    return ranges;
+  }
+
+  function performSearch(term) {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    if (!term) {
+      countEl.textContent = '';
+      setNavEnabled(false);
+      return;
+    }
+
+    var pageIndex = buildPageIndex();
+    searchRanges = findRanges(pageIndex, term);
 
     if (searchRanges.length > 0) {
       firstEnter = true;
