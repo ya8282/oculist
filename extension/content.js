@@ -394,6 +394,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
         CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -1914,6 +1915,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
         CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -1937,6 +1939,7 @@
         if (typeof Highlight !== 'undefined' && CSS.highlights) {
           var matchHighlight = new Highlight();
           searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
           CSS.highlights.set('oculist-match', matchHighlight);
         }
       } catch (e) {
@@ -1950,6 +1953,30 @@
     }
 
     checkSiteOverride(searchRanges.length === 0);
+  }
+
+  // Union of every INACTIVE term's Ranges from a performListSearch() scan, so the chip row
+  // can show all terms' hits at once while only the active term gets the bright
+  // oculist-match/oculist-active-match treatment. activeIdx === -1 (no active chip) means
+  // every term is inactive, so nothing is skipped and the whole set is dim. Kept as its own
+  // function with a single call site inside performListSearch() so oculist-l6m.7's Lite
+  // Mode can skip dimming entirely (e.g. by guarding or removing that one call) without
+  // touching how oculist-match/oculist-active-match are built.
+  function updateDimHighlight(terms, ranges, activeIdx) {
+    try {
+      if (typeof Highlight === 'undefined' || !CSS.highlights) return;
+      var dimHighlight = new Highlight();
+      for (var i = 0; i < terms.length; i++) {
+        if (i === activeIdx) continue;
+        var termRangeList = ranges[i];
+        if (!termRangeList) continue;
+        for (var j = 0; j < termRangeList.length; j++) {
+          dimHighlight.add(termRangeList[j]);
+        }
+      }
+      dimHighlight.priority = 0;
+      CSS.highlights.set('oculist-dim-match', dimHighlight);
+    } catch (e) {}
   }
 
   // Scans the page once for every term in the working list, filling termRanges (parallel
@@ -1971,6 +1998,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
         CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -2008,12 +2036,18 @@
 
     searchRanges = (activeIdx >= 0 && activeIdx < termRanges.length) ? termRanges[activeIdx] : [];
 
+    // Single call site — this is the one line oculist-l6m.7's Lite Mode skips to turn
+    // dimming off entirely, without touching the oculist-match/oculist-active-match logic
+    // below.
+    updateDimHighlight(terms, termRanges, activeIdx);
+
     if (searchRanges.length > 0) {
       firstEnter = true;
       try {
         if (typeof Highlight !== 'undefined' && CSS.highlights) {
           var matchHighlight = new Highlight();
           searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
           CSS.highlights.set('oculist-match', matchHighlight);
         }
       } catch (e) {
@@ -2379,6 +2413,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         var activeHighlight = new Highlight();
         activeHighlight.add(activeRange);
+        activeHighlight.priority = 2;
         CSS.highlights.set('oculist-active-match', activeHighlight);
       }
     } catch (e) {}
@@ -3253,10 +3288,21 @@
       '}'
     ].join('\n');
 
+    // Low-vision/high-contrast presets exist to maximise contrast, so a translucent wash
+    // there would defeat their purpose — swap it for a full-strength matchColor dotted
+    // underline with no background instead. Every other profile (including no profile at
+    // all) keeps the 35%-alpha wash so inactive terms read as visibly muted next to the
+    // active term's solid background.
+    var dimIsHighContrast = settings.visionProfile === 'low-vision';
+    var dimHighlightCss = dimIsHighContrast
+      ? '::highlight(oculist-dim-match) { text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: ' + matchColor + '; text-decoration-thickness: 2px; }'
+      : '::highlight(oculist-dim-match) { background-color: ' + hexToRgba(matchColor, 0.35) + '; }';
+
     var highlightCss = [
       designTokensCss,
       '::highlight(oculist-match) { background-color: ' + matchColor + '; color: ' + matchTextColor + '; }',
       '::highlight(oculist-active-match) { background-color: ' + activeColor + '; color: ' + activeTextColor + '; }',
+      dimHighlightCss,
       '.oc-beacon { will-change: transform, opacity; transition: opacity 50ms ease-out; }'
     ].join('\n');
 
