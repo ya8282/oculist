@@ -96,22 +96,39 @@
     return { terms: [], activeIndex: -1 };
   }
 
+  // terms is trusted to be an array of strings and activeIndex is range-checked against
+  // it — a stored index that is NaN, negative (other than the -1 sentinel), or >= the
+  // term count would otherwise round-trip unchecked into UI state that indexes terms[].
+  function normalizeWorkList(stored) {
+    var terms = Array.isArray(stored && stored.terms) ? stored.terms : [];
+    var idx = (stored && typeof stored.activeIndex === 'number' && !isNaN(stored.activeIndex))
+      ? stored.activeIndex
+      : -1;
+    if (idx !== -1 && (idx < 0 || idx >= terms.length)) idx = -1;
+    return { terms: terms, activeIndex: idx };
+  }
+
   function loadWorkList(callback) {
+    var storageAvailable;
     try {
-      if (!chrome.storage || !chrome.storage.session) {
-        callback(defaultWorkList());
-        return;
-      }
+      storageAvailable = !!(chrome.storage && chrome.storage.session);
+    } catch (err) {
+      storageAvailable = false;
+    }
+    // Deliberately outside the try/catch below: this is the synchronous path, and if the
+    // caller's own callback throws here, a surrounding catch would treat that as "our"
+    // failure and invoke callback() a second time with the default. Let it throw once.
+    if (!storageAvailable) {
+      callback(defaultWorkList());
+      return;
+    }
+    try {
       chrome.storage.session.get(WORK_LIST_KEY, function (data) {
         if (chrome.runtime.lastError || !data || !data[WORK_LIST_KEY]) {
           callback(defaultWorkList());
           return;
         }
-        var stored = data[WORK_LIST_KEY];
-        callback({
-          terms: Array.isArray(stored.terms) ? stored.terms : [],
-          activeIndex: typeof stored.activeIndex === 'number' ? stored.activeIndex : -1
-        });
+        callback(normalizeWorkList(data[WORK_LIST_KEY]));
       });
     } catch (err) {
       callback(defaultWorkList());
@@ -306,6 +323,14 @@
   var debounceTimer    = null;
   var activeBeacons    = 0;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
+
+  // The chip row's working list. workListTerms holds the search terms in add order;
+  // activeTermIndex points at the "active" chip, or -1 when none is active (including
+  // whenever workListTerms is empty). Per-term hit counts are a later bead's concern —
+  // renderChipRow() always renders a blank .oc-chip-count slot for now.
+  var workListTerms    = [];
+  var activeTermIndex  = -1;
+  var chipRow          = null;
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
@@ -381,6 +406,7 @@
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
+    chipRow = null; workListTerms = []; activeTermIndex = -1;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -2087,6 +2113,159 @@
     highlightActiveRange(true);
   }
 
+  // ── Working-list chip row ────────────────────────────────────────────────────
+  //
+  // A "working list" of search terms rendered as chips beneath the bar. Adding,
+  // activating, and removing chips is all this bead does — the scan that fills each
+  // chip's count slot is a later bead (performListSearch). Every mutation here persists
+  // via saveWorkList() directly (no window.__oc* hook — those two exist purely for
+  // test-reachability into this closure, not as a call path for real UI code).
+
+  function persistWorkList() {
+    saveWorkList({ terms: workListTerms, activeIndex: activeTermIndex });
+  }
+
+  function activateChip(i) {
+    if (i < 0 || i >= workListTerms.length) return;
+    activeTermIndex = i;
+    persistWorkList();
+    renderChipRow();
+  }
+
+  // Removing the active chip moves the pointer to the previous index (index - 1),
+  // clamped to 0 so removing the first chip while others remain activates the new
+  // leftmost chip rather than clearing. The list-emptying case is handled separately
+  // below, which forces -1 regardless of what this clamp computes.
+  function removeChipAt(index) {
+    if (index < 0 || index >= workListTerms.length) return;
+    workListTerms.splice(index, 1);
+    if (activeTermIndex === index) {
+      activeTermIndex = Math.max(0, index - 1);
+    } else if (activeTermIndex > index) {
+      activeTermIndex -= 1;
+    }
+    if (workListTerms.length === 0) activeTermIndex = -1;
+    persistWorkList();
+    renderChipRow();
+  }
+
+  function removeLastChip() {
+    if (workListTerms.length === 0) return;
+    removeChipAt(workListTerms.length - 1);
+  }
+
+  // Trims, then: rejects whitespace-only silently, enforces the 100-char cap (checked
+  // against the trimmed length), activates rather than duplicates an existing term, and
+  // enforces the 10-term cap. Both caps surface through showNotice(); the whitespace-only
+  // rejection does not. Returns the cap message on either cap (undefined otherwise) so the
+  // caller can re-show it after findNext()'s performSearch -> checkSiteOverride() call —
+  // which runs right after this, in the same Enter handler, and unconditionally clears
+  // whatever notice is up when the term the user just typed matches the page — has had a
+  // chance to wipe it out from under this same keystroke.
+  function addChipTerm(rawTerm) {
+    var trimmed = (rawTerm || '').trim();
+    if (trimmed === '') return;
+
+    if (trimmed.length > 100) {
+      // removeNotice() first: showNotice() is a no-op while a notice is already showing
+      // (e.g. a stale "no matches" notice from the search that is about to run right
+      // after this, via keydownHandler's Enter -> findNext fall-through). A cap being hit
+      // must always surface, not lose a race with whatever notice happened to be up.
+      removeNotice();
+      var lengthMessage = 'Search terms are limited to 100 characters. Shorten the term and try again.';
+      showNotice(lengthMessage);
+      return lengthMessage;
+    }
+
+    var existingIndex = workListTerms.indexOf(trimmed);
+    if (existingIndex !== -1) {
+      activateChip(existingIndex);
+      return;
+    }
+
+    if (workListTerms.length >= 10) {
+      removeNotice();
+      var capMessage = 'Oculist searches up to 10 terms at once. Remove a term to add another.';
+      showNotice(capMessage);
+      return capMessage;
+    }
+
+    workListTerms.push(trimmed);
+    activeTermIndex = workListTerms.length - 1;
+    persistWorkList();
+    renderChipRow();
+  }
+
+  // Called from keydownHandler's Enter branch, before findNext() runs. Adds/activates a
+  // chip as a side effect of Enter when the input holds a term that differs from the
+  // currently active chip; otherwise Enter is next-match exactly as before. Never clears
+  // the input — the search bar keeps whatever the user typed. Returns whatever addChipTerm
+  // returns (a cap message, or undefined) so keydownHandler can re-surface it after
+  // findNext() runs.
+  function maybeAddChipFromInput() {
+    if (!input || !input.value) return;
+    var activeTerm = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
+      ? workListTerms[activeTermIndex]
+      : null;
+    var trimmed = input.value.trim();
+    if (trimmed === activeTerm) return;
+    return addChipTerm(input.value);
+  }
+
+  function renderChipRow() {
+    if (!wrapRoot || !chipRow) return;
+
+    chipRow.textContent = '';
+
+    if (workListTerms.length === 0) {
+      chipRow.hidden = true;
+      chipRow.style.display = 'none';
+      return;
+    }
+
+    chipRow.hidden = false;
+    chipRow.style.display = '';
+
+    // 'full' is the only motion level chips animate under; 'reduced' and 'off' both
+    // suppress it, matching effectiveMotion()'s own two-tier gate elsewhere.
+    var noMotion = effectiveMotion() !== 'full';
+
+    workListTerms.forEach(function (term, i) {
+      var isActive = i === activeTermIndex;
+
+      var chip = document.createElement('span');
+      chip.className = 'oc-chip' + (noMotion ? ' oc-no-motion' : '');
+
+      var termBtn = document.createElement('button');
+      termBtn.type = 'button';
+      termBtn.className = 'oc-chip-term' + (isActive ? ' active' : '');
+      termBtn.textContent = term;
+      termBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      termBtn.setAttribute('aria-label', (isActive ? 'Active search term: ' : 'Search term: ') + term);
+      termBtn.addEventListener('click', function () { activateChip(i); });
+
+      var chipCountEl = document.createElement('span');
+      chipCountEl.className = 'oc-chip-count';
+      chipCountEl.setAttribute('aria-hidden', 'true');
+      chipCountEl.textContent = ''; // filled by a later bead's scan
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'oc-chip-remove';
+      removeBtn.textContent = '✕';
+      removeBtn.setAttribute('aria-label', 'Remove search term: ' + term);
+      removeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        removeChipAt(i);
+      });
+
+      chip.appendChild(termBtn);
+      chip.appendChild(chipCountEl);
+      chip.appendChild(removeBtn);
+      chipRow.appendChild(chip);
+    });
+  }
+
   // Display the active match with the high-visibility visual animation
   function highlightActiveRange(shouldAnimate, skipScroll) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
@@ -2357,10 +2536,29 @@
       return;
     }
     
+    // Backspace with the input in focus and empty removes the last chip. Scoped to the
+    // input specifically (not "focus anywhere in wrap") so backspacing inside, say, a
+    // settings field never eats a chip by accident.
+    if (e.key === 'Backspace' && wrapRoot && wrapRoot.activeElement === input && input && input.value === '') {
+      removeLastChip();
+      return;
+    }
+
     if (e.key === 'Enter') {
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
         try { e.preventDefault(); } catch (err) {}
+        // A non-empty term that differs from the active chip becomes a chip and the
+        // active one, as a side effect — findNext() below still runs exactly as before,
+        // landing on match 0 via firstEnter the same way it always has.
+        var capMessage = maybeAddChipFromInput();
         findNext(e.shiftKey);
+        // findNext()'s performSearch() -> checkSiteOverride() call above unconditionally
+        // clears whatever notice is up when the just-typed term matches the page, which
+        // erases a cap notice addChipTerm() just showed in the same keystroke. Re-show it.
+        if (capMessage) {
+          removeNotice();
+          showNotice(capMessage);
+        }
       }
     }
   }
@@ -2842,8 +3040,29 @@
     bar.appendChild(closeBtn);
 
     wrapRoot.appendChild(bar);
+
+    chipRow = document.createElement('div');
+    chipRow.className = 'oc-chip-row';
+    // Hidden until a real term list renders — an empty working list must be pixel-
+    // identical to the overlay before this bead existed.
+    chipRow.hidden = true;
+    chipRow.style.display = 'none';
+    wrapRoot.appendChild(chipRow);
+
     document.body.appendChild(wrap);
     input.focus();
+
+    // Restore any working list carried over from a previous mount in this tab. This must
+    // never trigger a search — carry-over to a new page/mount is deliberately manual, so
+    // only workListTerms/activeTermIndex and the chip DOM are touched here.
+    loadWorkList(function (list) {
+      // A rapid close before this callback lands would have already torn wrapRoot/chipRow
+      // down; __ocDestroy() also resets workListTerms/activeTermIndex, so skip stale data.
+      if (!wrapRoot || !chipRow) return;
+      workListTerms = list.terms;
+      activeTermIndex = list.activeIndex;
+      renderChipRow();
+    });
   }
 
   function getContrastColor(hex) {
@@ -2983,6 +3202,7 @@
         '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
         '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(colors.beacon, 0.2) + ';',
+        '  --oc-chip-scale: ' + getBeaconScale() + ';',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
         '.oc-bar {',
@@ -3426,6 +3646,106 @@
         '}',
         '.oc-notice-close:hover {',
         '  opacity: 1;',
+        '}',
+        '.oc-chip-row {',
+        '  display: flex;',
+        '  flex-wrap: wrap;',
+        '  align-items: center;',
+        '  gap: 6px;',
+        '  padding: 6px 10px;',
+        // Same trick as .oc-notice / #oc-settings-panel: width:0 keeps the row out of the
+        // shadow host's intrinsic width so it cannot stretch the bar; min-width:100% then
+        // fills whatever width the bar settled on.
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  box-sizing: border-box;',
+        '  background: ' + t.bg + ';',
+        '  border-top: 1px solid ' + t.divider + ';',
+        '}',
+        '.oc-chip-row[hidden] {',
+        '  display: none;',
+        '}',
+        '.oc-chip {',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  gap: 4px;',
+        '  border-radius: calc(10px * var(--oc-chip-scale, 1));',
+        '  background: var(--oc-input-bg);',
+        '  border: 1px solid var(--oc-input-border);',
+        '  padding: calc(2px * var(--oc-chip-scale, 1)) calc(6px * var(--oc-chip-scale, 1));',
+        '  box-sizing: border-box;',
+        '  max-width: 100%;',
+        '}',
+        '.oc-chip-term {',
+        '  color: var(--oc-text);',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '  font-size: calc(12px * var(--oc-chip-scale, 1));',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  max-width: 160px;',
+        '  overflow: hidden;',
+        '  text-overflow: ellipsis;',
+        '  white-space: nowrap;',
+        '  transition: color 150ms, transform 150ms;',
+        '  box-shadow: none;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-height: none;',
+        '  line-height: 1.3;',
+        '  border-radius: 0;',
+        '}',
+        '.oc-chip-term:hover, .oc-chip-term:focus-visible {',
+        '  color: ' + t.accent + ';',
+        '}',
+        '.oc-chip-term.active {',
+        '  color: ' + t.accent + ';',
+        '  font-weight: 700;',
+        '}',
+        '.oc-chip-count {',
+        '  font-size: calc(10px * var(--oc-chip-scale, 1));',
+        '  color: ' + t.subtle + ';',
+        '  opacity: 0.7;',
+        '  white-space: nowrap;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  user-select: none;',
+        '}',
+        '.oc-chip-remove {',
+        '  color: ' + t.text + ';',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '  font-size: calc(10px * var(--oc-chip-scale, 1));',
+        '  width: calc(14px * var(--oc-chip-scale, 1));',
+        '  height: calc(14px * var(--oc-chip-scale, 1));',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  justify-content: center;',
+        '  cursor: pointer;',
+        '  border-radius: 50%;',
+        '  opacity: 0.6;',
+        '  line-height: 1;',
+        '  box-shadow: none;',
+        '  transition: opacity 150ms, background-color 150ms, transform 150ms;',
+        '}',
+        '.oc-chip-remove:hover {',
+        '  opacity: 1;',
+        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '}',
+        // effectiveMotion() !== 'full' (i.e. 'reduced' or 'off') suppresses chip
+        // transitions entirely, same two-tier gate used elsewhere for beacon motion.
+        '.oc-chip.oc-no-motion .oc-chip-term, .oc-chip.oc-no-motion .oc-chip-remove {',
+        '  transition: none;',
         '}'
       ].join('\n');
 
