@@ -326,10 +326,14 @@
 
   // The chip row's working list. workListTerms holds the search terms in add order;
   // activeTermIndex points at the "active" chip, or -1 when none is active (including
-  // whenever workListTerms is empty). Per-term hit counts are a later bead's concern —
-  // renderChipRow() always renders a blank .oc-chip-count slot for now.
+  // whenever workListTerms is empty). termRanges is parallel to workListTerms — each
+  // entry is the array of visible Ranges performListSearch() found for that term, and
+  // its .length is what renderChipRow() shows in each chip's .oc-chip-count slot. It can
+  // be out of sync with workListTerms between a chip add/remove and the next scan; a
+  // missing entry (undefined) renders as a blank count rather than "0".
   var workListTerms    = [];
   var activeTermIndex  = -1;
+  var termRanges       = [];
   var chipRow          = null;
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
@@ -406,7 +410,7 @@
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
-    chipRow = null; workListTerms = []; activeTermIndex = -1;
+    chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = [];
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -1819,7 +1823,12 @@
             }
           }
         } else if (child.nodeType === 1) {
-          if (!SKIP_TAGS[child.tagName] && !child.classList.contains('oc-beacon')) {
+          // child !== wrap: never descend into Oculist's own bar/chip row (it lives in
+          // wrap's shadow root). Chip terms render the literal searched text as button
+          // labels, so without this exclusion every chip would always match its own
+          // label — inflating every count by at least 1, and by more for any other chip
+          // whose term happens to be a substring/superstring of it.
+          if (!SKIP_TAGS[child.tagName] && !child.classList.contains('oc-beacon') && child !== wrap) {
             if (child.shadowRoot) {
               traverse(child.shadowRoot);
             }
@@ -1943,6 +1952,85 @@
     checkSiteOverride(searchRanges.length === 0);
   }
 
+  // Scans the page once for every term in the working list, filling termRanges (parallel
+  // to workListTerms) so renderChipRow() can show each chip's own hit count. searchRanges/
+  // activeIndex/firstEnter/countEl continue to describe only the ACTIVE term, exactly as
+  // performSearch() left them, so findNext(), highlightActiveRange(), beacons, and the
+  // viewport markers need no changes to keep working off them.
+  //
+  // buildPageIndex() runs exactly once per call — it is the expensive DOM traversal — and
+  // the active term is materialised first (via findRanges) so a later match cap (bead
+  // oculist-l6m.7) can never starve the term the user is currently looking at.
+  //
+  // When the working list is empty (no chip has been committed yet, e.g. the user is still
+  // typing a draft that hasn't hit Enter), this falls back to lastTerm as an implicit
+  // single term so the mutation-rescan caller below behaves exactly like the old
+  // performSearch(lastTerm) call it replaces.
+  function performListSearch() {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    var terms = workListTerms;
+    var activeIdx = activeTermIndex;
+
+    if (terms.length === 0) {
+      termRanges = [];
+      if (!lastTerm) {
+        countEl.textContent = '';
+        setNavEnabled(false);
+        renderChipRow();
+        return;
+      }
+      terms = [lastTerm];
+      activeIdx = 0;
+    }
+
+    var pageIndex = buildPageIndex();
+
+    var newTermRanges = new Array(terms.length);
+    if (activeIdx >= 0 && activeIdx < terms.length) {
+      newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
+    }
+    for (var i = 0; i < terms.length; i++) {
+      if (i === activeIdx) continue;
+      newTermRanges[i] = findRanges(pageIndex, terms[i]);
+    }
+    termRanges = newTermRanges;
+
+    searchRanges = (activeIdx >= 0 && activeIdx < termRanges.length) ? termRanges[activeIdx] : [];
+
+    if (searchRanges.length > 0) {
+      firstEnter = true;
+      try {
+        if (typeof Highlight !== 'undefined' && CSS.highlights) {
+          var matchHighlight = new Highlight();
+          searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          CSS.highlights.set('oculist-match', matchHighlight);
+        }
+      } catch (e) {
+        console.warn('Oculist: CSS Custom Highlight API not supported or blocked.', e);
+      }
+      setNavEnabled(searchRanges.length > 1);
+      countEl.textContent = '0 ' + i18n.of + ' ' + searchRanges.length;
+    } else {
+      countEl.textContent = i18n.noMatch;
+      setNavEnabled(false);
+    }
+
+    checkSiteOverride(searchRanges.length === 0);
+
+    renderChipRow();
+  }
+
   // ── Dynamic content re-scan (infinite scroll / DOM mutation) ───────────────────
   //
   // performSearch() rebuilds match Ranges from scratch on every call, but nothing
@@ -1993,9 +2081,13 @@
 
   function rescanAfterMutation() {
     remountIfDetached();
-    if (!wrap || !lastTerm) return;
+    // Fires as long as there is either a draft term in flight or a committed working
+    // list — the guard used to be "no draft term", but a working list with an empty
+    // input (e.g. right after Enter commits a chip and the user hasn't typed since)
+    // must still keep rescanning.
+    if (!wrap || (!lastTerm && workListTerms.length === 0)) return;
     var previousActiveIndex = activeIndex;
-    performSearch(lastTerm);
+    performListSearch();
     if (searchRanges.length > 0) {
       activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
@@ -2115,21 +2207,23 @@
 
   // ── Working-list chip row ────────────────────────────────────────────────────
   //
-  // A "working list" of search terms rendered as chips beneath the bar. Adding,
-  // activating, and removing chips is all this bead does — the scan that fills each
-  // chip's count slot is a later bead (performListSearch). Every mutation here persists
-  // via saveWorkList() directly (no window.__oc* hook — those two exist purely for
-  // test-reachability into this closure, not as a call path for real UI code).
+  // A "working list" of search terms rendered as chips beneath the bar. Every mutation
+  // here persists via saveWorkList() directly (no window.__oc* hook — those two exist
+  // purely for test-reachability into this closure, not as a call path for real UI
+  // code).
 
   function persistWorkList() {
     saveWorkList({ terms: workListTerms, activeIndex: activeTermIndex });
   }
 
+  // Activating a chip re-scans the whole working list (one performListSearch() call),
+  // not just the newly active term — every chip's count slot needs to reflect the
+  // current page state, not just the one that was clicked.
   function activateChip(i) {
     if (i < 0 || i >= workListTerms.length) return;
     activeTermIndex = i;
     persistWorkList();
-    renderChipRow();
+    performListSearch();
   }
 
   // Removing the active chip moves the pointer to the previous index (index - 1),
@@ -2139,6 +2233,11 @@
   function removeChipAt(index) {
     if (index < 0 || index >= workListTerms.length) return;
     workListTerms.splice(index, 1);
+    // Keep termRanges parallel to workListTerms so a stale/misaligned count is never
+    // shown for a term that shifted index — termRanges itself is only fully refreshed
+    // by the next performListSearch() call, splice() here is a no-op if there is no
+    // scan yet (termRanges shorter than index).
+    termRanges.splice(index, 1);
     if (activeTermIndex === index) {
       activeTermIndex = Math.max(0, index - 1);
     } else if (activeTermIndex > index) {
@@ -2247,7 +2346,11 @@
       var chipCountEl = document.createElement('span');
       chipCountEl.className = 'oc-chip-count';
       chipCountEl.setAttribute('aria-hidden', 'true');
-      chipCountEl.textContent = ''; // filled by a later bead's scan
+      // termRanges[i] is undefined until performListSearch() has scanned this term at
+      // least once (e.g. right after addChipTerm() pushes it, before any scan) — leave
+      // the slot blank then. Once scanned, an array is always truthy even at length 0,
+      // so a genuine zero-match term still shows "0" rather than going blank again.
+      chipCountEl.textContent = termRanges[i] ? String(termRanges[i].length) : '';
 
       var removeBtn = document.createElement('button');
       removeBtn.type = 'button';
