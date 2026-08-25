@@ -27,6 +27,7 @@ const PREV_BTN = '#oc-wrap >> .oc-up-btn';
 const NEXT_BTN = '#oc-wrap >> .oc-down-btn';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
+const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
 
 const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
 const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
@@ -296,6 +297,118 @@ describe('List menu popover (saved lists UI)', () => {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'Escape must still close the popover from inside the rename field');
+  });
+
+  // oculist-l6m.26: saveList() silently rejects an empty terms array (mirroring
+  // 'empty-name'), and the popover's own Save control is the primary, visible guard
+  // against ever reaching that silent rejection — the same disabled-control treatment
+  // the blank-name case already gets, extended to cover an empty working list too.
+  test('the Save control stays disabled while the working list is empty, and re-enables once a term exists', async () => {
+    // No addTerm() call — the working list starts and stays at zero chips through this
+    // first half of the test.
+    await openListsMenu();
+    assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), true, 'Save starts disabled with no name and no chips');
+
+    await page.locator(SAVE_INPUT).fill('Empty List');
+    // A non-blank name alone must not be enough — Save must stay disabled because the
+    // working list itself has zero terms.
+    assert.strictEqual(
+      await page.locator(SAVE_BTN).isDisabled(),
+      true,
+      'Save must stay disabled while the working list has zero chips, even with a name typed'
+    );
+
+    // oculist-l6m.26 fix-pass regression: add a chip via the main bar WITHOUT closing the
+    // popover. Before the fix, renderChipRow() never notified the still-open popover of a
+    // main-bar chip edit, so Save stayed disabled even once the working list and name were
+    // both populated — recoverable only by retyping the name or closing/reopening the
+    // popover, and neither is discoverable. The bug is specifically about the live,
+    // still-open state, so this must not close/reopen the popover to check.
+    await addTerm('populated');
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover must still be open after a main-bar chip add');
+    assert.strictEqual(await page.locator(SAVE_INPUT).inputValue(), 'Empty List', 'the typed name must survive the chip add untouched');
+    assert.strictEqual(
+      await page.locator(SAVE_BTN).isDisabled(),
+      false,
+      'Save must live-enable once a chip is added via the main bar, with the popover left open the whole time'
+    );
+
+    // Mirror direction: remove that same chip via the main bar, popover still open — Save
+    // must live-disable again, with no close/reopen anywhere in this check either.
+    await page.locator(CHIP_REMOVE).first().click();
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const btn = root && root.shadowRoot.querySelector('.oc-list-save-btn');
+      return !!btn && btn.disabled === true;
+    }, null, { timeout: 5000 });
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover must still be open after a main-bar chip removal');
+
+    // Re-add a term, still without closing the popover, so the save round trip below has
+    // something to save.
+    await addTerm('populated');
+    await page.locator(SAVE_INPUT).fill('Populated List');
+    assert.strictEqual(
+      await page.locator(SAVE_BTN).isDisabled(),
+      false,
+      'Save must re-enable once the working list has a term and the name is non-blank'
+    );
+    await page.locator(SAVE_BTN).click();
+    // The real condition a fixed sleep would have been guessing at: the saved item
+    // actually landing in the popover's own re-render.
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const el = root && root.shadowRoot.querySelector('.oc-list-item-name');
+      return !!el && el.textContent === 'Populated List';
+    }, null, { timeout: 5000 });
+
+    // Saving a populated list still works end to end: it appears in the popover and the
+    // write genuinely reached chrome.storage.sync with the working list's real terms.
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Populated List']);
+    const raw = await rawSavedLists();
+    assert.strictEqual(raw.length, 1);
+    assert.deepStrictEqual(raw[0].terms, ['populated']);
+
+    // Leave the popover closed, matching every other test in this suite — the shared
+    // beforeEach only sends a single Escape, which closes just the popover while it's
+    // still open (see the Escape-only-closes-the-popover behaviour covered below), and
+    // would otherwise leave this test's 'populated' chip mounted and bleeding into the
+    // next test.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
+    }, null, { timeout: 5000 });
+  });
+
+  // oculist-l6m.26: a list saved by a version of the extension before this fix (or
+  // synced in from another device that still has the old, unguarded saveList()) can
+  // already sit in chrome.storage.sync with zero terms. loadSavedList() has no
+  // confirmation step by design, so loading one must not be allowed to silently wipe a
+  // populated working list with no way back.
+  test('a pre-existing saved list with zero terms cannot be loaded, and never wipes the working list', async () => {
+    await addTerm('keepme');
+    assert.deepStrictEqual(await chipTerms(), ['keepme']);
+
+    // Seeded directly into chrome.storage.sync, bypassing saveList() entirely — this is
+    // exactly the shape a pre-fix save (or an old synced-in list) would already have.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-zeroterm': { id: 'zeroterm', name: 'Empty Legacy List', terms: [] }}," +
+      " resolve))"
+    );
+
+    await openListsMenu();
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Empty Legacy List']);
+    assert.strictEqual(
+      await page.locator(LIST_ITEM_NAME).isDisabled(),
+      true,
+      "a 0-term saved list's load control must be disabled, not clickable into a silent wipe"
+    );
+
+    // The working list is untouched — nothing was ever loaded.
+    assert.deepStrictEqual(await chipTerms(), ['keepme']);
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover stays open; no load happened');
   });
 
   test('opening the list popover closes an open settings panel and the reverse; Escape closes only the popover', async () => {

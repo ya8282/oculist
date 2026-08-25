@@ -272,4 +272,27 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.strictEqual(lists.length, 1);
     assert.deepStrictEqual(lists[0], { id: 'good', name: 'Good List', terms: ['alpha', 'beta'] });
   });
+
+  // oculist-l6m.26: a 0-term saved list is useless to create and dangerous to load —
+  // loadSavedList() has no confirmation, so loading one would silently wipe the working
+  // list with no way back. The popover's own Save button is the primary guard (see
+  // list_menu.test.js), but saveList() rejects it too, the same silent-by-design
+  // treatment 'empty-name' already gets, for any caller that reaches this function
+  // directly without going through the popover.
+  test('saveList() rejects an empty (or all-whitespace) terms array without writing anything', async () => {
+    const emptyArray = await callSaveList('Nothing To Save', []);
+    assert.strictEqual(emptyArray.ok, false);
+    assert.strictEqual(emptyArray.reason, 'empty-terms');
+
+    // Whitespace-only entries sanitize down to zero real terms too — same rejection.
+    const whitespaceOnly = await callSaveList('Still Nothing', ['   ', '']);
+    assert.strictEqual(whitespaceOnly.ok, false);
+    assert.strictEqual(whitespaceOnly.reason, 'empty-terms');
+
+    // Neither attempt wrote anything under any oc-list-* key, and no notice was raised
+    // ('empty-terms' is silent, matching 'empty-name').
+    const afterAttempts = await callListSavedLists();
+    assert.strictEqual(afterAttempts.length, 0);
+    assert.strictEqual(await page.locator(NOTICE_TEXT).count(), 0);
+  });
 });

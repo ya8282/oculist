@@ -287,12 +287,20 @@
   // below in this file. terms is sanitized via sanitizeListTerms() rather than rejected
   // outright — a saved list is normally built from whatever is in the working list at
   // save time, which has already been through addChipTerm()'s own caps, so this only
-  // trims a caller that skipped that path.
+  // trims a caller that skipped that path. If sanitizing leaves zero terms, though, the
+  // save is rejected outright (oculist-l6m.26): a 0-term saved list is useless to create
+  // and dangerous to load (loadSavedList() has no confirmation, so loading one wipes the
+  // working list with no way back). The UI's own backstop is the primary guard — the
+  // "Save current as…" button is disabled whenever the working list is empty, exactly
+  // the same disabled-control treatment 'empty-name' already gets below — so this check
+  // is a silent, storage-layer belt-and-suspenders for a caller that skips the UI, not a
+  // path a user can hit through it.
   //
   // callback (optional) receives { ok: true, list } on success, or
-  // { ok: false, reason } on failure ('empty-name', 'cap', 'write-failed', 'exception').
-  // The two user-facing failure reasons ('cap', 'write-failed') also surface through
-  // showNotice(); 'empty-name' does not, by design.
+  // { ok: false, reason } on failure ('empty-name', 'empty-terms', 'cap', 'write-failed',
+  // 'exception'). The two user-facing failure reasons ('cap', 'write-failed') also
+  // surface through showNotice(); 'empty-name' and 'empty-terms' do not, by design —
+  // both are already unreachable through the popover's own disabled-button guards.
   function saveList(name, terms, callback) {
     var trimmedName = (name || '').trim();
     if (trimmedName === '') {
@@ -300,6 +308,10 @@
       return;
     }
     var cleanTerms = sanitizeListTerms(terms);
+    if (cleanTerms.length === 0) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-terms' });
+      return;
+    }
     try {
       readListIndex(function (index) {
         if (index.count >= MAX_SAVED_LISTS) {
@@ -508,7 +520,8 @@
     confirmRenameLabel: 'Confirm rename',
     cancelRenameLabel: 'Cancel rename',
     termSingular: 'term',
-    termPlural: 'terms'
+    termPlural: 'terms',
+    emptyListHint: 'This saved list has no terms — nothing to load.'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -2849,6 +2862,11 @@
   function renderChipRow() {
     if (!wrapRoot || !chipRow) return;
 
+    // oculist-l6m.26 fix-pass: keep the lists popover's Save button in sync with main-bar
+    // chip edits (add/remove) while the popover stays open, in both directions. Guarded on
+    // listsPanel so this is a no-op whenever the popover is closed.
+    if (listsPanel) updateSaveBtnDisabled();
+
     chipRow.textContent = '';
 
     if (workListTerms.length === 0) {
@@ -3668,6 +3686,13 @@
   function loadSavedList(list) {
     var terms = sanitizeListTerms(list.terms);
 
+    // Storage-layer backstop for oculist-l6m.26, mirroring the disabled load control in
+    // buildListItem() above: this function has no other caller, so the button's disabled
+    // attribute already stops a real click from reaching here, but a 0-term list must
+    // never be allowed to replace the working list regardless of how this got called —
+    // loading has no confirmation step, so there would be no way back from the wipe.
+    if (terms.length === 0) return;
+
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
@@ -3723,6 +3748,18 @@
       nameBtn.className = 'oc-list-item-name';
       nameBtn.textContent = list.name;
       nameBtn.setAttribute('aria-label', i18n.loadListLabel + ': ' + list.name);
+      // A 0-term saved list is unreachable through today's Save control (oculist-l6m.26
+      // disables it whenever the working list is empty), but one can still exist here: it
+      // may have been saved by a version of the extension before this fix, then synced in
+      // from another device. loadSavedList() has no confirmation step
+      // by design, so loading a 0-term list would silently wipe the working list with no
+      // way back — disable the load control outright for it, the same disabled-control
+      // treatment the Save button and the rename confirm button already get elsewhere in
+      // this popover, rather than let the click through to a destructive no-op.
+      if (list.terms.length === 0) {
+        nameBtn.disabled = true;
+        nameBtn.title = i18n.emptyListHint;
+      }
       nameBtn.addEventListener('click', function () {
         loadSavedList(list);
       });
@@ -3853,6 +3890,22 @@
     });
   }
 
+  // Shared between buildListsPanel's own 'input' listener and renderChipRow (oculist-l6m.26
+  // fix-pass): main-bar chip edits (add/remove) never touched the popover before, so the
+  // Save button's disabled state could go stale in *either* direction while the popover
+  // stayed open — not just enabled-when-it-should-be-disabled (the click-handler re-check
+  // above guards that), but disabled-when-it-should-be-enabled too, with no recovery short
+  // of retyping the name or closing/reopening the popover. Queries listsPanel by selector
+  // rather than closing over buildListsPanel's local saveInput/saveBtn so it can be called
+  // from outside that closure.
+  function updateSaveBtnDisabled() {
+    if (!listsPanel) return;
+    var saveInput = listsPanel.querySelector('.oc-list-save-input');
+    var saveBtn = listsPanel.querySelector('.oc-list-save-btn');
+    if (!saveInput || !saveBtn) return;
+    saveBtn.disabled = saveInput.value.trim() === '' || workListTerms.length === 0;
+  }
+
   function buildListsPanel() {
     var p = P();
 
@@ -3878,12 +3931,13 @@
     saveBtn.setAttribute('aria-label', i18n.saveListBtn);
     // Inherited obligation (oculist-l6m.8 review): saveList() rejects a blank/whitespace-
     // only name SILENTLY. Disabled-by-default plus the live 'input' listener below means
-    // the confirm control can never be pressed into that silent no-op.
+    // the confirm control can never be pressed into that silent no-op. oculist-l6m.26
+    // extends the same treatment to an empty working list: saveList() also silently
+    // rejects zero terms, so the button must also stay disabled whenever workListTerms
+    // is empty, not just whenever the name field is blank.
     saveBtn.disabled = true;
 
-    saveInput.addEventListener('input', function () {
-      saveBtn.disabled = saveInput.value.trim() === '';
-    });
+    saveInput.addEventListener('input', updateSaveBtnDisabled);
     saveInput.addEventListener('keydown', function (e) {
       e.stopPropagation();
       if (e.key === 'Enter' && !saveBtn.disabled) {
@@ -3894,12 +3948,19 @@
 
     saveBtn.addEventListener('click', function () {
       var name = saveInput.value;
-      if (name.trim() === '') return;
+      // workListTerms.length === 0 is re-checked here as belt-and-braces: renderChipRow()
+      // now calls updateSaveBtnDisabled() on every chip add/remove while the popover is
+      // open, so the disabled attribute should already be current. This guard just avoids
+      // an unnecessary round trip if it somehow isn't, and keeps the click a true no-op
+      // rather than a click that goes nowhere visibly. saveList() itself would reject an
+      // empty terms array anyway ('empty-terms', silent).
+      if (name.trim() === '' || workListTerms.length === 0) return;
       saveList(name, workListTerms, function (result) {
         // 'cap' and 'write-failed' already show their own notice via saveList(); leave
         // the input populated either way so the user can retry (e.g. after freeing up a
-        // slot) without retyping the name. 'empty-name'/'exception' can't surface here
-        // (the button is disabled on blank input) but are handled the same, doing
+        // slot) without retyping the name. 'empty-name'/'empty-terms'/'exception' can't
+        // surface here (both the name and the working list are validated above and the
+        // button is disabled on either being empty) but are handled the same, doing
         // nothing further.
         if (result && result.ok) {
           refreshListsPanel();
