@@ -23,9 +23,18 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 // appears 3 times, "dog" once. This is the load-bearing fixture for the overlapping-term
 // assertion: "cat" and "cats" must each get their own correct, independent range count
 // even though every "cats" is also a "cat" match.
+//
+// The hidden block adds 3 more "cat"s that findRanges() always filters out (its immediate
+// parent <span> is not itself display:none, so buildPageIndex() includes it in flatText,
+// but the enclosing <div> is display:none, so getClientRects() on any Range inside it
+// returns zero rects) — every existing exact-count assertion below is unaffected. It
+// exists solely for oculist-l6m.7's Lite Mode test: Lite Mode's count-only path scans
+// flatText directly with no visibility filter, so it reports 10 "cat"s (7 real + 3
+// hidden) where findRanges()/exact mode reports 7.
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; }</style>
-<p>cat cats cat dog cats bird cat cats cat</p>`;
+<p>cat cats cat dog cats bird cat cats cat</p>
+<div style="display:none"><span>cat cat cat</span></div>`;
 
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
@@ -34,7 +43,7 @@ const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
 const COUNT = '#oc-wrap >> .oc-count';
 
 describe('performListSearch() and per-term chip counts', () => {
-  let server, ctx, page, client, isolatedContextId;
+  let server, ctx, page, client, isolatedContextId, extId;
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -52,6 +61,9 @@ describe('performListSearch() and per-term chip counts', () => {
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 800 },
     });
+
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
 
@@ -112,6 +124,23 @@ describe('performListSearch() and per-term chip counts', () => {
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
     await page.waitForTimeout(250);
+  }
+
+  // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), the same path
+  // a user toggling the setting takes — not a direct storage write — so content.js's
+  // chrome.storage.onChanged listener is exercised exactly as it would be in production.
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
   }
 
   function chipTerms() {
@@ -235,5 +264,155 @@ describe('performListSearch() and per-term chip counts', () => {
       `expected performListSearch() to call buildPageIndex() exactly once (${baselineCalls} getComputedStyle calls, ` +
         `matching the known-single-call baseline), got ${listCalls} for a 3-term list`
     );
+  });
+
+  test('activating a chip corrects an inflated Lite Mode count exactly (oculist-l6m.7)', async () => {
+    await setLiteMode(true);
+    try {
+      // 'cat' committed first (briefly active), then 'dog' committed second — addChipTerm()
+      // always activates the newest chip, so this leaves 'cat' inactive and 'dog' active,
+      // which is what triggers 'cat''s Lite Mode count-only path.
+      await addTerm('cat');
+      await addTerm('dog');
+
+      assert.deepStrictEqual(await chipTerms(), ['cat', 'dog']);
+
+      const countsBeforeActivation = await chipCounts();
+      assert.strictEqual(
+        countsBeforeActivation[0],
+        '10',
+        '"cat" is inactive under Lite Mode: its count must be the uncorrected indexOf scan (7 visible + 3 hidden), not the exact 7'
+      );
+
+      // Activating 'cat' re-scans the whole list; 'cat' is now the active term, so it
+      // always gets an exact findRanges() scan (visibility-filtered) regardless of Lite
+      // Mode — the stale inflated count must not survive activation.
+      await page.locator(CHIP_TERM).nth(0).click();
+      await page.waitForTimeout(250);
+
+      const countsAfterActivation = await chipCounts();
+      assert.strictEqual(
+        countsAfterActivation[0],
+        '7',
+        'activating the chip must correct the inflated Lite Mode count to the exact, visibility-filtered count'
+      );
+      assert.strictEqual(
+        (await page.locator(COUNT).textContent()).trim(),
+        '0 of 7',
+        'the active term\'s own count element must also reflect the exact count, not the inflated one'
+      );
+    } finally {
+      await setLiteMode(false);
+    }
+  });
+});
+
+// A separate describe (own server, context, and fixture) so the large repeated-term page
+// below never shares state with the fixture above — this test needs distinct terms whose
+// per-term counts are each near or at findRanges()'s own 999 cap, which the small
+// cat/cats/dog fixture above cannot produce.
+describe('performListSearch() total match cap across all terms (oculist-l6m.7)', () => {
+  // Four distinct, non-overlapping terms. Lite Mode is used so only the active term
+  // ('zzalpha', added last) pays the real Range/getClientRects cost — 'zzbravo' and
+  // 'zzcharlie' are counted via the cheap indexOf path, keeping this fixture fast despite
+  // ~3000 total words. 'zzbravo' and 'zzcharlie' each have 1000 raw occurrences (capped at
+  // findRanges()/countMatchesOnly()'s existing 999-per-term ceiling); 'zzdelta' has only 5
+  // — by the time it is scanned, the running total (999 active + 999 + 999 = 2997) has
+  // already crossed TOTAL_MATCH_CAP (2000), so 'zzdelta' must be skipped entirely rather
+  // than showing its real count.
+  const CAP_PAGE = `<!doctype html><meta charset="utf-8">
+<style>body { margin: 0; font: 12px/1.2 system-ui, sans-serif; padding: 10px; }</style>
+<p>${'zzbravo '.repeat(1000)}</p>
+<p>${'zzcharlie '.repeat(1000)}</p>
+<p>${'zzdelta '.repeat(5)}</p>
+<p>${'zzalpha '.repeat(1000)}</p>`;
+
+  const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
+
+  let server, ctx, page, extId;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(CAP_PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    extId = sw.url().split('/')[2];
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+    await page.waitForTimeout(300);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
+  }
+
+  async function addTerm(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+  }
+
+  test('exceeding the 2000-match total cap stops materialising further terms, fires the notice, and never starves the active term', async () => {
+    await setLiteMode(true);
+    try {
+      await page.keyboard.press('Control+f');
+      await page.waitForSelector(INPUT, { timeout: 5000 });
+      await page.waitForTimeout(150);
+
+      await addTerm('zzbravo');
+      await addTerm('zzcharlie');
+      await addTerm('zzdelta');
+      await addTerm('zzalpha'); // added last -> active; must never be starved
+
+      const counts = await page.locator(CHIP_COUNT).allTextContents();
+      assert.deepStrictEqual(
+        counts,
+        ['999', '999', '', '999'],
+        '"zzbravo"/"zzcharlie" hit the per-term 999 cap, "zzdelta" is starved by the total cap (blank, not "5"), ' +
+          '"zzalpha" (active) still shows its full per-term-capped count'
+      );
+
+      // Enter-driven commits land on match 0 via highlightActiveRange() (see
+      // keydownHandler's Enter branch), so the active term's count shows "1 of 999", not
+      // the static "0 of 999" a chip click leaves behind — either way, the load-bearing
+      // part is the "999", not a starved/lower number.
+      assert.strictEqual(
+        (await page.locator(COUNT).textContent()).trim(),
+        '1 of 999',
+        'the active term ("zzalpha") must never be starved by the total cap'
+      );
+
+      const noticeText = await page.locator(NOTICE_TEXT).textContent();
+      assert.strictEqual(noticeText, 'Showing the first 2000 matches. Remove a term for a complete count.');
+    } finally {
+      await setLiteMode(false);
+    }
   });
 });

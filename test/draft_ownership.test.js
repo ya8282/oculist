@@ -43,7 +43,7 @@ const COUNT = '#oc-wrap >> .oc-count';
 const NOTICE = '#oc-wrap >> .oc-notice';
 
 describe('Draft input vs. active chip ownership', () => {
-  let server, ctx, page, client, isolatedContextId;
+  let server, ctx, page, client, isolatedContextId, extId;
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -61,6 +61,9 @@ describe('Draft input vs. active chip ownership', () => {
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 800 },
     });
+
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
 
@@ -160,6 +163,23 @@ describe('Draft input vs. active chip ownership', () => {
 
   function beaconCount() {
     return page.evaluate(() => document.querySelectorAll('.oc-beacon').length);
+  }
+
+  // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), so
+  // content.js's chrome.storage.onChanged listener is exercised exactly as production
+  // toggling is.
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
   }
 
   test('a single Enter after a draft leaves dim highlights and both chip counts on screen, no chip click', async () => {
@@ -274,5 +294,54 @@ describe('Draft input vs. active chip ownership', () => {
 
     const dimTexts = await rangeTexts('oculist-dim-match');
     assert.strictEqual(dimTexts.length, 5, 'both terms\' real matches (3 "cat" + 2 "dog") must still be dim');
+  });
+
+  // oculist-l6m.7: updateDimHighlight() has three call sites — performListSearch(),
+  // performDraftSearch(), and restoreActiveChip() — and Lite Mode has to guard all three,
+  // not just the first. This test walks through all three in one Lite Mode session so a
+  // guard on only performListSearch() (leaving dim highlights during draft typing or chip
+  // restore) fails it.
+  //
+  // Kept last: it changes the persisted performanceMode setting (chrome.storage.sync, not
+  // reset by beforeEach) and resets it back to off at the end so it never leaks into an
+  // earlier-run test.
+  test('Lite Mode suppresses dim highlights during draft typing and chip restore, not just a committed scan', async () => {
+    await setLiteMode(true);
+    try {
+      // performListSearch() call site: committing 'cat' then 'dog' with Enter. Checked via
+      // registryPresent(), not just rangeTexts(), so a guard that merely ends up building
+      // an empty Highlight (still .set(), just with nothing added) is caught the same as
+      // one that populates it with real ranges — Lite Mode must never .set() this registry
+      // at all.
+      await addTerm('cat');
+      await addTerm('dog');
+      assert.strictEqual(
+        await registryPresent('oculist-dim-match'),
+        false,
+        'performListSearch() must not set oculist-dim-match at all under Lite Mode'
+      );
+
+      // performDraftSearch() call site: typing a draft without committing it.
+      await typeDraft('bird');
+      assert.strictEqual(
+        await registryPresent('oculist-dim-match'),
+        false,
+        'performDraftSearch() must not set oculist-dim-match at all under Lite Mode while a draft is being typed'
+      );
+      const draftMatch = await rangeTexts('oculist-match');
+      assert.ok(draftMatch.length > 0 && draftMatch.every((t) => t === 'bird'), 'the draft itself still gets its own oculist-match highlight under Lite Mode');
+
+      // restoreActiveChip() call site: clearing the draft hands ownership back to 'dog'.
+      await typeDraft('');
+      assert.strictEqual(
+        await registryPresent('oculist-dim-match'),
+        false,
+        'restoreActiveChip() must not set oculist-dim-match at all under Lite Mode'
+      );
+      const restoredMatch = await rangeTexts('oculist-match');
+      assert.ok(restoredMatch.length > 0 && restoredMatch.every((t) => t === 'dog'), 'restoring the active chip still restores its own oculist-match highlight under Lite Mode');
+    } finally {
+      await setLiteMode(false);
+    }
   });
 });
