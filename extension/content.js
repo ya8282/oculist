@@ -495,7 +495,20 @@
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
-    effectPointingArrows: 'Pointing Arrows'
+    effectPointingArrows: 'Pointing Arrows',
+
+    // Saved-list popover (oculist-l6m.9)
+    listsBtnTitle: 'Saved Lists',
+    saveListPlaceholder: 'Save current as…',
+    saveListBtn: 'Save',
+    noSavedLists: 'No saved lists yet.',
+    loadListLabel: 'Load list',
+    renameListLabel: 'Rename list',
+    deleteListLabel: 'Delete list',
+    confirmRenameLabel: 'Confirm rename',
+    cancelRenameLabel: 'Cancel rename',
+    termSingular: 'term',
+    termPlural: 'terms'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -552,6 +565,7 @@
   var debounceTimer    = null;
   var activeBeacons    = 0;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
+  var listsBtn, listsPanel;
 
   // The chip row's working list. workListTerms holds the search terms in add order;
   // activeTermIndex points at the "active" chip, or -1 when none is active (including
@@ -639,6 +653,7 @@
     if (s) s.remove();
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
+    listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = [];
   };
@@ -3095,8 +3110,17 @@
       return;
     }
     if (!wrap) return;
-    if (e.key === 'Escape') { window.__ocDestroy(); return; }
-    
+    if (e.key === 'Escape') {
+      // The list popover gets its own first Escape (closing only itself) so a user
+      // browsing saved lists never loses the whole overlay by accident; a second Escape,
+      // with the popover already gone, falls through to the existing full-destroy below
+      // exactly as before oculist-l6m.9 (settings panel intentionally keeps today's
+      // behaviour — Escape there still closes the whole overlay, that wasn't in scope).
+      if (listsPanel) { closeListsMenu(); return; }
+      window.__ocDestroy();
+      return;
+    }
+
     var isGKey = (e.key && e.key.toLowerCase() === 'g') || e.keyCode === 71 || e.code === 'KeyG';
     var isF3Key = e.key === 'F3' || e.keyCode === 114;
     if (((e.ctrlKey || e.metaKey) && isGKey) || isF3Key) {
@@ -3116,6 +3140,14 @@
     }
 
     if (e.key === 'Enter') {
+      // Enter inside the list popover's own text inputs (Save current as…/rename) is
+      // handled entirely by their own confirm-button bindings — this is not the main
+      // find input's commit-a-chip Enter, and must not fall through to it (which reads
+      // input.value, the MAIN find input, regardless of what's actually focused, and
+      // could otherwise silently commit a stray draft term as a chip).
+      if (listsPanel && wrapRoot && wrapRoot.activeElement && listsPanel.contains(wrapRoot.activeElement)) {
+        return;
+      }
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
         try { e.preventDefault(); } catch (err) {}
         // A non-empty term that differs from the active chip becomes a chip and the
@@ -3172,6 +3204,9 @@
       settingsPanel = null;
       if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
     } else {
+      // Opening Settings while the list popover is open must close the list popover —
+      // the two are mutually exclusive (oculist-l6m.9 edge case).
+      if (listsPanel) { closeListsMenu({ skipFocusReturn: true }); }
       buildSettingsPanel();
       if (gearBtn) { gearBtn.classList.add('active'); gearBtn.style.color = t.accent; }
     }
@@ -3514,6 +3549,347 @@
     return badge;
   }
 
+  // ── List menu (saved lists popover, oculist-l6m.9) ─────────────────────────────
+  //
+  // Reuses the settings panel's popover styling and shadow-root mount pattern (same
+  // wrapRoot.appendChild + entrance animation), but is its own element (#oc-lists-panel)
+  // so it and #oc-settings-panel stay mutually exclusive rather than one incidentally
+  // hiding the other.
+
+  // Newest-first ordering with no stored timestamp: generateListId() ids are
+  // Date.now().toString(36) + random suffix, so for ids of equal length a plain string
+  // compare is equivalent to a numeric compare of the timestamp prefix. The length check
+  // guards the (currently many decades off) day base36 timestamps grow an extra digit,
+  // so a longer id always outranks a shorter one regardless of the character comparison.
+  function compareListsNewestFirst(a, b) {
+    if (a.id.length !== b.id.length) return b.id.length - a.id.length;
+    if (a.id === b.id) return 0;
+    return a.id < b.id ? 1 : -1;
+  }
+
+  function closeListsMenu(opts) {
+    var returnFocus = !(opts && opts.skipFocusReturn);
+    if (listsPanel) {
+      listsPanel.remove();
+      listsPanel = null;
+    }
+    if (listsBtn) {
+      listsBtn.classList.remove('active');
+      listsBtn.style.color = T().text;
+      if (returnFocus) listsBtn.focus();
+    }
+  }
+
+  function openListsMenu() {
+    buildListsPanel();
+    if (listsBtn) { listsBtn.classList.add('active'); listsBtn.style.color = T().accent; }
+  }
+
+  function toggleListsMenu() {
+    if (listsPanel) {
+      closeListsMenu();
+      return;
+    }
+    // Opening the list popover while Settings is open must close Settings — the two are
+    // mutually exclusive (oculist-l6m.9 edge case).
+    if (settingsPanel) {
+      var t = T();
+      settingsPanel.remove();
+      settingsPanel = null;
+      if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
+    }
+    openListsMenu();
+  }
+
+  // Loading a saved list replaces the working list outright, with no confirmation —
+  // "Save current as…" sits directly above the list for exactly this reason. Mirrors the
+  // same blank-counts, no-scan state loadWorkList() leaves a freshly restored working
+  // list in on mount (oculist-l6m.3): chips render immediately, but hit counts and the
+  // active highlight stay blank until the user clicks a chip to scan.
+  //
+  // sanitizeListTerms() re-caps to MAX_LIST_TERMS defensively — saveList() already caps
+  // saved terms to 10 before they ever reach storage, so this should never trim anything
+  // in practice, but a saved list is stored data a future format change (or a manual
+  // edit of chrome.storage.sync) could still hand back over-length, and the working list
+  // must never be corrupted by it.
+  function loadSavedList(list) {
+    var terms = sanitizeListTerms(list.terms);
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+    clearViewportMarkers();
+
+    workListTerms = terms;
+    activeTermIndex = -1;
+    termRanges = [];
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    lastTerm = '';
+    if (input) input.value = '';
+    if (countEl) countEl.textContent = '';
+    setNavEnabled(false);
+    removeNotice();
+
+    persistWorkList();
+    renderChipRow();
+    closeListsMenu({ skipFocusReturn: true });
+    if (input) input.focus();
+  }
+
+  function refreshListsPanel() {
+    if (!listsPanel) return;
+    var saveInput = listsPanel.querySelector('.oc-list-save-input');
+    var saveBtn = listsPanel.querySelector('.oc-list-save-btn');
+    if (saveInput) saveInput.value = '';
+    if (saveBtn) saveBtn.disabled = true;
+    var listContainer = listsPanel.querySelector('.oc-list-items');
+    if (!listContainer) return;
+    listSavedLists(function (lists) {
+      if (!listsPanel) return;
+      renderListItems(listContainer, lists);
+    });
+  }
+
+  function buildListItem(list) {
+    var item = document.createElement('div');
+    item.className = 'oc-list-item';
+    item.title = list.terms.join(', ');
+
+    function renderView() {
+      item.textContent = '';
+      item.classList.remove('oc-list-item-editing');
+
+      var nameBtn = document.createElement('button');
+      nameBtn.type = 'button';
+      nameBtn.className = 'oc-list-item-name';
+      nameBtn.textContent = list.name;
+      nameBtn.setAttribute('aria-label', i18n.loadListLabel + ': ' + list.name);
+      nameBtn.addEventListener('click', function () {
+        loadSavedList(list);
+      });
+
+      var countBadge = document.createElement('span');
+      countBadge.className = 'oc-list-item-count';
+      countBadge.setAttribute('aria-hidden', 'true');
+      countBadge.textContent = String(list.terms.length) + ' ' +
+        (list.terms.length === 1 ? i18n.termSingular : i18n.termPlural);
+
+      var renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'oc-list-rename-btn';
+      renameBtn.textContent = '✎';
+      renameBtn.setAttribute('aria-label', i18n.renameListLabel + ': ' + list.name);
+      renameBtn.addEventListener('click', function () {
+        renderEdit();
+      });
+
+      var deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'oc-list-delete-btn';
+      deleteBtn.textContent = '✕';
+      deleteBtn.setAttribute('aria-label', i18n.deleteListLabel + ': ' + list.name);
+      deleteBtn.addEventListener('click', function () {
+        deleteList(list.id, function (result) {
+          // 'write-failed' already shows its own notice via deleteList(); leave the item
+          // in place so the user can retry. 'exception' is silent by design — same, leave
+          // it. Only a genuine delete (or a stale item already gone elsewhere) refreshes.
+          if (result && (result.ok || result.reason === 'not-found')) {
+            refreshListsPanel();
+          }
+        });
+      });
+
+      item.appendChild(nameBtn);
+      item.appendChild(countBadge);
+      item.appendChild(renameBtn);
+      item.appendChild(deleteBtn);
+    }
+
+    function renderEdit() {
+      item.textContent = '';
+      item.classList.add('oc-list-item-editing');
+
+      var renameInput = document.createElement('input');
+      renameInput.type = 'text';
+      renameInput.className = 'oc-list-rename-input';
+      renameInput.value = list.name;
+      renameInput.maxLength = 100;
+      renameInput.setAttribute('aria-label', i18n.renameListLabel + ': ' + list.name);
+
+      var confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'oc-list-rename-confirm';
+      confirmBtn.textContent = '✓';
+      confirmBtn.setAttribute('aria-label', i18n.confirmRenameLabel);
+
+      var cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'oc-list-rename-cancel';
+      cancelBtn.textContent = '✕';
+      cancelBtn.setAttribute('aria-label', i18n.cancelRenameLabel);
+
+      // Inherited obligation (oculist-l6m.8 review, carried into this bead): renameList()
+      // rejects a blank/whitespace-only name SILENTLY (no notice) — the confirm control
+      // must therefore stay disabled on blank input rather than let the user press it
+      // into a silent no-op.
+      function updateConfirmState() {
+        confirmBtn.disabled = renameInput.value.trim() === '';
+      }
+      updateConfirmState();
+
+      renameInput.addEventListener('input', updateConfirmState);
+      renameInput.addEventListener('keydown', function (e) {
+        e.stopPropagation();
+        if (e.key === 'Enter' && !confirmBtn.disabled) {
+          e.preventDefault();
+          confirmBtn.click();
+        }
+      });
+
+      confirmBtn.addEventListener('click', function () {
+        var name = renameInput.value;
+        if (name.trim() === '') return;
+        renameList(list.id, name, function (result) {
+          if (!result) return;
+          if (result.ok || result.reason === 'not-found') {
+            // A genuine rename, or the item having vanished from under the edit (e.g.
+            // deleted from another device mid-edit) — either way the panel needs a
+            // fresh read.
+            refreshListsPanel();
+          }
+          // 'write-failed' already shows its own notice via renameList(); leave the edit
+          // row open (with the user's typed text intact) so they can retry. 'empty-name'
+          // cannot occur here (confirm is disabled on blank input) and 'exception' is
+          // silent by design — both also leave the row as-is.
+        });
+      });
+
+      cancelBtn.addEventListener('click', function () {
+        renderView();
+      });
+
+      item.appendChild(renameInput);
+      item.appendChild(confirmBtn);
+      item.appendChild(cancelBtn);
+      renameInput.focus();
+      renameInput.select();
+    }
+
+    renderView();
+    return item;
+  }
+
+  function renderListItems(container, lists) {
+    container.textContent = '';
+    if (!lists || lists.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'oc-list-empty';
+      empty.textContent = i18n.noSavedLists;
+      container.appendChild(empty);
+      return;
+    }
+    var sorted = lists.slice().sort(compareListsNewestFirst);
+    sorted.forEach(function (list) {
+      container.appendChild(buildListItem(list));
+    });
+  }
+
+  function buildListsPanel() {
+    var p = P();
+
+    listsPanel = document.createElement('div');
+    listsPanel.id = 'oc-lists-panel';
+    listsPanel.setAttribute('role', 'dialog');
+    listsPanel.setAttribute('aria-label', i18n.listsBtnTitle);
+
+    var saveRow = document.createElement('div');
+    saveRow.className = 'oc-list-save-row';
+
+    var saveInput = document.createElement('input');
+    saveInput.type = 'text';
+    saveInput.className = 'oc-list-save-input';
+    saveInput.placeholder = i18n.saveListPlaceholder;
+    saveInput.maxLength = 100;
+    saveInput.setAttribute('aria-label', i18n.saveListPlaceholder);
+
+    var saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'oc-list-save-btn';
+    saveBtn.textContent = i18n.saveListBtn;
+    saveBtn.setAttribute('aria-label', i18n.saveListBtn);
+    // Inherited obligation (oculist-l6m.8 review): saveList() rejects a blank/whitespace-
+    // only name SILENTLY. Disabled-by-default plus the live 'input' listener below means
+    // the confirm control can never be pressed into that silent no-op.
+    saveBtn.disabled = true;
+
+    saveInput.addEventListener('input', function () {
+      saveBtn.disabled = saveInput.value.trim() === '';
+    });
+    saveInput.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter' && !saveBtn.disabled) {
+        e.preventDefault();
+        saveBtn.click();
+      }
+    });
+
+    saveBtn.addEventListener('click', function () {
+      var name = saveInput.value;
+      if (name.trim() === '') return;
+      saveList(name, workListTerms, function (result) {
+        // 'cap' and 'write-failed' already show their own notice via saveList(); leave
+        // the input populated either way so the user can retry (e.g. after freeing up a
+        // slot) without retyping the name. 'empty-name'/'exception' can't surface here
+        // (the button is disabled on blank input) but are handled the same, doing
+        // nothing further.
+        if (result && result.ok) {
+          refreshListsPanel();
+        }
+      });
+    });
+
+    saveRow.appendChild(saveInput);
+    saveRow.appendChild(saveBtn);
+    listsPanel.appendChild(saveRow);
+
+    var divider = document.createElement('div');
+    divider.className = 'oc-list-divider';
+    listsPanel.appendChild(divider);
+
+    var listContainer = document.createElement('div');
+    listContainer.className = 'oc-list-items';
+    listsPanel.appendChild(listContainer);
+
+    wrapRoot.appendChild(listsPanel);
+
+    listSavedLists(function (lists) {
+      // A rapid close before this async read lands would already have torn listsPanel
+      // down — skip a stale render into a detached container.
+      if (!listsPanel) return;
+      renderListItems(listContainer, lists);
+    });
+
+    // 'full' is the only motion level the settings panel's own entrance animation runs
+    // under too in spirit — 'reduced' and 'off' both suppress it here, matching
+    // effectiveMotion()'s two-tier gate used elsewhere (chip row, beacons).
+    if (effectiveMotion() === 'full') {
+      listsPanel.animate([
+        { opacity: 0, transform: p.isBottom ? 'translateY(8px)' : 'translateY(-8px)' },
+        { opacity: 1, transform: 'translateY(0)' }
+      ], {
+        duration: 180,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'forwards'
+      });
+    }
+  }
+
   // ── Apply position / theme to live elements ───────────────────────────────────
 
   function applyWrapPosition() {
@@ -3557,7 +3933,7 @@
 
   // ── UI build ──────────────────────────────────────────────────────────────────
 
-  var ICON_CHARS = { up: '↑', down: '↓', replay: '↺', gear: '⚙', close: '✕' };
+  var ICON_CHARS = { up: '↑', down: '↓', replay: '↺', gear: '⚙', close: '✕', list: '☰' };
 
   function makeIconBtn(iconName, title) {
     var btn = document.createElement('button');
@@ -3630,6 +4006,9 @@
     replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
+    listsBtn = makeIconBtn('list', i18n.listsBtnTitle);
+    listsBtn.addEventListener('click', toggleListsMenu);
+
     gearBtn = makeIconBtn('gear', i18n.optionsTitle);
     gearBtn.addEventListener('click', toggleSettings);
 
@@ -3643,6 +4022,7 @@
     bar.appendChild(prevBtn);
     bar.appendChild(nextBtn);
     bar.appendChild(replayBtn);
+    bar.appendChild(listsBtn);
     bar.appendChild(gearBtn);
     bar.appendChild(closeBtn);
 
@@ -4364,6 +4744,155 @@
         // transitions entirely, same two-tier gate used elsewhere for beacon motion.
         '.oc-chip.oc-no-motion .oc-chip-term, .oc-chip.oc-no-motion .oc-chip-remove {',
         '  transition: none;',
+        '}',
+        // ── List menu popover (oculist-l6m.9) ──────────────────────────────────
+        '#oc-lists-panel {',
+        '  background: var(--oc-panel-bg);',
+        '  padding: 10px 12px;',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 8px;',
+        '  box-sizing: border-box;',
+        // Same trick as #oc-settings-panel: width:0 keeps the popover out of the shadow
+        // host's intrinsic width so it cannot stretch the bar; min-width:100% then fills
+        // whatever width the bar settled on.
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  max-height: 320px;',
+        '  overflow-y: auto;',
+        '  box-sizing: border-box;',
+        '}',
+        ':host(.is-bottom) #oc-lists-panel {',
+        '  border-bottom: 1px solid var(--oc-divider);',
+        '}',
+        ':host(.is-top) #oc-lists-panel {',
+        '  border-top: 1px solid var(--oc-divider);',
+        '}',
+        '.oc-list-save-row {',
+        '  display: flex;',
+        '  gap: 6px;',
+        '  align-items: center;',
+        '}',
+        'input.oc-list-save-input, input.oc-list-rename-input {',
+        '  flex: 1;',
+        '  border: 1px solid var(--oc-input-border);',
+        '  border-radius: 6px;',
+        '  background: var(--oc-input-bg);',
+        '  color: var(--oc-input-text);',
+        '  padding: 4px 8px;',
+        '  font-size: 13px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  outline: none;',
+        '  box-sizing: border-box;',
+        '  margin: 0;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  transition: border-color 150ms, box-shadow 150ms;',
+        '}',
+        'input.oc-list-save-input:focus, input.oc-list-rename-input:focus {',
+        '  border-color: var(--oc-accent);',
+        '  box-shadow: 0 0 0 2px var(--oc-accent-alpha);',
+        '}',
+        '.oc-list-save-btn {',
+        '  flex-shrink: 0;',
+        '  background: var(--oc-btn-active-bg);',
+        '  color: var(--oc-btn-active-text);',
+        '  font-size: 12px;',
+        '  font-weight: 600;',
+        '  padding: 5px 10px;',
+        '  border-radius: 6px;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  box-shadow: none;',
+        '}',
+        '.oc-list-divider {',
+        '  height: 1px;',
+        '  background: var(--oc-divider);',
+        '  flex-shrink: 0;',
+        '}',
+        '.oc-list-items {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 4px;',
+        '}',
+        '.oc-list-empty {',
+        '  font-size: 12px;',
+        '  color: var(--oc-subtle);',
+        '  opacity: 0.75;',
+        '  padding: 4px 2px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '}',
+        '.oc-list-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  gap: 6px;',
+        '  padding: 4px 2px;',
+        '  border-radius: 6px;',
+        '}',
+        '.oc-list-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '}',
+        '.oc-list-item-name {',
+        '  flex: 1;',
+        '  text-align: left;',
+        '  color: var(--oc-text);',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 2px 4px;',
+        '  font-size: 13px;',
+        '  font-weight: 500;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  cursor: pointer;',
+        '  overflow: hidden;',
+        '  text-overflow: ellipsis;',
+        '  white-space: nowrap;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  box-shadow: none;',
+        '  justify-content: flex-start;',
+        '}',
+        '.oc-list-item-name:hover, .oc-list-item-name:focus-visible {',
+        '  color: ' + t.accent + ';',
+        '}',
+        '.oc-list-item-count {',
+        '  font-size: 11px;',
+        '  color: ' + t.subtle + ';',
+        '  opacity: 0.7;',
+        '  flex-shrink: 0;',
+        '  white-space: nowrap;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  user-select: none;',
+        '}',
+        '.oc-list-rename-btn, .oc-list-delete-btn, .oc-list-rename-confirm, .oc-list-rename-cancel {',
+        '  flex-shrink: 0;',
+        '  width: 22px;',
+        '  height: 22px;',
+        '  min-width: 22px;',
+        '  min-height: 22px;',
+        '  max-width: 22px;',
+        '  max-height: 22px;',
+        '  font-size: 11px;',
+        '  border-radius: 50%;',
+        '  opacity: 0.7;',
+        '}',
+        '.oc-list-rename-btn:hover, .oc-list-delete-btn:hover, .oc-list-rename-confirm:hover, .oc-list-rename-cancel:hover {',
+        '  opacity: 1;',
+        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '}',
+        '.oc-list-rename-confirm:disabled, .oc-list-save-btn:disabled {',
+        '  opacity: 0.4;',
+        '  cursor: default;',
+        '}',
+        '.oc-list-item-editing {',
+        '  align-items: center;',
         '}'
       ].join('\n');
 
