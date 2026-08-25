@@ -76,6 +76,81 @@
     });
   }
 
+  // ── Working list (session-scoped, separate from settings) ──────────────────────
+  //
+  // A tab-local list of search terms, kept in chrome.storage.session under its own key.
+  // Deliberately not folded into 'oc-settings' / SETTINGS_KEYS / pendingSelfWrites — that
+  // machinery exists to survive its own storage.onChanged echoes for a synced, persisted
+  // object, which this session-only, per-tab list has no need of.
+  //
+  // chrome.storage.session is only readable here if background.js's service-worker
+  // startup call to setAccessLevel('TRUSTED_AND_UNTRUSTED_CONTEXTS') succeeded. On an
+  // older Chrome without that API, or if the call failed or hasn't run yet,
+  // chrome.storage.session may be undefined in this content script — every access below
+  // is guarded for that, and a failed or unavailable read silently degrades to the
+  // default rather than surfacing an error, since a missing working list just means
+  // today's single-term behaviour.
+  var WORK_LIST_KEY = 'oc-worklist';
+
+  function defaultWorkList() {
+    return { terms: [], activeIndex: -1 };
+  }
+
+  function loadWorkList(callback) {
+    try {
+      if (!chrome.storage || !chrome.storage.session) {
+        callback(defaultWorkList());
+        return;
+      }
+      chrome.storage.session.get(WORK_LIST_KEY, function (data) {
+        if (chrome.runtime.lastError || !data || !data[WORK_LIST_KEY]) {
+          callback(defaultWorkList());
+          return;
+        }
+        var stored = data[WORK_LIST_KEY];
+        callback({
+          terms: Array.isArray(stored.terms) ? stored.terms : [],
+          activeIndex: typeof stored.activeIndex === 'number' ? stored.activeIndex : -1
+        });
+      });
+    } catch (err) {
+      callback(defaultWorkList());
+    }
+  }
+
+  function saveWorkList(list) {
+    try {
+      if (!chrome.storage || !chrome.storage.session) return;
+      var payload = {
+        terms: Array.isArray(list && list.terms) ? list.terms : [],
+        activeIndex: typeof (list && list.activeIndex) === 'number' ? list.activeIndex : -1
+      };
+      var setObj = {};
+      setObj[WORK_LIST_KEY] = payload;
+      var setResult = chrome.storage.session.set(setObj, function () {
+        // Read lastError so a rejected/unavailable write doesn't surface as an unchecked
+        // runtime error; this is invisible plumbing and must fail silently.
+        void chrome.runtime.lastError;
+      });
+      if (setResult && typeof setResult.catch === 'function') {
+        setResult.catch(function () {});
+      }
+    } catch (err) {
+      // fail silently — a browser without session storage access must not throw here.
+    }
+  }
+
+  // Exposed the same way window.__ocToggle / window.__ocDestroy already are: content
+  // scripts run in an isolated JS world, so nothing outside this IIFE (including a test
+  // harness) can reach loadWorkList/saveWorkList as plain closures. Attaching them to
+  // window makes them reachable from a CDP Runtime.evaluate call scoped to this
+  // extension's isolated execution context, which is how
+  // test/worklist_storage.test.js exercises the real content-script chrome.storage.session
+  // round trip. No UI calls these yet; that lands in a later bead, from inside this
+  // closure directly rather than through window.
+  window.__ocLoadWorkList = loadWorkList;
+  window.__ocSaveWorkList = saveWorkList;
+
   function getEffectiveColors() {
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
     var mc = settings.matchColor || '#fef08a';
