@@ -2041,6 +2041,78 @@
     // below.
     updateDimHighlight(terms, termRanges, activeIdx);
 
+    // A committed working list can legitimately have no active chip (activeIdx === -1,
+    // e.g. a persisted/restored list before any chip has been (re-)activated — see
+    // dim_highlight.test.js). That is not the same thing as "searched and found zero
+    // matches": every term may well have real hits, just none of them "active" right
+    // now. hasActiveTerm distinguishes the two so a restored-but-unselected list never
+    // writes the misleading "no matches" count or fires checkSiteOverride's unsolicited
+    // notice against terms that are simply sitting dim (oculist-l6m.5, from the .4 review).
+    var hasActiveTerm = activeIdx >= 0 && activeIdx < terms.length;
+
+    if (searchRanges.length > 0) {
+      firstEnter = true;
+      try {
+        if (typeof Highlight !== 'undefined' && CSS.highlights) {
+          var matchHighlight = new Highlight();
+          searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
+          CSS.highlights.set('oculist-match', matchHighlight);
+        }
+      } catch (e) {
+        console.warn('Oculist: CSS Custom Highlight API not supported or blocked.', e);
+      }
+      setNavEnabled(searchRanges.length > 1);
+      countEl.textContent = '0 ' + i18n.of + ' ' + searchRanges.length;
+    } else if (hasActiveTerm) {
+      countEl.textContent = i18n.noMatch;
+      setNavEnabled(false);
+    } else {
+      countEl.textContent = '';
+      setNavEnabled(false);
+    }
+
+    checkSiteOverride(hasActiveTerm && searchRanges.length === 0);
+
+    renderChipRow();
+  }
+
+  // ── Draft input vs. active chip ownership (oculist-l6m.5) ───────────────────────
+  //
+  // A non-empty input holds a DRAFT term that has not been committed to a chip yet. The
+  // draft owns searchRanges and the active highlight (oculist-match/oculist-active-match)
+  // exactly like a lone performSearch() always has — live debounced typing is unchanged.
+  // But committed chips must stay rendered with their last known counts and stay in the
+  // dim registry while the draft is being typed, so this rebuilds oculist-dim-match from
+  // the working list's already-known termRanges (no chip term is re-scanned; only the
+  // draft term itself gets a fresh buildPageIndex() call, exactly one per keystroke as
+  // before). No chip is "active" for highlight purposes while a draft owns the highlight,
+  // so every committed term — including whichever chip was active before typing began —
+  // goes into the dim set (activeIdx -1 excludes nothing, see updateDimHighlight()).
+  function performDraftSearch(term) {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        // Only touch oculist-dim-match when there is a working list to keep dim — with
+        // no chips at all (today's overwhelmingly common lone-search case) this must
+        // behave byte-for-byte like the old performSearch(), which left it deleted.
+        if (workListTerms.length === 0) CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    var pageIndex = buildPageIndex();
+    searchRanges = findRanges(pageIndex, term);
+
+    if (workListTerms.length > 0) {
+      updateDimHighlight(workListTerms, termRanges, -1);
+    }
+
     if (searchRanges.length > 0) {
       firstEnter = true;
       try {
@@ -2061,8 +2133,50 @@
     }
 
     checkSiteOverride(searchRanges.length === 0);
+  }
 
-    renderChipRow();
+  // Clearing the input hands ownership back to whichever chip was active before the draft
+  // started — its cached termRanges become searchRanges again and oculist-match returns,
+  // reusing the last scan rather than re-scanning the page (so rapid type-then-clear never
+  // costs a second buildPageIndex() call and never leaves a stale registry entry: every
+  // registry this function touches is either deleted or freshly .set() before it returns).
+  // Deliberately does not call highlightActiveRange() — restoring a chip must never
+  // trigger the beacon, exactly like a plain chip click never has.
+  function restoreActiveChip() {
+    if (activeTermIndex < 0 || activeTermIndex >= workListTerms.length) {
+      // No chips, or no chip currently active — today's empty state, byte-for-byte via
+      // the same early-return branch a lone performSearch('') has always used.
+      performSearch('');
+      return;
+    }
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-active-match');
+      }
+    } catch (e) {}
+
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    searchRanges = termRanges[activeTermIndex] || [];
+
+    updateDimHighlight(workListTerms, termRanges, activeTermIndex);
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        var matchHighlight = new Highlight();
+        searchRanges.forEach(function (r) { matchHighlight.add(r); });
+        matchHighlight.priority = 1;
+        CSS.highlights.set('oculist-match', matchHighlight);
+      }
+    } catch (e) {}
+
+    setNavEnabled(searchRanges.length > 1);
+    countEl.textContent = searchRanges.length > 0
+      ? '0 ' + i18n.of + ' ' + searchRanges.length
+      : i18n.noMatch;
   }
 
   // ── Dynamic content re-scan (infinite scroll / DOM mutation) ───────────────────
@@ -2295,6 +2409,11 @@
   // which runs right after this, in the same Enter handler, and unconditionally clears
   // whatever notice is up when the term the user just typed matches the page — has had a
   // chance to wipe it out from under this same keystroke.
+  //
+  // oculist-l6m.5: a real commit (a new chip pushed, or an existing one re-activated on a
+  // duplicate) now runs performListSearch() itself, so dim highlights and every chip's
+  // count are on screen the instant Enter lands a chip — not just after a later chip
+  // click or DOM-mutation rescan. A cap hit never reaches either scan call below.
   function addChipTerm(rawTerm) {
     var trimmed = (rawTerm || '').trim();
     if (trimmed === '') return;
@@ -2326,23 +2445,29 @@
     workListTerms.push(trimmed);
     activeTermIndex = workListTerms.length - 1;
     persistWorkList();
-    renderChipRow();
+    performListSearch();
   }
 
-  // Called from keydownHandler's Enter branch, before findNext() runs. Adds/activates a
-  // chip as a side effect of Enter when the input holds a term that differs from the
-  // currently active chip; otherwise Enter is next-match exactly as before. Never clears
-  // the input — the search bar keeps whatever the user typed. Returns whatever addChipTerm
-  // returns (a cap message, or undefined) so keydownHandler can re-surface it after
-  // findNext() runs.
+  // Called from keydownHandler's Enter branch. Adds/activates a chip as a side effect of
+  // Enter when the input holds a term that differs from the currently active chip;
+  // otherwise Enter is next-match exactly as before. Never clears the input — the search
+  // bar keeps whatever the user typed.
+  //
+  // Returns { committed, message }. committed is true only when addChipTerm() actually
+  // pushed or (re)activated a chip — i.e. ran its one performListSearch() scan — so
+  // keydownHandler can land directly off that fresh state instead of falling through to
+  // findNext(), which would otherwise re-scan the page a second time on the same
+  // keystroke (oculist-l6m.5). message is the cap notice text on a cap hit, undefined
+  // otherwise; committed is always false whenever message is set.
   function maybeAddChipFromInput() {
-    if (!input || !input.value) return;
+    if (!input || !input.value) return { committed: false };
     var activeTerm = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
       ? workListTerms[activeTermIndex]
       : null;
     var trimmed = input.value.trim();
-    if (trimmed === activeTerm) return;
-    return addChipTerm(input.value);
+    if (trimmed === '' || trimmed === activeTerm) return { committed: false };
+    var message = addChipTerm(input.value);
+    return { committed: !message, message: message };
   }
 
   function renderChipRow() {
@@ -2686,16 +2811,45 @@
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
         try { e.preventDefault(); } catch (err) {}
         // A non-empty term that differs from the active chip becomes a chip and the
-        // active one, as a side effect — findNext() below still runs exactly as before,
-        // landing on match 0 via firstEnter the same way it always has.
-        var capMessage = maybeAddChipFromInput();
-        findNext(e.shiftKey);
-        // findNext()'s performSearch() -> checkSiteOverride() call above unconditionally
-        // clears whatever notice is up when the just-typed term matches the page, which
-        // erases a cap notice addChipTerm() just showed in the same keystroke. Re-show it.
-        if (capMessage) {
+        // active one, as a side effect. maybeAddChipFromInput() itself runs the one
+        // performListSearch() scan when it actually commits (new chip or duplicate
+        // activation), so a committed Enter lands directly off that fresh state below
+        // instead of falling through to findNext() — which called a bare performSearch()
+        // here before oculist-l6m.5, wiping the dim registry and rebuilding oculist-match
+        // for a single term, undoing the scan that just ran.
+        var commitResult = maybeAddChipFromInput();
+        if (commitResult.committed) {
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
+          lastTerm = input.value;
+          // Land on match 0 (or the last match, backwards) via the existing firstEnter
+          // flag — performListSearch() already set it when the fresh scan found matches,
+          // exactly like a lone performSearch() always has.
+          if (searchRanges.length > 0) {
+            if (firstEnter) {
+              firstEnter = false;
+              activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
+            } else {
+              activeIndex = e.shiftKey
+                ? (activeIndex <= 0 ? searchRanges.length - 1 : activeIndex - 1)
+                : (activeIndex >= searchRanges.length - 1 ? 0 : activeIndex + 1);
+            }
+            highlightActiveRange(true);
+          }
+        } else {
+          // No commit happened (blank/whitespace input, a cap hit, or the input already
+          // matches the active chip) — Enter is plain next-match, exactly as before.
+          findNext(e.shiftKey);
+        }
+        // A cap hit never commits, so it always takes the findNext() branch above, whose
+        // performSearch() -> checkSiteOverride() call unconditionally clears whatever
+        // notice is up when the just-typed term matches the page — erasing the cap notice
+        // addChipTerm() just showed in the same keystroke. Re-show it.
+        if (commitResult.message) {
           removeNotice();
-          showNotice(capMessage);
+          showNotice(commitResult.message);
         }
       }
     }
@@ -3141,10 +3295,17 @@
       debounceTimer = setTimeout(function () {
         var term = input.value;
         lastTerm = term;
-        performSearch(term);
-        if (searchRanges.length > 0) {
-          activeIndex = 0;
-          highlightActiveRange(false);
+        // Rule 1: a non-empty input is a draft that owns searchRanges/the active
+        // highlight. Rule 4: an emptied input hands ownership back to whichever chip was
+        // active before the draft started (oculist-l6m.5).
+        if (term) {
+          performDraftSearch(term);
+          if (searchRanges.length > 0) {
+            activeIndex = 0;
+            highlightActiveRange(false);
+          }
+        } else {
+          restoreActiveChip();
         }
       }, settings.performanceMode ? 400 : 150);
     });

@@ -130,12 +130,14 @@ describe('performListSearch() and per-term chip counts', () => {
 
     assert.deepStrictEqual(await chipTerms(), ['cat', 'cats', 'dog', 'elephant']);
 
-    // Counts stay blank until a scan actually runs — addChipTerm() only pushes/persists,
-    // it never calls performListSearch() itself.
-    assert.deepStrictEqual(await chipCounts(), ['', '', '', '']);
+    // oculist-l6m.5: committing a chip with Enter now runs performListSearch() itself
+    // (inside addChipTerm()), so every chip's count is already populated the moment the
+    // 4th chip lands — before any chip click. See draft_ownership.test.js for the
+    // dedicated coverage of that Enter-driven scan.
+    assert.deepStrictEqual(await chipCounts(), ['7', '3', '1', '0']);
 
-    // A single chip click scans the whole list in one performListSearch() call and
-    // populates every chip's count, not just the one that was clicked.
+    // Re-activating a chip via a click re-scans the whole list in one performListSearch()
+    // call and keeps every chip's count correct, not just the one that was clicked.
     await page.locator(CHIP_TERM).nth(0).click();
     await page.waitForTimeout(250);
 
