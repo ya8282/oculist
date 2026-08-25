@@ -168,6 +168,235 @@
   window.__ocLoadWorkList = loadWorkList;
   window.__ocSaveWorkList = saveWorkList;
 
+  // ── Saved lists (named, persisted across devices) ──────────────────────────────
+  //
+  // Distinct from the working list above: a saved list is a named, user-curated term set
+  // that persists across devices via chrome.storage.sync, independent of any one tab's
+  // working list. Deleting a saved list never touches the working list, and vice versa —
+  // loading a saved list into the working list (a later bead) copies its terms in, it
+  // does not link the two by id.
+  //
+  // Storage shape: one chrome.storage.sync key per list ('oc-list-<id>'), holding
+  // { id, name, terms }, rather than a single array under one key. Two independent
+  // reasons: chrome.storage.sync caps a single item at 8192 bytes (QUOTA_BYTES_PER_ITEM),
+  // which an array of many realistic-sized lists could exceed long before the 50-list cap
+  // below is even hit; and per-key writes mean saving from two devices at once each writes
+  // its own key, instead of racing to read-modify-write one shared array and silently
+  // losing whichever write lands second.
+  var LIST_KEY_PREFIX = 'oc-list-';
+  var MAX_SAVED_LISTS = 50;
+  var MAX_LIST_TERMS = 10;
+  var MAX_LIST_TERM_LENGTH = 100;
+
+  function listStorageKey(id) {
+    return LIST_KEY_PREFIX + id;
+  }
+
+  // Defensive sanitizer for terms handed to saveList()/renameList(): drops non-strings and
+  // whitespace-only entries, clips any term over MAX_LIST_TERM_LENGTH characters, and stops
+  // once MAX_LIST_TERMS is reached. The working list's own addChipTerm() already enforces
+  // both caps before a term ever reaches a chip, so in practice this is a backstop, not the
+  // primary enforcement point — saveList() takes a plain terms array as its argument, with
+  // no guarantee its caller went through addChipTerm.
+  function sanitizeListTerms(terms) {
+    var arr = Array.isArray(terms) ? terms : [];
+    var out = [];
+    for (var i = 0; i < arr.length && out.length < MAX_LIST_TERMS; i++) {
+      var t = typeof arr[i] === 'string' ? arr[i].trim() : '';
+      if (t === '') continue;
+      if (t.length > MAX_LIST_TERM_LENGTH) t = t.slice(0, MAX_LIST_TERM_LENGTH);
+      out.push(t);
+    }
+    return out;
+  }
+
+  // Generates an id guaranteed not to collide with any id already present under the
+  // oc-list- prefix. existingIds is supplied by the caller (saveList already has to read
+  // every oc-list-* key to enforce the 50-list cap, so this avoids a second async round
+  // trip just to check for collisions).
+  function generateListId(existingIds) {
+    var ids = Array.isArray(existingIds) ? existingIds : [];
+    var id;
+    var attempts = 0;
+    do {
+      id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      attempts++;
+    } while (ids.indexOf(id) !== -1 && attempts < 1000);
+    return id;
+  }
+
+  // Reads every oc-list-* key and returns the well-formed { id, name, terms } entries.
+  // Tolerates junk under the prefix (a malformed or partially-written value from a
+  // previous version, a failed write, or a future format this version doesn't understand)
+  // by skipping anything that isn't shaped like a list, rather than throwing.
+  function listSavedLists(callback) {
+    try {
+      chrome.storage.sync.get(null, function (data) {
+        if (chrome.runtime.lastError || !data) {
+          callback([]);
+          return;
+        }
+        var out = [];
+        Object.keys(data).forEach(function (key) {
+          if (key.indexOf(LIST_KEY_PREFIX) !== 0) return;
+          var entry = data[key];
+          if (!entry || typeof entry !== 'object') return;
+          if (typeof entry.id !== 'string' || entry.id === '') return;
+          if (typeof entry.name !== 'string') return;
+          if (!Array.isArray(entry.terms)) return;
+          out.push({
+            id: entry.id,
+            name: entry.name,
+            terms: entry.terms.filter(function (t) { return typeof t === 'string'; })
+          });
+        });
+        callback(out);
+      });
+    } catch (err) {
+      callback([]);
+    }
+  }
+
+  // Reads every oc-list-* key once and hands the caller both the current count (for the
+  // 50-list cap) and the id list (for generateListId's collision check) — shared by
+  // saveList so it never has to make two separate chrome.storage.sync.get(null) calls.
+  function readListIndex(callback) {
+    try {
+      chrome.storage.sync.get(null, function (data) {
+        if (chrome.runtime.lastError || !data) {
+          callback({ count: 0, ids: [] });
+          return;
+        }
+        var count = 0;
+        var ids = [];
+        Object.keys(data).forEach(function (key) {
+          if (key.indexOf(LIST_KEY_PREFIX) !== 0) return;
+          count++;
+          var entry = data[key];
+          if (entry && typeof entry.id === 'string') ids.push(entry.id);
+        });
+        callback({ count: count, ids: ids });
+      });
+    } catch (err) {
+      callback({ count: 0, ids: [] });
+    }
+  }
+
+  // name is trimmed; an empty or whitespace-only name is rejected silently (no
+  // showNotice), matching addChipTerm()'s existing whitespace-only rejection further
+  // below in this file. terms is sanitized via sanitizeListTerms() rather than rejected
+  // outright — a saved list is normally built from whatever is in the working list at
+  // save time, which has already been through addChipTerm()'s own caps, so this only
+  // trims a caller that skipped that path.
+  //
+  // callback (optional) receives { ok: true, list } on success, or
+  // { ok: false, reason } on failure ('empty-name', 'cap', 'write-failed', 'exception').
+  // The two user-facing failure reasons ('cap', 'write-failed') also surface through
+  // showNotice(); 'empty-name' does not, by design.
+  function saveList(name, terms, callback) {
+    var trimmedName = (name || '').trim();
+    if (trimmedName === '') {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-name' });
+      return;
+    }
+    var cleanTerms = sanitizeListTerms(terms);
+    try {
+      readListIndex(function (index) {
+        if (index.count >= MAX_SAVED_LISTS) {
+          showNotice("You've saved 50 lists, the maximum. Delete one to save a new list.");
+          if (typeof callback === 'function') callback({ ok: false, reason: 'cap' });
+          return;
+        }
+        var id = generateListId(index.ids);
+        var list = { id: id, name: trimmedName, terms: cleanTerms };
+        var setObj = {};
+        setObj[listStorageKey(id)] = list;
+        chrome.storage.sync.set(setObj, function () {
+          if (chrome.runtime.lastError) {
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+            if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+            return;
+          }
+          if (typeof callback === 'function') callback({ ok: true, list: list });
+        });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Renaming preserves id and terms untouched; only name changes. Rejects an empty or
+  // whitespace-only name the same way saveList() does — silently, no showNotice. A rename
+  // targeting an id with no matching key (already deleted, e.g. from another device)
+  // reports { ok: false, reason: 'not-found' } without writing anything or showing a
+  // notice; that's a stale-UI condition for the list-menu UI to handle, not a storage
+  // failure.
+  function renameList(id, name, callback) {
+    var trimmedName = (name || '').trim();
+    if (trimmedName === '') {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-name' });
+      return;
+    }
+    var key = listStorageKey(id);
+    try {
+      chrome.storage.sync.get(key, function (data) {
+        if (chrome.runtime.lastError || !data || !data[key]) {
+          if (typeof callback === 'function') callback({ ok: false, reason: 'not-found' });
+          return;
+        }
+        var existing = data[key];
+        var updated = {
+          id: id,
+          name: trimmedName,
+          terms: Array.isArray(existing.terms) ? existing.terms : []
+        };
+        var setObj = {};
+        setObj[key] = updated;
+        chrome.storage.sync.set(setObj, function () {
+          if (chrome.runtime.lastError) {
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+            if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+            return;
+          }
+          if (typeof callback === 'function') callback({ ok: true, list: updated });
+        });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Deleting a saved list only ever removes its own oc-list-<id> key. It never reads or
+  // writes the working list ('oc-worklist') — a list currently loaded into the working
+  // list is an independent copy of terms by the time it's in the working list (loading
+  // copies terms in, it does not keep a live reference back to the saved list's id), so
+  // there is nothing here that could leave the working list in a bad state.
+  function deleteList(id, callback) {
+    try {
+      chrome.storage.sync.remove(listStorageKey(id), function () {
+        if (chrome.runtime.lastError) {
+          showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+          if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+          return;
+        }
+        if (typeof callback === 'function') callback({ ok: true });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Exposed on window for the same reason __ocLoadWorkList/__ocSaveWorkList are (see
+  // above): content scripts run in an isolated JS world invisible to page.evaluate(), so
+  // a CDP Runtime.evaluate call scoped to this extension's isolated execution context is
+  // the only way a test harness can reach these as plain closures. No UI calls these yet
+  // — the list-menu UI bead calls them directly from inside this closure, not through
+  // window.
+  window.__ocListSavedLists = listSavedLists;
+  window.__ocSaveList = saveList;
+  window.__ocRenameList = renameList;
+  window.__ocDeleteList = deleteList;
+
   function getEffectiveColors() {
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
     var mc = settings.matchColor || '#fef08a';
