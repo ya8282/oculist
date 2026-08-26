@@ -230,6 +230,18 @@
   // Tolerates junk under the prefix (a malformed or partially-written value from a
   // previous version, a failed write, or a future format this version doesn't understand)
   // by skipping anything that isn't shaped like a list, rather than throwing.
+  //
+  // terms is run through sanitizeListTerms() here rather than a bare string filter
+  // (oculist-l6m.35): saveList() already stores sanitized terms, so this is a no-op for
+  // anything saved through the UI, but it's also the read path buildListItem() and
+  // loadSavedList() both build on, and all three need to agree on what "empty" means for
+  // a list that was hand-edited or corrupted in sync storage — a list whose only stored
+  // term is whitespace must count as 0 terms everywhere, not just where it's loaded. This
+  // is a read-time transform only; the stored value itself is never rewritten here.
+  // This only affects entries whose terms IS an array (e.g. ['   '] or ['cat', '   ',
+  // 'dog']) — the Array.isArray(entry.terms) shape check just below is unchanged, so an
+  // entry where terms itself isn't an array at all is still treated as junk and skipped
+  // entirely, same as an entry with a malformed id or name.
   function listSavedLists(callback) {
     try {
       chrome.storage.sync.get(null, function (data) {
@@ -248,7 +260,7 @@
           out.push({
             id: entry.id,
             name: entry.name,
-            terms: entry.terms.filter(function (t) { return typeof t === 'string'; })
+            terms: sanitizeListTerms(entry.terms)
           });
         });
         callback(out);
@@ -4163,11 +4175,16 @@
       // A 0-term saved list is unreachable through today's Save control (oculist-l6m.26
       // disables it whenever the working list is empty), but one can still exist here: it
       // may have been saved by a version of the extension before this fix, then synced in
-      // from another device. loadSavedList() has no confirmation step
+      // from another device, or hand-edited/corrupted in sync storage (e.g. terms: ['   '],
+      // whitespace-only — oculist-l6m.35). loadSavedList() has no confirmation step
       // by design, so loading a 0-term list would silently wipe the working list with no
       // way back — disable the load control outright for it, the same disabled-control
       // treatment the Save button and the rename confirm button already get elsewhere in
       // this popover, rather than let the click through to a destructive no-op.
+      //
+      // list.terms is already sanitizeListTerms()'d by listSavedLists() before it ever
+      // reaches here, so this is the same "real terms" definition loadSavedList() itself
+      // gates on below — a list badged N terms is guaranteed to load exactly N terms.
       if (list.terms.length === 0) {
         nameBtn.disabled = true;
         nameBtn.title = i18n.emptyListHint;
