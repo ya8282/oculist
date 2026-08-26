@@ -2479,7 +2479,15 @@
   // When the working list is empty (no chip has been committed yet, e.g. the user is still
   // typing a draft that hasn't hit Enter), this falls back to lastTerm as an implicit
   // single term so the mutation-rescan caller below behaves exactly like the old
-  // performSearch(lastTerm) call it replaces.
+  // performSearch(lastTerm) call it replaces. The module-level termRanges array MUST stay
+  // index-aligned with workListTerms at every exit of this function — a zero-length
+  // workListTerms therefore always leaves termRanges zero-length too, even in the implicit
+  // branch below. The implicit term's own Ranges still power searchRanges/countEl/nav/
+  // highlights (its plain find-in-page purpose) via a local newTermRanges, they are simply
+  // never written into the module-level termRanges renderChipRow()/restoreActiveChip()/
+  // findNext() read by index (oculist-l6m.15 — the implicit branch used to write a
+  // length-1 termRanges against a length-0 workListTerms, a state only invisible today
+  // because every reader happens to gate on workListTerms.length first).
   function performListSearch() {
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
@@ -2496,6 +2504,10 @@
 
     var terms = workListTerms;
     var activeIdx = activeTermIndex;
+    // True only for the implicit-lastTerm fallback below — the sole case where `terms`
+    // diverges from workListTerms itself. Gates the termRanges write-through further down
+    // so the module-level array never grows past workListTerms.length (oculist-l6m.15).
+    var isImplicitTerm = false;
 
     if (terms.length === 0) {
       termRanges = [];
@@ -2507,6 +2519,7 @@
       }
       terms = [lastTerm];
       activeIdx = 0;
+      isImplicitTerm = true;
     }
 
     var pageIndex = buildPageIndex();
@@ -2519,9 +2532,13 @@
     var termsStarved = false;
 
     var newTermRanges = new Array(terms.length);
-    // This is the only place termRanges[activeTermIndex] is ever given real Ranges
-    // (Lite Mode's cheap placeholder below is for inactive terms only) — every writer of
-    // activeTermIndex must call performListSearch() synchronously after setting it.
+    // This is the only place the module-level termRanges[activeTermIndex] is ever given
+    // real Ranges (Lite Mode's cheap placeholder below is for inactive terms only) — every
+    // writer of activeTermIndex must call performListSearch() synchronously after setting
+    // it. The implicit-lastTerm branch also lands real Ranges in newTermRanges here, but
+    // (per oculist-l6m.15, below) that array is deliberately never copied into the
+    // module-level termRanges, so this invariant still only ever concerns the real
+    // workListTerms/activeTermIndex pairing.
     if (activeIdx >= 0 && activeIdx < terms.length) {
       newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
       totalMatches += newTermRanges[activeIdx].length;
@@ -2546,16 +2563,25 @@
       }
       totalMatches += newTermRanges[i].length;
     }
-    termRanges = newTermRanges;
+    // Skipped for the implicit-lastTerm fallback: workListTerms is empty there, and
+    // termRanges must stay empty right alongside it (already set at the top of the
+    // terms.length === 0 branch above) rather than picking up this scan's one-element
+    // array. searchRanges/dim highlighting below read newTermRanges directly instead of
+    // termRanges, so the implicit term's own scan still works exactly as before — only the
+    // module-level array that renderChipRow()/restoreActiveChip()/findNext() index into by
+    // chip position is held back (oculist-l6m.15).
+    if (!isImplicitTerm) {
+      termRanges = newTermRanges;
+    }
 
-    searchRanges = (activeIdx >= 0 && activeIdx < termRanges.length) ? termRanges[activeIdx] : [];
+    searchRanges = (activeIdx >= 0 && activeIdx < newTermRanges.length) ? newTermRanges[activeIdx] : [];
 
     // Single call site — this is the one line oculist-l6m.7's Lite Mode skips to turn
     // dimming off entirely, without touching the oculist-match/oculist-active-match logic
     // below. No Ranges were built for inactive terms above in Lite Mode, so there would be
     // nothing real to dim even if this ran.
     if (!settings.performanceMode) {
-      updateDimHighlight(terms, termRanges, activeIdx);
+      updateDimHighlight(terms, newTermRanges, activeIdx);
     }
 
     // A committed working list can legitimately have no active chip (activeIdx === -1,

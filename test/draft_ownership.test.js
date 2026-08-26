@@ -296,6 +296,47 @@ describe('Draft input vs. active chip ownership', () => {
     assert.strictEqual(dimTexts.length, 5, 'both terms\' real matches (3 "cat" + 2 "dog") must still be dim');
   });
 
+  // oculist-l6m.15: with zero chips, performListSearch() substitutes [lastTerm] as an
+  // implicit single term (so the mutation-rescan caller behaves like a lone performSearch())
+  // and fills termRanges accordingly — but termRanges must never be left holding a stale
+  // term's Ranges once a real chip lands. Repro: a mutation rescan fires while zero chips
+  // are committed and lastTerm is a leftover ('cat'), then the user types a DIFFERENT term
+  // ('dog') as a draft and commits it with Enter — the new chip's rendered count, and the
+  // live oculist-match registry, must both belong to 'dog', never to 'cat'.
+  test('committing a chip after a zero-chip mutation rescan shows the new term\'s count, not the stale one\'s', async () => {
+    // Zero chips, but a lastTerm ('cat') is on record from an earlier draft search.
+    await typeDraft('cat');
+    let matchTexts = await rangeTexts('oculist-match');
+    assert.ok(matchTexts.length > 0 && matchTexts.every((t) => t === 'cat'), 'the draft search for "cat" must have run');
+
+    // A DOM mutation while zero chips are committed fires rescanAfterMutation() ->
+    // performListSearch(), which takes the zero-chip/implicit-lastTerm branch and fills
+    // termRanges from 'cat' — while workListTerms stays [].
+    await page.evaluate(() => {
+      const marker = document.createElement('span');
+      marker.textContent = 'trigger-rescan';
+      document.body.appendChild(marker);
+    });
+    await page.waitForTimeout(600); // 350ms mutation-observer debounce + margin
+
+    // Type a DIFFERENT term as a draft — never touches termRanges (oculist-l6m.5's draft
+    // path) — then commit it with Enter, which pushes the first real chip.
+    await typeDraft('dog');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+
+    assert.deepStrictEqual(await chipTerms(), ['dog']);
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['2'],
+      'the new "dog" chip must show its own match count, not the stale "cat" count left by the mutation rescan'
+    );
+
+    matchTexts = await rangeTexts('oculist-match');
+    assert.strictEqual(matchTexts.length, 2, 'the live highlight registry must hold "dog"\'s ranges');
+    assert.ok(matchTexts.every((t) => t === 'dog'), 'the live highlight registry must not still hold "cat"\'s stale ranges');
+  });
+
   // oculist-l6m.7: updateDimHighlight() has three call sites — performListSearch(),
   // performDraftSearch(), and restoreActiveChip() — and Lite Mode has to guard all three,
   // not just the first. This test walks through all three in one Lite Mode session so a
