@@ -11,6 +11,21 @@ browser's storage, synced between your own signed-in Chrome profiles by Google
 and nowhere else. The text of the page you search is read in the browser,
 matched, highlighted, and then forgotten.
 
+## What the extension does
+
+Oculist replaces Chrome's faint native find highlight with animated beacons.
+When you press find (`Ctrl+F` / `⌘F`, or `Ctrl+Shift+F` / `⌘⇧F`), it searches
+the text already rendered on the page in front of you, highlights every match
+using Chrome's CSS Custom Highlight API, and draws an animated beacon on the
+current match using the Web Animations API. The DOM nodes it adds are all
+its own: the find bar; the beacon and overlay effects it draws over the
+current match; a `<style>` element it appends to the page's `<head>`,
+holding the `::highlight()` rules and `:root` custom properties the
+highlighting needs; and, when a colorblind vision palette is active, one
+small marker dot per visible non-active match, appended to the page's root
+element. It never modifies the page's own content. Nothing is sent
+anywhere.
+
 ## What it stores, and where
 
 Oculist stores three kinds of data, and nothing else:
@@ -84,15 +99,22 @@ updates. No other site is disabled out of the box.
   and the current working list. Nothing else uses it.
 - **`activeTab` / `scripting`** — to draw the find overlay and its beacons on
   the tab you are looking at when you invoke Oculist.
-- **Host access to all sites (`<all_urls>`)** — find-in-page is only useful if
-  it works on whatever page you happen to be reading, so the content script is
-  declared for every site rather than a list of approved ones. Oculist reads
-  page text to highlight it and sends nothing anywhere.
+- **`<all_urls>` as the content script's match pattern** (there is no
+  separate `host_permissions` grant in `manifest.json`) — find-in-page is
+  only useful if it works on whatever page you happen to be reading, so the
+  content script is declared for every site rather than a list of approved
+  ones. Oculist reads page text to highlight it and sends nothing anywhere.
 
 ## Deleting your data
 
-Removing Oculist from `chrome://extensions` deletes everything it stored. There
-is nothing else to delete anywhere, because nothing was sent anywhere.
+Removing Oculist from `chrome://extensions` deletes everything it stored on
+that device. Settings and saved lists live in `chrome.storage.sync`, so a
+copy of them also lives in Google's sync infrastructure and on every other
+signed-in profile where Oculist is installed, as described above; removing
+Oculist from each of those profiles removes it from all of them, the same
+way removing any other synced extension's data does. Beyond that, there is
+nothing else to delete: Oculist has no server and keeps no copy of your
+data anywhere else.
 
 ## Contact
 

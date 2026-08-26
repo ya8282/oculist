@@ -136,9 +136,15 @@
   <p>
     Oculist replaces Chrome's faint native find highlight with animated beacons. When you
     press <code>⌘F</code> / <code>Ctrl+F</code> (or <code>⌘⇧F</code> / <code>Ctrl+Shift+F</code>),
-    it searches the text already rendered on the page in front of you and draws a beacon on
-    each match using Chrome's CSS Custom Highlight API and the Web Animations API. Nothing is
-    added to the page's DOM and nothing is sent anywhere.
+    it searches the text already rendered on the page in front of you, highlights every match
+    using Chrome's CSS Custom Highlight API, and draws an animated beacon on the current match
+    using the Web Animations API. The DOM nodes it adds are all its own: the find bar; the
+    beacon and overlay effects it draws over the current match; a <code>&lt;style&gt;</code>
+    element it appends to the page's <code>&lt;head&gt;</code>, holding the
+    <code>::highlight()</code> rules and <code>:root</code> custom properties the highlighting
+    needs; and, when a colorblind vision palette is active, one small marker dot per visible
+    non-active match, appended to the page's root element. It never modifies the page's own
+    content. Nothing is sent anywhere.
   </p>
 
   <h2>What it stores, and where</h2>
@@ -233,13 +239,18 @@
   <ul>
     <li><strong><code>storage</code></strong>: to save everything described above: settings, saved lists, and the current working list. Nothing else uses it.</li>
     <li><strong><code>activeTab</code> and <code>scripting</code></strong>: to draw the find overlay and its beacons on the tab you are looking at when you invoke Oculist.</li>
-    <li><strong>Host access to all sites (<code>&lt;all_urls&gt;</code>)</strong>: find-in-page is only useful if it works on whatever page you happen to be reading, so the content script is declared for every site rather than a list of approved ones. Broad access is what the feature needs; it is not what the extension does with it. Oculist reads page text to highlight it and sends nothing anywhere, which is the point of the two sections above.</li>
+    <li><strong><code>&lt;all_urls&gt;</code> as the content script's match pattern</strong> (there is no separate <code>host_permissions</code> grant in <code>manifest.json</code>): find-in-page is only useful if it works on whatever page you happen to be reading, so the content script is declared for every site rather than a list of approved ones. Broad access is what the feature needs; it is not what the extension does with it. Oculist reads page text to highlight it and sends nothing anywhere, which is the point of the two sections above.</li>
   </ul>
 
   <h2>Deleting your data</h2>
   <p>
-    Removing Oculist from <code>chrome://extensions</code> deletes everything it stored.
-    There is nothing else to delete anywhere, because nothing was sent anywhere.
+    Removing Oculist from <code>chrome://extensions</code> deletes everything it stored on
+    that device. Settings and saved lists live in <code>chrome.storage.sync</code>, so a copy
+    of them also lives in Google's sync infrastructure and on every other signed-in profile
+    where Oculist is installed, as described above; removing Oculist from each of those
+    profiles removes it from all of them, the same way removing any other synced extension's
+    data does. Beyond that, there is nothing else to delete: Oculist has no server and keeps
+    no copy of your data anywhere else.
   </p>
 
   <h2>Contact</h2>
