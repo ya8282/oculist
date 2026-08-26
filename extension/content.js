@@ -3431,6 +3431,13 @@
       if (listsPanel && wrapRoot && wrapRoot.activeElement && listsPanel.contains(wrapRoot.activeElement)) {
         return;
       }
+      // Same reasoning as the listsPanel guard above, mirrored for the settings panel:
+      // Enter on a settings control (a <button>, a color <input>, a link) must trigger
+      // its own native activation, not be swallowed into a chip-commit on the main find
+      // input (oculist-oxh).
+      if (settingsPanel && wrapRoot && wrapRoot.activeElement && settingsPanel.contains(wrapRoot.activeElement)) {
+        return;
+      }
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
         try { e.preventDefault(); } catch (err) {}
         // A non-empty term that differs from the active chip becomes a chip and the
