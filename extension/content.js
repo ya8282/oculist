@@ -4704,8 +4704,11 @@
   // <body>'s computed background, falling through to <html>'s, and finally to white if
   // both are transparent/unresolvable (matching how an unstyled page actually renders).
   // LIMITATION: pages where the matched text sits on a differently-coloured container
-  // (a dark card on a light page, or vice versa) are measured against the wrong swatch —
-  // this is a deliberate page-level approximation, not a per-element measurement.
+  // (a dark card on a light page, or vice versa) are measured against the wrong swatch.
+  // This is still a real limitation, but as of oculist-32d it only affects the alpha-wash
+  // measurement below (used to gate whether the dim treatment gets to keep matchColor's
+  // hue) — the dotted-underline path it can fall back to is painted in currentColor, so it
+  // inherits each element's own text-vs-background contrast and needs no measurement here.
   function getPageBackgroundRgb() {
     try {
       var candidates = [document.body, document.documentElement];
@@ -4771,20 +4774,42 @@
       '}'
     ].join('\n');
 
-    // A translucent wash shifts lightness/saturation but not hue, so it never introduces a
-    // colour-blind confusion — but a pale matchColor (tritanopia's #ffcbd1, or any pale
-    // custom colour) blends to near-invisible against a light page background (oculist-
-    // l6m.17). Rather than keying this off a profile name, measure the ACTUAL blended dim
-    // colour's contrast against the page background and fall back to the full-strength
-    // dotted underline whenever that falls below the WCAG 2.2 SC 1.4.11 non-text minimum
-    // (3:1), or whenever the OS/browser signals prefers-contrast: more.
+    // oculist-32d: the dim treatment has two branches, and only one of them still needs a
+    // contrast measurement.
+    //
+    // The underline branch is painted in `currentColor`, i.e. the host element's own text
+    // colour, not matchColor. `::highlight()` resolves `currentColor` per element, so this
+    // inherits whatever contrast the page already has against its own background — a page
+    // that failed that contrast would already be unreadable on its own terms. That branch
+    // is readable by construction and needs no gate.
+    //
+    // The wash branch still paints matchColor (a currentColor wash would paint dark text
+    // dark-on-dark, so it can't adopt the same trick), and a translucent matchColor wash
+    // shifts lightness/saturation but not hue, so it never introduces a colour-blind
+    // confusion — but a pale matchColor (tritanopia's #ffcbd1, or any pale custom colour)
+    // blends to near-invisible against a light page background (oculist-l6m.17). The gate
+    // below measures the ACTUAL blended wash colour's contrast against the page background;
+    // its job is "does the wash read well enough to be worth using for its hue", and if not,
+    // fall back to the underline, which is readable regardless of the measurement. This also
+    // means every built-in profile (whose matchColor is always pale, by design, so it reads
+    // as a highlight rather than solid text) fails this gate on every background and always
+    // takes the underline branch — expected, not a bug. The wash survives only for custom
+    // colours saturated/dark enough to clear 3:1 on their own. Also falls back to the
+    // underline whenever the OS/browser signals prefers-contrast: more.
     var dimPageBgRgb = getPageBackgroundRgb();
     var dimBlendedRgb = blendOverBackground(matchColor, 0.35, dimPageBgRgb);
     var dimContrastRatio = contrastRatio(dimBlendedRgb, dimPageBgRgb);
     var dimPrefersMoreContrast = !!(prefersMoreContrastQuery && prefersMoreContrastQuery.matches);
     var dimIsHighContrast = dimContrastRatio < DIM_CONTRAST_THRESHOLD || dimPrefersMoreContrast;
+    // Edge case (documented, not handled): text styled `color: transparent` (visually-hidden
+    // text, legacy image-replacement techniques) yields a transparent `currentColor`
+    // underline here, i.e. an invisible dim mark for that element. The highlight rule is
+    // global CSS shared by every dim match on the page, so there is no per-range branch
+    // available without splitting the highlight registry per element's computed colour,
+    // which would be disproportionate to a rare edge case on text that is itself already
+    // invisible to sighted users. Accepted as a known limitation.
     var dimHighlightCss = dimIsHighContrast
-      ? '::highlight(oculist-dim-match) { text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: ' + matchColor + '; text-decoration-thickness: 2px; }'
+      ? '::highlight(oculist-dim-match) { text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: currentColor; text-decoration-thickness: 2px; }'
       : '::highlight(oculist-dim-match) { background-color: ' + hexToRgba(matchColor, 0.35) + '; }';
 
     var highlightCss = [
