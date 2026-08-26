@@ -316,7 +316,7 @@
     try {
       readListIndex(function (index) {
         if (index.count >= MAX_SAVED_LISTS) {
-          showNotice("You've saved 50 lists, the maximum. Delete one to save a new list.");
+          showNotice("You've saved 50 lists, the maximum. Delete one to save a new list.", 'list-cap');
           if (typeof callback === 'function') callback({ ok: false, reason: 'cap' });
           return;
         }
@@ -326,7 +326,7 @@
         setObj[listStorageKey(id)] = list;
         chrome.storage.sync.set(setObj, function () {
           if (chrome.runtime.lastError) {
-            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
             if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
             return;
           }
@@ -367,7 +367,7 @@
         setObj[key] = updated;
         chrome.storage.sync.set(setObj, function () {
           if (chrome.runtime.lastError) {
-            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
             if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
             return;
           }
@@ -388,7 +388,7 @@
     try {
       chrome.storage.sync.remove(listStorageKey(id), function () {
         if (chrome.runtime.lastError) {
-          showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.");
+          showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
           if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
           return;
         }
@@ -600,7 +600,12 @@
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
-  var noticeDismissed       = false;
+  // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
+  // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')
+  // never silences an unrelated one (e.g. 'term-cap'). An unrecognized/missing key
+  // falls back to a single shared 'default' bucket — never unsuppressable, never
+  // permanently suppressed on its own — rather than either extreme silently.
+  var dismissedNotices      = new Set();
   var overlayResizeTimer    = null;
 
   // Sites known to render page text outside the accessible DOM (canvas, custom
@@ -670,7 +675,7 @@
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
     listsBtn = listsPanel = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
+    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = [];
   };
 
@@ -2622,7 +2627,7 @@
     // branch), so calling showNotice() any earlier would have this notice wiped out from
     // under it in the same scan — the same ordering addChipTerm()'s cap message relies on.
     if (termsStarved) {
-      showNotice('Showing the first 2000 matches. Remove a term for a complete count.');
+      showNotice('Showing the first 2000 matches. Remove a term for a complete count.', 'match-scan-cap');
     }
 
     renderChipRow();
@@ -2834,8 +2839,15 @@
     }
   }
 
-  function showNotice(text) {
-    if (!wrapRoot || noticeDismissed || noticeEl) return;
+  // key identifies which notice CLASS this is (see the call sites for the full list:
+  // 'site-override', 'term-cap', 'term-length', 'list-cap', 'list-write-failed',
+  // 'match-scan-cap'). Dismissing a notice only suppresses further showNotice() calls
+  // for that same key, for the rest of this session — never every notice, and never
+  // permanently (oculist-l6m.12). A falsy/unrecognized key lands in a shared 'default'
+  // bucket rather than either extreme.
+  function showNotice(text, key) {
+    var noticeKey = key || 'default';
+    if (!wrapRoot || dismissedNotices.has(noticeKey) || noticeEl) return;
     noticeEl = document.createElement('div');
     noticeEl.className = 'oc-notice';
 
@@ -2847,7 +2859,7 @@
     closeEl.className = 'oc-notice-close';
     closeEl.textContent = '✕';
     closeEl.addEventListener('click', function () {
-      noticeDismissed = true;
+      dismissedNotices.add(noticeKey);
       removeNotice();
     });
 
@@ -2860,11 +2872,11 @@
     if (!wrap) return;
     var hostname = window.location.hostname;
     if (KNOWN_OVERRIDE_DOMAINS.indexOf(hostname) !== -1) {
-      showNotice('Oculist may not find text on ' + hostname + ' — it renders content in a way standard page search can\'t scan.');
+      showNotice('Oculist may not find text on ' + hostname + ' — it renders content in a way standard page search can\'t scan.', 'site-override');
       return;
     }
     if (zeroMatches && document.body && document.body.innerText && document.body.innerText.trim().length > 500) {
-      showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.');
+      showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.', 'site-override');
     } else {
       removeNotice();
     }
@@ -3047,9 +3059,11 @@
 
   // Trims, then: rejects whitespace-only silently, enforces the 100-char cap (checked
   // against the trimmed length), activates rather than duplicates an existing term, and
-  // enforces the 10-term cap. Both caps surface through showNotice(); the whitespace-only
-  // rejection does not. Returns the cap message on either cap (undefined otherwise) so the
-  // caller can re-show it after findNext()'s performSearch -> checkSiteOverride() call —
+  // enforces the 10-term cap. Both caps surface through showNotice(), each under its own
+  // notice key ('term-length'/'term-cap' — oculist-l6m.12, so dismissing one cap notice
+  // never silences the other); the whitespace-only rejection does not. Returns
+  // { message, key } on either cap (undefined otherwise) so the caller can re-show it,
+  // under the same key, after findNext()'s performSearch -> checkSiteOverride() call —
   // which runs right after this, in the same Enter handler, and unconditionally clears
   // whatever notice is up when the term the user just typed matches the page — has had a
   // chance to wipe it out from under this same keystroke.
@@ -3069,8 +3083,8 @@
       // must always surface, not lose a race with whatever notice happened to be up.
       removeNotice();
       var lengthMessage = 'Search terms are limited to 100 characters. Shorten the term and try again.';
-      showNotice(lengthMessage);
-      return lengthMessage;
+      showNotice(lengthMessage, 'term-length');
+      return { message: lengthMessage, key: 'term-length' };
     }
 
     var existingIndex = workListTerms.indexOf(trimmed);
@@ -3082,8 +3096,8 @@
     if (workListTerms.length >= 10) {
       removeNotice();
       var capMessage = 'Oculist searches up to 10 terms at once. Remove a term to add another.';
-      showNotice(capMessage);
-      return capMessage;
+      showNotice(capMessage, 'term-cap');
+      return { message: capMessage, key: 'term-cap' };
     }
 
     workListTerms.push(trimmed);
@@ -3097,12 +3111,13 @@
   // otherwise Enter is next-match exactly as before. Never clears the input — the search
   // bar keeps whatever the user typed.
   //
-  // Returns { committed, message }. committed is true only when addChipTerm() actually
-  // pushed or (re)activated a chip — i.e. ran its one performListSearch() scan — so
-  // keydownHandler can land directly off that fresh state instead of falling through to
+  // Returns { committed, message, key }. committed is true only when addChipTerm()
+  // actually pushed or (re)activated a chip — i.e. ran its one performListSearch() scan —
+  // so keydownHandler can land directly off that fresh state instead of falling through to
   // findNext(), which would otherwise re-scan the page a second time on the same
-  // keystroke (oculist-l6m.5). message is the cap notice text on a cap hit, undefined
-  // otherwise; committed is always false whenever message is set.
+  // keystroke (oculist-l6m.5). message/key are the cap notice's text and notice key
+  // (oculist-l6m.12) on a cap hit, undefined otherwise; committed is always false
+  // whenever message is set.
   function maybeAddChipFromInput() {
     if (!input || !input.value) return { committed: false };
     var activeTerm = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
@@ -3110,8 +3125,8 @@
       : null;
     var trimmed = input.value.trim();
     if (trimmed === '' || trimmed === activeTerm) return { committed: false };
-    var message = addChipTerm(input.value);
-    return { committed: !message, message: message };
+    var result = addChipTerm(input.value);
+    return { committed: !result, message: result && result.message, key: result && result.key };
   }
 
   function renderChipRow() {
@@ -3539,7 +3554,7 @@
         // addChipTerm() just showed in the same keystroke. Re-show it.
         if (commitResult.message) {
           removeNotice();
-          showNotice(commitResult.message);
+          showNotice(commitResult.message, commitResult.key);
         }
       }
     }
