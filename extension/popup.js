@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const beaconSizeSelect = document.getElementById('beacon-size');
   const animationSpeedSelect = document.getElementById('animation-speed');
   const matchLabelsSelect = document.getElementById('match-labels');
+  const magnifierSelect = document.getElementById('magnifier');
   const motionSensitivitySelect = document.getElementById('motion-sensitivity');
   const borderStyleSelect = document.getElementById('border-style');
   const colorPaletteSelect = document.getElementById('color-palette');
@@ -236,6 +237,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     await saveSettings();
   });
 
+  // Magnifier listener (boolean conversion). Deliberately not part of any PRESETS
+  // entry above (oculist-l6m.39): it is not auto-gated by vision profile the way the
+  // other custom controls are, so switching profiles never flips it out from under you.
+  magnifierSelect.addEventListener('change', async () => {
+    settings.visionProfile = 'custom';
+    visionProfileSelect.value = 'custom';
+    updateOverridesUI('custom');
+
+    settings.visionSettings.magnifier = magnifierSelect.value === 'true';
+    await saveSettings();
+  });
+
   // Color Picker listeners
   const colorPickers = [
     [customMatchColor, 'matchColor'],
@@ -261,6 +274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     beaconSizeSelect.value = vs.beaconSize || 'm';
     animationSpeedSelect.value = vs.animationSpeed || 'normal';
     matchLabelsSelect.value = vs.textLabels ? 'true' : 'false';
+    magnifierSelect.value = vs.magnifier ? 'true' : 'false';
     motionSensitivitySelect.value = vs.motionSensitivity || 'full';
     borderStyleSelect.value = vs.borderStyle || 'none';
     colorPaletteSelect.value = vs.colorPalette || 'default';

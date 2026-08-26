@@ -20,6 +20,7 @@
       beaconSize: 'm',
       animationSpeed: 'normal',
       textLabels: false,
+      magnifier: false,
       motionSensitivity: 'full',
       colorPalette: 'default',
       borderStyle: 'none',
@@ -1925,6 +1926,191 @@
     });
   }
 
+  // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
+  // entry: the registry's run(rect) contract only gets a rect, with no access to the
+  // matched text, so this is called directly from drawActiveOverlays() instead, where it
+  // composes with whichever effect happens to be selected.
+  //
+  // Absorbs the "N of M" counter: when it successfully draws, drawActiveOverlays() skips
+  // drawActiveMatchLabel() entirely rather than stacking two boxes in the same spot above
+  // the match. Returns whether it actually drew a card so the caller knows whether to fall
+  // back to the plain label — magnifier off, zero matches, or a match whose text collapses
+  // to nothing after whitespace trimming all decline without leaving anything behind.
+  function drawActiveMatchMagnifier(rect) {
+    var existing = document.getElementById('oc-active-match-magnifier');
+    if (existing) existing.remove();
+
+    if (!rect || rect.width === 0 || rect.height === 0) return false;
+    if (!settings.visionSettings || !settings.visionSettings.magnifier) return false;
+    if (searchRanges.length === 0 || activeIndex < 0 || activeIndex >= searchRanges.length) return false;
+
+    var range = searchRanges[activeIndex];
+    if (!range) return false;
+
+    var rawText;
+    try {
+      rawText = range.toString();
+    } catch (e) {
+      return false;
+    }
+
+    // The real page text with its original casing, not the typed term — search is
+    // case-insensitive and accent-folded, so a search for "peanut" may land on "Peanuts"
+    // or "PEANUT" on the page, and showing the actual hit is the point of "magnify".
+    // Collapse internal whitespace: a match can span text nodes and line breaks.
+    var text = (rawText || '').replace(/\s+/g, ' ').trim();
+    if (!text) return false;
+
+    if (text.length > 24) {
+      text = text.slice(0, 24) + '…';
+    }
+
+    // Size rides the match's own rendered font-size, not getBeaconScale() — that knob is
+    // already wrongly reused for chip sizing (oculist-l6m.11); this must not repeat it.
+    var startNode = range.startContainer;
+    var matchEl = (startNode && startNode.nodeType === 3) ? startNode.parentElement : startNode;
+    var baseFontSize = 16;
+    if (matchEl && window.getComputedStyle) {
+      try {
+        var parsedSize = parseFloat(window.getComputedStyle(matchEl).fontSize);
+        if (!isNaN(parsedSize) && parsedSize > 0) baseFontSize = parsedSize;
+      } catch (e) {}
+    }
+    var fontSize = Math.min(48, Math.max(16, baseFontSize * 2.5));
+
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+
+    // Read once, before any element exists, so the very first style ever applied to the
+    // card/connector already carries the right starting opacity. The global '.oc-beacon'
+    // rule (see injectHighlightStyles()) sets a CSS `transition: opacity`, which fires on
+    // any LATER opacity change to an already-rendered element (e.g. offsetWidth/Height
+    // below forces a layout, giving the element an observable "before" frame) — starting
+    // 'off' at its final opacity:1 instead of flipping it after the fact avoids that
+    // transition firing and keeps 'off' genuinely static, with zero animations.
+    var motion = effectiveMotion();
+    var initialOpacity = motion === 'off' ? '1' : '0';
+
+    var card = document.createElement('div');
+    card.id = 'oc-active-match-magnifier';
+    card.className = 'oc-beacon';
+    // The word is already page content, and oculist-l6m.16 just made chip counts
+    // announced — announcing a magnified duplicate on top of that would be noise.
+    card.setAttribute('aria-hidden', 'true');
+    card.style.cssText = [
+      'position:absolute',
+      'background:#0f172a',
+      'color:#ffffff',
+      'border:2px solid ' + color,
+      'border-radius:6px',
+      'padding:8px 14px',
+      'font-family:system-ui, -apple-system, sans-serif',
+      'z-index:2147483645',
+      'pointer-events:none',
+      'white-space:nowrap',
+      'text-align:center',
+      'box-shadow:0 4px 10px rgba(0,0,0,0.4)',
+      'opacity:' + initialOpacity
+    ].join(';');
+
+    var wordEl = document.createElement('div');
+    wordEl.style.cssText = [
+      'font-size:' + fontSize + 'px',
+      'font-weight:700',
+      'line-height:1.15'
+    ].join(';');
+    wordEl.textContent = text;
+    card.appendChild(wordEl);
+
+    var counterEl = document.createElement('div');
+    counterEl.style.cssText = [
+      'font-size:11px',
+      'font-weight:600',
+      'color:rgba(255,255,255,0.6)',
+      'margin-top:2px'
+    ].join(';');
+    counterEl.textContent = 'Match #' + (activeIndex + 1) + ' of ' + searchRanges.length;
+    card.appendChild(counterEl);
+
+    // The connector to the match — a short line filling the gap between the card and the
+    // match it points at, on whichever side the card ends up on once flip-below is decided
+    // below.
+    var GAP = 8;
+    var connector = document.createElement('div');
+    connector.style.cssText = [
+      'position:absolute',
+      'left:50%',
+      'width:2px',
+      'height:' + GAP + 'px',
+      'background:' + color,
+      'transform:translateX(-50%)',
+      'opacity:' + initialOpacity
+    ].join(';');
+    card.appendChild(connector);
+
+    document.documentElement.appendChild(card);
+
+    var cw = card.offsetWidth || 120;
+    var ch = card.offsetHeight || 50;
+
+    var cx = rect.left + window.scrollX + rect.width / 2 - cw / 2;
+    var maxLeft = Math.max(0, document.documentElement.scrollWidth - cw - 10);
+    cx = Math.min(Math.max(10, cx), maxLeft);
+
+    // Flip below the match instead of clamping the card on top of it when there is no
+    // room above — e.g. a match near the top of the viewport.
+    var placeAbove = (rect.top - ch - GAP) >= 0;
+    var cy;
+    if (placeAbove) {
+      cy = rect.top + window.scrollY - ch - GAP;
+      connector.style.top = '100%';
+    } else {
+      cy = rect.top + window.scrollY + rect.height + GAP;
+      connector.style.top = (-GAP) + 'px';
+    }
+
+    var maxTop = Math.max(0, document.documentElement.scrollHeight - ch - 10);
+    cy = Math.min(Math.max(10, cy), maxTop);
+
+    card.style.left = cx + 'px';
+    card.style.top = cy + 'px';
+
+    if (motion === 'off') {
+      // Opacity is already baked into the initial cssText above — nothing left to do.
+      return true;
+    }
+
+    if (motion === 'reduced') {
+      // Fades in at final size and position: no scale, no lift. This is a
+      // vision-accessibility product — the magnifier does not get to be the one overlay
+      // that ignores the motion settings.
+      var fadeDuration = getBeaconDuration(220);
+      card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      return true;
+    }
+
+    // Zoom-lift: render at the match's own position at page font size with opacity 0,
+    // scale up and rise ~40px, then the connector to the match fades in last.
+    card.style.transformOrigin = placeAbove ? 'bottom center' : 'top center';
+    var startScale = Math.min(1, Math.max(0.2, baseFontSize / fontSize));
+    var liftPx = 40;
+    var liftDuration = getBeaconDuration(320);
+
+    card.animate([
+      { transform: 'translateY(' + liftPx + 'px) scale(' + startScale + ')', opacity: 0 },
+      { transform: 'translateY(0px) scale(1)', opacity: 1 }
+    ], { duration: liftDuration, easing: 'ease-out', fill: 'forwards' });
+
+    var connectorDuration = getBeaconDuration(150);
+    connector.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: connectorDuration, delay: liftDuration, fill: 'forwards' });
+
+    return true;
+  }
+
   // The OS-level preference is a downgrade-only signal: it can turn 'full' into
   // 'reduced', but it never overrides an explicit 'reduced'/'off' upward. Matching
   // live (not once at load) means toggling the OS setting takes effect immediately.
@@ -1948,7 +2134,14 @@
     if (motion !== 'off') {
       drawActiveMatchBorder(rect);
     }
-    drawActiveMatchLabel(rect);
+
+    // The magnifier absorbs the "N of M" counter when it draws — both want the same
+    // space above the match, so exactly one of them may. Falls back to the plain label
+    // when the magnifier declines (off, or a match whose text collapsed to nothing).
+    var magnifierDrawn = drawActiveMatchMagnifier(rect);
+    if (!magnifierDrawn) {
+      drawActiveMatchLabel(rect);
+    }
     drawActiveMatchShape(rect);
 
     if (motion === 'off') {

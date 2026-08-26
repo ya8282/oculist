@@ -1,0 +1,518 @@
+// Magnifier overlay (oculist-l6m.39): a companion overlay to the "N of M" counter label
+// that renders the currently active match's own text enlarged in a card beside it, so a
+// user working through a multi-term list can tell which term the beacon is on at a
+// glance. drawActiveMatchMagnifier() is called from drawActiveOverlays() directly — it is
+// NOT an effectsRegistry entry — and absorbs drawActiveMatchLabel()'s counter whenever it
+// successfully draws.
+//
+// Needs a real browser for the same reasons as resize_overlays.test.js/prefers_reduced_
+// motion.test.js: CSS.highlights, real layout (getBoundingClientRect/getComputedStyle) and
+// the real Web Animations API only exist in real Chromium, not jsdom.
+//
+// Settings are seeded directly through chrome.storage.sync from inside the content
+// script's own isolated execution context (the same mechanism the real popup uses under
+// the hood) rather than driving the popup UI — this exercises the identical storage path
+// a real settings change takes. Applying a change to the live content script is
+// eventually-consistent (see untilTrue() below), so tests re-check a real, observable
+// effect rather than trusting any fixed propagation delay.
+
+const { test, describe, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert');
+const http = require('node:http');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const EXTENSION = path.resolve(__dirname, '../extension');
+
+// Section 1 ("alpha beta gamma") is the very first text in the document, so it holds the
+// very first whitespace run in the page's flattened search index — load-bearing for the
+// empty/whitespace-match guard test below, which searches for a single space.
+//
+// Section 2 ("titanium") sits on the second line with no top padding, so its match rect
+// sits only ~25px from the viewport top — too little room for the magnifier card to fit
+// above it, forcing the flip-below path.
+//
+// Section 3 ("quarklet") lives in a 60%-width column with heavy filler on both sides, the
+// same rewrap-on-narrow technique resize_overlays.test.js uses, for the resize/reposition
+// test. It also doubles as the target for the motion (full/reduced/off) tests, comfortably
+// clear of the viewport top so the default above-placement applies.
+//
+// Section 4 ("PEANUT") is real mixed-case page text findable via the lowercase search
+// term "peanut" — search is case-insensitive/accent-folded, so this is the real-casing
+// regression target.
+const PAGE = `<!doctype html><meta charset="utf-8">
+<style>
+  body { margin: 0; font: 16px/1.6 system-ui, sans-serif; }
+  .col { width: 60%; margin: 40px auto; }
+</style>
+<p id="ws-line" style="margin:0">alpha beta gamma</p>
+<p id="flip-line" style="margin:0">delta <span id="flip-target">titanium</span> epsilon</p>
+<div class="col">
+  <p>${'filler words to push things around. '.repeat(60)}
+  <span id="quarklet-target">quarklet</span>
+  ${'more filler to keep the paragraph long. '.repeat(60)}</p>
+</div>
+<p>${'more page filler text. '.repeat(10)} <span id="peanut-target">PEANUT</span> ${'trailing filler text. '.repeat(10)}</p>`;
+
+const INPUT = '#oc-wrap >> .oc-input';
+const MAGNIFIER = '#oc-active-match-magnifier';
+const LABEL = '#oc-active-match-label';
+
+describe('Active-match magnifier overlay', () => {
+  let server, ctx, page, client, isolatedContextId, origin;
+
+  async function waitForContentScriptReady() {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      if (isolatedContextId) {
+        try {
+          const ready = await evalInContentScript("typeof window.__ocToggle === 'function'");
+          if (ready) return;
+        } catch (e) {
+          // Context can still be settling right after creation — keep polling.
+        }
+      }
+      if (Date.now() > deadline) {
+        throw new Error('content script never finished booting (window.__ocToggle never appeared)');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  async function waitForOverlayClosed() {
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+  }
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
+
+  // Merges `patch` into the persisted visionSettings and resolves once the write itself
+  // has committed — this is the exact chrome.storage.sync.set() path the real popup takes
+  // under the hood. Deliberately does NOT wait for a chrome.storage.onChanged echo:
+  // chrome.storage only fires onChanged when the stored value actually differs, so a test
+  // that (correctly) requests the same settings a previous test already left in place would
+  // wait forever for an event that will never come. Any residual lag before content.js's
+  // own onChanged listener applies the change is covered by redrawUntil()/waitFor*()
+  // below re-checking a real, observable effect rather than trusting this resolves in sync
+  // with that listener.
+  function setVisionSettings(patch) {
+    return evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var vs = Object.assign({}, current.visionSettings || {}, ' + JSON.stringify(patch) + ');' +
+        'var next = Object.assign({}, current, { visionSettings: vs });' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+  }
+
+  async function openBar() {
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+  }
+
+  async function search(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+  }
+
+  // Cycles to the next match, redrawing the active-match overlays from the current
+  // (possibly just-changed) settings — used to force a fresh draw after setVisionSettings()
+  // without re-typing the search term.
+  async function advanceMatch() {
+    await page.keyboard.press('Control+g');
+  }
+
+  function magnifierWordText() {
+    return page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el ? el.children[0].textContent : null;
+    }, MAGNIFIER);
+  }
+
+  function magnifierCounterText() {
+    return page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el ? el.children[1].textContent : null;
+    }, MAGNIFIER);
+  }
+
+  // setVisionSettings() resolves as soon as the write itself commits, which is not the
+  // same moment content.js's own live onChanged listener has necessarily applied it — a
+  // content script running an independently-scheduled listener callback can genuinely lag
+  // a keypress issued immediately after. Rather than guess at that lag, retry the real
+  // action (a redraw or a fresh search) and re-check a real, observable condition until it
+  // holds, bounded by a deadline — not a fixed sleep.
+  async function untilTrue(actionFn, checkFn, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 5000);
+    for (;;) {
+      await actionFn();
+      if (await checkFn()) return;
+      if (Date.now() > deadline) {
+        throw new Error('untilTrue: condition never became true after repeated attempts');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // Cycles to the next match and waits for whichever of the magnifier/label the redraw
+  // settles on to exist, then hands off to checkFn — used to force a fresh draw after
+  // setVisionSettings() without re-typing the search term.
+  function redrawUntil(checkFn, timeoutMs) {
+    return untilTrue(
+      async () => {
+        await advanceMatch();
+        await page.waitForFunction(
+          (sels) => !!(document.querySelector(sels.magnifier) || document.querySelector(sels.label)),
+          { magnifier: MAGNIFIER, label: LABEL },
+          { timeout: 5000 }
+        );
+      },
+      checkFn,
+      timeoutMs
+    );
+  }
+
+  // Re-issues the search itself until the magnifier shows the expected word — covers the
+  // same live-settings lag as redrawUntil(), but for a test's very first search right after
+  // a setVisionSettings() call, before any element exists yet to redraw from.
+  function searchUntilMagnifierWord(term, expected) {
+    return untilTrue(
+      () => search(term),
+      () =>
+        page.evaluate(
+          (args) => {
+            const el = document.querySelector(args.sel);
+            return !!(el && el.children[0] && el.children[0].textContent === args.expected);
+          },
+          { sel: MAGNIFIER, expected: expected }
+        )
+    );
+  }
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // channel:'chromium' is load-bearing — the default bundled build is the headless
+    // shell, which silently loads no extensions at all.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
+      viewport: { width: 1200, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await waitForContentScriptReady();
+    await openBar();
+    assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    await page.keyboard.press('Escape');
+    await waitForOverlayClosed();
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  // Every test starts from a closed overlay so searchRanges/activeIndex never leak
+  // between tests — but visionSettings persists in chrome.storage.sync exactly like real
+  // usage, so every test that cares sets it explicitly via setVisionSettings() rather
+  // than relying on whatever the previous test left behind. Scroll position also resets:
+  // a previous test's auto-scroll-to-match otherwise leaks into this one, which the
+  // viewport-top-relative flip test in particular depends on starting from (0, 0).
+  beforeEach(async () => {
+    await page.keyboard.press('Escape').catch(() => {});
+    await waitForOverlayClosed();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await openBar();
+  });
+
+  test('shows the real page text with its original casing, not the typed term', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('peanut', 'PEANUT');
+
+    const word = await magnifierWordText();
+    assert.strictEqual(word, 'PEANUT', 'must show the page\'s real casing, not the typed "peanut"');
+  });
+
+  test('absorbs the counter: the label never double-draws with the magnifier, and the label returns when the magnifier is off', async () => {
+    // textLabels on throughout: proves the magnifier truly absorbs/suppresses the label
+    // (not merely that the label was independently off) and that turning the magnifier
+    // back off genuinely restores it, rather than the label's own separate setting.
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off', textLabels: true });
+    await searchUntilMagnifierWord('peanut', 'PEANUT');
+
+    assert.strictEqual(await page.locator(LABEL).count(), 0, 'the plain label must not draw while the magnifier is showing');
+    const counter = await magnifierCounterText();
+    assert.strictEqual(counter, 'Match #1 of 1', 'the magnifier must render the counter itself');
+
+    // Turning the magnifier off and forcing a redraw must restore the plain label and
+    // remove the magnifier card — proving this is a real toggle, not a one-way absorption.
+    await setVisionSettings({ magnifier: false });
+    await redrawUntil(() => page.evaluate((sel) => !document.querySelector(sel), MAGNIFIER));
+    await page.waitForSelector(LABEL, { timeout: 5000 });
+    assert.strictEqual(
+      await page.locator(LABEL).first().textContent(),
+      'Match #1 of 1',
+      'the label must show the same counter the magnifier absorbed'
+    );
+  });
+
+  test('full motion scales and lifts; reduced and off motion settings produce no scale or lift', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'full' });
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+
+    const fullKeyframes = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el.getAnimations().map((a) => a.effect.getKeyframes());
+    }, MAGNIFIER);
+    const fullHasTransform = fullKeyframes.some((kfs) => kfs.some((kf) => 'transform' in kf));
+    assert.ok(
+      fullHasTransform,
+      'full motion must scale/lift the card in — if this fails, the zoom-lift animation regressed'
+    );
+
+    function hasTransformKeyframe() {
+      return page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        return el.getAnimations().some((a) => a.effect.getKeyframes().some((kf) => 'transform' in kf));
+      }, MAGNIFIER);
+    }
+
+    await setVisionSettings({ motionSensitivity: 'reduced' });
+    await redrawUntil(async () => !(await hasTransformKeyframe()));
+
+    assert.strictEqual(
+      await hasTransformKeyframe(),
+      false,
+      'reduced motion must fade in at final size/position with no scale or lift keyframes'
+    );
+
+    // Checked via the element's own inline style rather than getComputedStyle()/
+    // getAnimations().length: the 'off' path is the only one that ever sets
+    // card.style.opacity directly (both 'full' and 'reduced' drive opacity purely through
+    // a WAAPI animation, leaving the inline style at its initial '0'), and a finished,
+    // unreferenced WAAPI animation is not guaranteed to still be reported once settled —
+    // so "no animations left" alone cannot reliably distinguish "off" from "reduced, and
+    // already finished".
+    await setVisionSettings({ motionSensitivity: 'off' });
+    await redrawUntil(() => page.evaluate((sel) => document.querySelector(sel).style.opacity === '1', MAGNIFIER));
+
+    const offAnimCount = await page.evaluate((sel) => document.querySelector(sel).getAnimations().length, MAGNIFIER);
+    assert.strictEqual(offAnimCount, 0, 'off motion must draw statically with no animation at all');
+    const offOpacity = await page.evaluate((sel) => getComputedStyle(document.querySelector(sel)).opacity, MAGNIFIER);
+    assert.strictEqual(offOpacity, '1', 'off motion must render at full opacity immediately');
+  });
+
+  test('the card is aria-hidden', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+
+    const ariaHidden = await page.evaluate((sel) => document.querySelector(sel).getAttribute('aria-hidden'), MAGNIFIER);
+    assert.strictEqual(ariaHidden, 'true');
+  });
+
+  test('flips below the match when there is no room above it, near the viewport top', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+
+    // Baseline: a match with plenty of room above it draws the card above, matching
+    // drawActiveMatchLabel's own default placement.
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+    const above = await page.evaluate((sel) => {
+      const card = document.querySelector(sel);
+      const target = document.getElementById('quarklet-target');
+      const c = card.getBoundingClientRect();
+      const t = target.getBoundingClientRect();
+      return { cardBottom: c.bottom, targetTop: t.top };
+    }, MAGNIFIER);
+    assert.ok(
+      above.cardBottom <= above.targetTop + 2,
+      `expected the card above the match by default, cardBottom=${above.cardBottom}, targetTop=${above.targetTop}`
+    );
+
+    // The near-top match has no room above it and must flip below instead of clamping on
+    // top of the match.
+    await searchUntilMagnifierWord('titanium', 'titanium');
+    const flipped = await page.evaluate((sel) => {
+      const card = document.querySelector(sel);
+      const target = document.getElementById('flip-target');
+      const c = card.getBoundingClientRect();
+      const t = target.getBoundingClientRect();
+      return { cardTop: c.top, targetBottom: t.bottom };
+    }, MAGNIFIER);
+    assert.ok(
+      flipped.cardTop >= flipped.targetBottom - 2,
+      `expected the card flipped below the near-top match, cardTop=${flipped.cardTop}, targetBottom=${flipped.targetBottom}`
+    );
+  });
+
+  test('repositions on resize instead of stranding in old document coordinates', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+
+    const offset = () =>
+      page.evaluate((sel) => {
+        const card = document.querySelector(sel);
+        const target = document.getElementById('quarklet-target');
+        if (!card) return null;
+        const c = card.getBoundingClientRect();
+        const t = target.getBoundingClientRect();
+        return {
+          dx: c.left + c.width / 2 - (t.left + t.width / 2),
+          targetLeft: t.left,
+        };
+      }, MAGNIFIER);
+
+    const before = await offset();
+    assert.ok(before, 'expected the magnifier to be drawn');
+    assert.ok(Math.abs(before.dx) < 6, `card should start centered on the match, dx=${before.dx}`);
+
+    await page.setViewportSize({ width: 700, height: 800 });
+
+    // Poll for the real post-resize state (the 100ms resize debounce in content.js) rather
+    // than sleeping a guessed duration.
+    await page.waitForFunction(
+      (args) => {
+        const target = document.getElementById(args.targetId);
+        return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) > 20;
+      },
+      { targetId: 'quarklet-target', beforeLeft: before.targetLeft },
+      { timeout: 5000 }
+    );
+    await page.waitForFunction(
+      (sel) => {
+        const card = document.querySelector(sel);
+        const target = document.getElementById('quarklet-target');
+        if (!card || !target) return false;
+        const c = card.getBoundingClientRect();
+        const t = target.getBoundingClientRect();
+        const dx = Math.abs(c.left + c.width / 2 - (t.left + t.width / 2));
+        return dx < 6;
+      },
+      MAGNIFIER,
+      { timeout: 5000 }
+    );
+
+    const after = await offset();
+    assert.ok(
+      Math.abs(after.targetLeft - before.targetLeft) > 20,
+      `the resize must actually move the match, otherwise this test proves nothing (before=${before.targetLeft}, after=${after.targetLeft})`
+    );
+    assert.ok(Math.abs(after.dx) < 6, `card drifted off the match after resize, dx=${after.dx}`);
+
+    // Restore the viewport so later tests in this file see the same layout they expect.
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.waitForFunction(
+      (args) => {
+        const target = document.getElementById(args.targetId);
+        return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) < 5;
+      },
+      { targetId: 'quarklet-target', beforeLeft: before.targetLeft },
+      { timeout: 5000 }
+    );
+  });
+
+  test('is removed on teardown, caught by the same .oc-beacon sweep as every other overlay', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+
+    assert.strictEqual(await page.locator(MAGNIFIER).count(), 1);
+
+    await page.keyboard.press('Escape');
+    await waitForOverlayClosed();
+
+    assert.strictEqual(
+      await page.locator(MAGNIFIER).count(),
+      0,
+      '#oc-active-match-magnifier must be removed by teardown, not just #oc-wrap'
+    );
+
+    await openBar();
+  });
+
+  test('a match whose text is empty or whitespace-only does not render an empty card', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+
+    // Confirms the magnifier setting has genuinely taken effect before relying on its
+    // absence below — otherwise a magnifier that failed to enable at all would make this
+    // test pass for the wrong reason.
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+
+    // A single space matches the page's own literal whitespace (search collapses runs of
+    // whitespace to one space on both the typed term and the page index — see
+    // findRanges()/buildPageIndex()), so the resulting active match's real text is
+    // whitespace-only. maybeAddChipFromInput() silently declines to commit a
+    // whitespace-only chip, so Enter falls through to findNext(), which drives the search
+    // exactly like a real user pressing Enter on a stray space would.
+    await page.locator(INPUT).fill(' ');
+    await page.keyboard.press('Enter');
+
+    // Wait for the real whitespace search to actually land, not the "quarklet" sanity
+    // check's stale "1 of 1" count above (which already matches a plain /of \d+/ check) —
+    // a single space matches dozens of times across this page's filler text, so requiring
+    // a total greater than "quarklet"'s single match distinguishes a genuinely fresh count
+    // from the leftover one.
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        const count = root.querySelector('.oc-count');
+        if (!count) return false;
+        const m = /of (\d+)/.exec(count.textContent);
+        return !!m && Number(m[1]) > 1;
+      },
+      null,
+      { timeout: 5000 }
+    );
+
+    // highlightActiveRange() updates the count synchronously but defers the actual overlay
+    // redraw (animate() -> drawActiveOverlays()) by a setTimeout (or a scroll-end debounce),
+    // so the magnifier from the "quarklet" sanity check is still on screen for a moment
+    // after the count above already reflects the new whitespace search. Wait for that
+    // deferred redraw to actually land — either the stale card is gone, or the guard
+    // failed and a new (still-labelled "quarklet") one never got removed — before asserting.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('#oc-active-match-magnifier');
+        return !el || !el.children[0] || el.children[0].textContent !== 'quarklet';
+      },
+      null,
+      { timeout: 5000 }
+    );
+
+    const magnifierCount = await page.locator(MAGNIFIER).count();
+    assert.strictEqual(magnifierCount, 0, 'a whitespace-only match must never render a magnifier card');
+  });
+});
