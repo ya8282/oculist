@@ -43,10 +43,7 @@ describe('Popover keeps the find bar width', () => {
     });
     page = await ctx.newPage();
     await page.goto(origin);
-    await page.waitForTimeout(500);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(300);
+    await openFinder();
   });
 
   after(async () => {
@@ -54,12 +51,50 @@ describe('Popover keeps the find bar width', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  // No CDP session in this file, so there is no isolatedContextId to poll for injection
+  // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+  // otherwise silently swallow) until the input actually appears, instead of guessing a
+  // fixed delay.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
+
+  // Polls document.getElementById('oc-wrap')'s own rendered width until it holds steady
+  // across a couple of consecutive checks — a real "the open/close animation actually
+  // finished" signal that works regardless of the exact transition duration, instead of
+  // guessing "animation + margin" as a wall-clock number.
+  async function waitForStableWidth() {
+    await page.evaluate(() => {
+      window.__ocWidthStableLast = -1;
+      window.__ocWidthStableStreak = 0;
+    });
+    await page.waitForFunction(
+      () => {
+        const w = document.getElementById('oc-wrap').getBoundingClientRect().width;
+        window.__ocWidthStableStreak = w === window.__ocWidthStableLast ? window.__ocWidthStableStreak + 1 : 0;
+        window.__ocWidthStableLast = w;
+        return window.__ocWidthStableStreak >= 3;
+      },
+      null,
+      { timeout: 5000, polling: 100 }
+    );
+  }
+
   test('opening the settings panel does not widen the popover', async () => {
     const closed = await hostWidth(page);
 
     await page.locator(GEAR).click();
     await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
-    await page.waitForTimeout(600); // panel open animation
+    await waitForStableWidth();
 
     const open = await hostWidth(page);
     assert.strictEqual(open, closed, `settings panel widened the popover: ${closed} -> ${open}`);
@@ -72,7 +107,10 @@ describe('Popover keeps the find bar width', () => {
     assert.ok(panel > closed - 10, `panel should fill the bar width, got ${panel} against ${closed}`);
 
     await page.locator(GEAR).click(); // close again for the next test
-    await page.waitForTimeout(400);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || !root.shadowRoot.querySelector('#oc-settings-panel');
+    }, null, { timeout: 5000 });
   });
 
   test('the no-match notice does not widen the popover', async () => {
@@ -81,7 +119,7 @@ describe('Popover keeps the find bar width', () => {
     await page.locator(INPUT).fill('');
     await page.locator(INPUT).type('zzzznotpresentzzzz', { delay: 20 });
     await page.waitForSelector('#oc-wrap >> .oc-notice', { timeout: 5000 });
-    await page.waitForTimeout(300);
+    await waitForStableWidth();
 
     const after = await hostWidth(page);
     assert.strictEqual(after, before, `notice widened the popover: ${before} -> ${after}`);

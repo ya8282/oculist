@@ -65,11 +65,35 @@ describe('Saved list storage (oc-list-<id>)', () => {
     });
 
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    await page.waitForTimeout(500);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag instead of guessing
+    // how long injection takes.
+    const deadline = Date.now() + 5000;
+    while (!isolatedContextId) {
+      if (Date.now() > deadline) throw new Error('never observed the content script isolated execution context');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   after(async () => {
     if (ctx) await ctx.close();
@@ -108,11 +132,9 @@ describe('Saved list storage (oc-list-<id>)', () => {
   // own notice, unaffected by whatever the previous test displayed.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
     await clearSavedLists();
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
   });
 
   function rawGet(key) {

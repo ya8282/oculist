@@ -106,9 +106,20 @@ describe('Theme hover colour follows the resolved theme, not the raw setting (oc
     page = await ctx.newPage();
     await page.goto(origin);
     await page.waitForLoadState('load');
-    await page.waitForTimeout(300);
 
-    await page.keyboard.press('Control+f');
+    // No CDP session in this file, so there is no isolatedContextId to poll for injection
+    // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+    // otherwise silently swallow) until the input actually appears, instead of guessing a
+    // fixed delay.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        break;
+      } catch (e) {
+        // keep retrying
+      }
+    }
     await page.waitForSelector(INPUT, { timeout: 5000 });
     await page.locator(GEAR_BTN).click();
     await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });

@@ -16,8 +16,10 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world, nothing else on this page.</p>';
 
@@ -78,18 +80,41 @@ describe('List menu popover (saved lists UI)', () => {
     });
 
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag the CDP listener
+    // above sets, instead of guessing how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -135,21 +160,53 @@ describe('List menu popover (saved lists UI)', () => {
   }
 
   // Every test starts from a closed overlay, an empty working list, and no saved lists,
-  // so nothing leaks between tests.
+  // so nothing leaks between tests. A previous test can end with either the popover or
+  // the whole overlay left open (Escape only closes one level at a time — see the last
+  // test in this file) — press it twice, unconditionally, so this always reaches fully
+  // closed regardless of which state the previous test left behind; a second Escape
+  // against an already-closed overlay is a documented no-op elsewhere in this file.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     await clearSavedLists();
     await clearWorkList();
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
+    // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
+    // resolves asynchronously after open — poll for the chip row to actually reflect the
+    // now-empty list, rather than guessing how long that round trip takes.
+    await waitForChipCount(0);
   });
 
+  function waitForChipCount(expected, opts) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
+  }
+
   async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    // Enter's chip-add path (addChipTerm() -> performListSearch()) runs synchronously and
+    // ends with renderChipRow() as its very last statement, so the chip row reflecting the
+    // new term is a genuine proxy for "the whole scan (counts, highlight registries)
+    // finished", not just "the chip node exists".
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
   }
 
   function chipTerms() {
@@ -182,10 +239,46 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
   }
 
+  function waitForListsPanelClosed(opts) {
+    return page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap');
+        return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
+      },
+      null,
+      { timeout: 5000, ...opts }
+    );
+  }
+
+  // Polls .oc-list-item-name's rendered text list until it exactly matches `expected`.
+  function waitForListItemNames(expected, opts) {
+    return page.waitForFunction(
+      (exp) => {
+        const root = document.getElementById('oc-wrap');
+        const names = root
+          ? Array.from(root.shadowRoot.querySelectorAll('.oc-list-item-name')).map((el) => el.textContent)
+          : [];
+        return JSON.stringify(names) === JSON.stringify(exp);
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
+  }
+
   async function saveCurrentAs(name) {
     await page.locator(SAVE_INPUT).fill(name);
     await page.locator(SAVE_BTN).click();
-    await page.waitForTimeout(250);
+    // Wait for the real condition every call site immediately asserts on: the new item
+    // actually landing in the popover's own re-render.
+    await page.waitForFunction(
+      (expectedName) => {
+        const root = document.getElementById('oc-wrap');
+        const items = root ? Array.from(root.shadowRoot.querySelectorAll('.oc-list-item-name')) : [];
+        return items.some((el) => el.textContent === expectedName);
+      },
+      name,
+      { timeout: 5000 }
+    );
   }
 
   test('saving the working list and loading it back replaces the working list, with no scan', async () => {
@@ -208,7 +301,14 @@ describe('List menu popover (saved lists UI)', () => {
     assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta']);
 
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap');
+        return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
+      },
+      null,
+      { timeout: 5000 }
+    );
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'popover should be closed');
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
 
@@ -219,7 +319,18 @@ describe('List menu popover (saved lists UI)', () => {
 
     await openListsMenu();
     await page.locator(LIST_ITEM_NAME).click();
-    await page.waitForTimeout(250);
+    // loadSavedList() replaces the chip row and closes the popover synchronously — wait
+    // for the load's own real effect instead of guessing its duration.
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap');
+        if (!root) return false;
+        const chips = Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent);
+        return JSON.stringify(chips) === JSON.stringify(['zzzalpha', 'zzzbeta']);
+      },
+      null,
+      { timeout: 5000 }
+    );
 
     // The saved two-term list replaced the three-term working list outright, with no
     // confirmation prompt anywhere in this flow.
@@ -357,7 +468,7 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForSelector(LIST_RENAME_INPUT, { timeout: 5000 });
     await page.locator(LIST_RENAME_INPUT).fill('Renamed List');
     await page.locator(LIST_RENAME_CONFIRM).click();
-    await page.waitForTimeout(250);
+    await waitForListItemNames(['Renamed List']);
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Renamed List']);
 
     // Confirm the rename genuinely reached chrome.storage.sync — not just an
@@ -369,12 +480,15 @@ describe('List menu popover (saved lists UI)', () => {
     // A close/reopen of the popover re-fetches from storage via listSavedLists() — the
     // renamed name must survive that fresh read, not just linger in the still-open DOM.
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await waitForListsPanelClosed();
     await openListsMenu();
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Renamed List']);
 
     await page.locator(LIST_DELETE_BTN).click();
-    await page.waitForTimeout(250);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || root.shadowRoot.querySelectorAll('.oc-list-item-name').length === 0;
+    }, null, { timeout: 5000 });
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0, 'the deleted list must no longer be listed');
     assert.strictEqual(
       (await page.locator(LIST_EMPTY).textContent()).trim(),
@@ -406,7 +520,7 @@ describe('List menu popover (saved lists UI)', () => {
     await page.locator(SAVE_INPUT).fill('Real Name');
     assert.strictEqual(await page.locator(SAVE_BTN).isDisabled(), false);
     await page.locator(SAVE_BTN).click();
-    await page.waitForTimeout(250);
+    await waitForListItemNames(['Real Name']);
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Real Name']);
 
     // The identical guard on the rename control.
@@ -418,7 +532,7 @@ describe('List menu popover (saved lists UI)', () => {
     // the popover round-trips.
     await page.locator(LIST_RENAME_INPUT).fill('Real Name');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await waitForListsPanelClosed();
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'Escape must still close the popover from inside the rename field');
   });
 
@@ -582,9 +696,11 @@ describe('List menu popover (saved lists UI)', () => {
 
     // A disabled <button> suppresses its own click event natively; force:true performs a
     // real click at the element regardless, so this actually exercises "does nothing"
-    // rather than just asserting the disabled attribute. Must not throw.
+    // rather than just asserting the disabled attribute. Must not throw. No wait needed
+    // here: a disabled native <button> never dispatches 'click' to its listener at all —
+    // there is no async effect in flight to wait out, unlike the dedicated mid-debounce
+    // test above.
     await page.locator(LIST_ITEM_NAME).click({ force: true });
-    await page.waitForTimeout(150);
 
     // Nothing loaded: the working list is untouched and the popover stayed open.
     assert.deepStrictEqual(await chipTerms(), ['keepme']);
@@ -613,7 +729,12 @@ describe('List menu popover (saved lists UI)', () => {
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).isDisabled(), false);
 
     await page.locator(LIST_ITEM_NAME).click();
-    await page.waitForTimeout(250);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      if (!root) return false;
+      const chips = Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent);
+      return JSON.stringify(chips) === JSON.stringify(['cat', 'dog']);
+    }, null, { timeout: 5000 });
 
     assert.deepStrictEqual(await chipTerms(), ['cat', 'dog']);
 
@@ -637,17 +758,20 @@ describe('List menu popover (saved lists UI)', () => {
 
     // Close settings, reopen the list popover, and confirm the first Escape closes only it.
     await page.locator(GEAR_BTN).click();
-    await page.waitForTimeout(100);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || !root.shadowRoot.querySelector('#oc-settings-panel');
+    }, null, { timeout: 5000 });
     await page.locator(LISTS_BTN).click();
     await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
 
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await waitForListsPanelClosed();
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'the first Escape should close only the popover');
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open');
 
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 0, 'the second Escape should close the whole overlay as before');
   });
 });

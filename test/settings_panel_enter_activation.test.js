@@ -66,9 +66,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
 
     page = await ctx.newPage();
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder();
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
   });
@@ -78,6 +76,23 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  // No CDP session in this file, so there is no isolatedContextId to poll for injection
+  // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+  // otherwise silently swallow) until the input actually appears, instead of guessing a
+  // fixed delay.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
+
   // Every test starts from a closed overlay, so panel/focus state never leaks between
   // tests.
   beforeEach(async () => {
@@ -86,8 +101,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
       await waitForOverlayClosed().catch(() => {});
     }
     await waitForOverlayClosed();
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder();
   });
 
   test('Enter on a focused settings-panel button activates it natively (theme toggle)', async () => {
