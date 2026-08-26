@@ -2281,12 +2281,19 @@
             }
           }
         } else if (child.nodeType === 1) {
-          // child !== wrap: never descend into Oculist's own bar/chip row (it lives in
-          // wrap's shadow root). Chip terms render the literal searched text as button
-          // labels, so without this exclusion every chip would always match its own
-          // label — inflating every count by at least 1, and by more for any other chip
-          // whose term happens to be a substring/superstring of it.
-          if (!SKIP_TAGS[child.tagName] && !child.classList.contains('oc-beacon') && child !== wrap) {
+          // isOculistNode(): never descend into any Oculist-owned element (bar/chip row,
+          // beacons, viewport markers, ...). wrap's bar/chip row lives in wrap's shadow
+          // root; chip terms render the literal searched text as button labels, so
+          // without this exclusion every chip would always match its own label —
+          // inflating every count by at least 1, and by more for any other chip whose
+          // term happens to be a substring/superstring of it. Routed through the shared
+          // helper (rather than a narrower `child !== wrap` identity check) so any future
+          // Oculist node mounted under body is excluded automatically instead of
+          // silently self-matching. The extra cost per element is a couple of cheap
+          // string/classList comparisons on top of the classList.contains() this branch
+          // already did, not a closest()/getComputedStyle() walk, so it stays cheap on
+          // this hot path.
+          if (!SKIP_TAGS[child.tagName] && !isOculistNode(child)) {
             if (child.shadowRoot) {
               traverse(child.shadowRoot);
             }
