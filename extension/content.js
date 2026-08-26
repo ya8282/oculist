@@ -2519,6 +2519,9 @@
     var termsStarved = false;
 
     var newTermRanges = new Array(terms.length);
+    // This is the only place termRanges[activeTermIndex] is ever given real Ranges
+    // (Lite Mode's cheap placeholder below is for inactive terms only) — every writer of
+    // activeTermIndex must call performListSearch() synchronously after setting it.
     if (activeIdx >= 0 && activeIdx < terms.length) {
       newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
       totalMatches += newTermRanges[activeIdx].length;
