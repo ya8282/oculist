@@ -20,6 +20,7 @@
       beaconSize: 'm',
       animationSpeed: 'normal',
       textLabels: false,
+      magnifier: false,
       motionSensitivity: 'full',
       colorPalette: 'default',
       borderStyle: 'none',
@@ -76,6 +77,351 @@
     });
   }
 
+  // ── Working list (session-scoped, separate from settings) ──────────────────────
+  //
+  // A tab-local list of search terms, kept in chrome.storage.session under its own key.
+  // Deliberately not folded into 'oc-settings' / SETTINGS_KEYS / pendingSelfWrites — that
+  // machinery exists to survive its own storage.onChanged echoes for a synced, persisted
+  // object, which this session-only, per-tab list has no need of.
+  //
+  // chrome.storage.session is only readable here if background.js's service-worker
+  // startup call to setAccessLevel('TRUSTED_AND_UNTRUSTED_CONTEXTS') succeeded. On an
+  // older Chrome without that API, or if the call failed or hasn't run yet,
+  // chrome.storage.session may be undefined in this content script — every access below
+  // is guarded for that, and a failed or unavailable read silently degrades to the
+  // default rather than surfacing an error, since a missing working list just means
+  // today's single-term behaviour.
+  var WORK_LIST_KEY = 'oc-worklist';
+
+  function defaultWorkList() {
+    return { terms: [], activeIndex: -1 };
+  }
+
+  // terms is trusted to be an array of strings and activeIndex is range-checked against
+  // it — a stored index that is NaN, negative (other than the -1 sentinel), or >= the
+  // term count would otherwise round-trip unchecked into UI state that indexes terms[].
+  function normalizeWorkList(stored) {
+    var terms = Array.isArray(stored && stored.terms) ? stored.terms : [];
+    var idx = (stored && typeof stored.activeIndex === 'number' && !isNaN(stored.activeIndex))
+      ? stored.activeIndex
+      : -1;
+    if (idx !== -1 && (idx < 0 || idx >= terms.length)) idx = -1;
+    return { terms: terms, activeIndex: idx };
+  }
+
+  function loadWorkList(callback) {
+    var storageAvailable;
+    try {
+      storageAvailable = !!(chrome.storage && chrome.storage.session);
+    } catch (err) {
+      storageAvailable = false;
+    }
+    // Deliberately outside the try/catch below: this is the synchronous path, and if the
+    // caller's own callback throws here, a surrounding catch would treat that as "our"
+    // failure and invoke callback() a second time with the default. Let it throw once.
+    if (!storageAvailable) {
+      callback(defaultWorkList());
+      return;
+    }
+    try {
+      chrome.storage.session.get(WORK_LIST_KEY, function (data) {
+        if (chrome.runtime.lastError || !data || !data[WORK_LIST_KEY]) {
+          callback(defaultWorkList());
+          return;
+        }
+        callback(normalizeWorkList(data[WORK_LIST_KEY]));
+      });
+    } catch (err) {
+      callback(defaultWorkList());
+    }
+  }
+
+  function saveWorkList(list) {
+    try {
+      if (!chrome.storage || !chrome.storage.session) return;
+      var payload = {
+        terms: Array.isArray(list && list.terms) ? list.terms : [],
+        activeIndex: typeof (list && list.activeIndex) === 'number' ? list.activeIndex : -1
+      };
+      var setObj = {};
+      setObj[WORK_LIST_KEY] = payload;
+      var setResult = chrome.storage.session.set(setObj, function () {
+        // Read lastError so a rejected/unavailable write doesn't surface as an unchecked
+        // runtime error; this is invisible plumbing and must fail silently.
+        void chrome.runtime.lastError;
+      });
+      if (setResult && typeof setResult.catch === 'function') {
+        setResult.catch(function () {});
+      }
+    } catch (err) {
+      // fail silently — a browser without session storage access must not throw here.
+    }
+  }
+
+  // Exposed the same way window.__ocToggle / window.__ocDestroy already are: content
+  // scripts run in an isolated JS world, so nothing outside this IIFE (including a test
+  // harness) can reach loadWorkList/saveWorkList as plain closures. Attaching them to
+  // window makes them reachable from a CDP Runtime.evaluate call scoped to this
+  // extension's isolated execution context, which is how
+  // test/worklist_storage.test.js exercises the real content-script chrome.storage.session
+  // round trip. No UI calls these yet; that lands in a later bead, from inside this
+  // closure directly rather than through window.
+  window.__ocLoadWorkList = loadWorkList;
+  window.__ocSaveWorkList = saveWorkList;
+
+  // ── Saved lists (named, persisted across devices) ──────────────────────────────
+  //
+  // Distinct from the working list above: a saved list is a named, user-curated term set
+  // that persists across devices via chrome.storage.sync, independent of any one tab's
+  // working list. Deleting a saved list never touches the working list, and vice versa —
+  // loading a saved list into the working list (a later bead) copies its terms in, it
+  // does not link the two by id.
+  //
+  // Storage shape: one chrome.storage.sync key per list ('oc-list-<id>'), holding
+  // { id, name, terms }, rather than a single array under one key. Two independent
+  // reasons: chrome.storage.sync caps a single item at 8192 bytes (QUOTA_BYTES_PER_ITEM),
+  // which an array of many realistic-sized lists could exceed long before the 50-list cap
+  // below is even hit; and per-key writes mean saving from two devices at once each writes
+  // its own key, instead of racing to read-modify-write one shared array and silently
+  // losing whichever write lands second.
+  var LIST_KEY_PREFIX = 'oc-list-';
+  var MAX_SAVED_LISTS = 50;
+  var MAX_LIST_TERMS = 10;
+  var MAX_LIST_TERM_LENGTH = 100;
+
+  function listStorageKey(id) {
+    return LIST_KEY_PREFIX + id;
+  }
+
+  // Defensive sanitizer for terms handed to saveList()/renameList(): drops non-strings and
+  // whitespace-only entries, clips any term over MAX_LIST_TERM_LENGTH characters, and stops
+  // once MAX_LIST_TERMS is reached. The working list's own addChipTerm() already enforces
+  // both caps before a term ever reaches a chip, so in practice this is a backstop, not the
+  // primary enforcement point — saveList() takes a plain terms array as its argument, with
+  // no guarantee its caller went through addChipTerm.
+  function sanitizeListTerms(terms) {
+    var arr = Array.isArray(terms) ? terms : [];
+    var out = [];
+    for (var i = 0; i < arr.length && out.length < MAX_LIST_TERMS; i++) {
+      var t = typeof arr[i] === 'string' ? arr[i].trim() : '';
+      if (t === '') continue;
+      if (t.length > MAX_LIST_TERM_LENGTH) t = t.slice(0, MAX_LIST_TERM_LENGTH);
+      out.push(t);
+    }
+    return out;
+  }
+
+  // Generates an id guaranteed not to collide with any id already present under the
+  // oc-list- prefix. existingIds is supplied by the caller (saveList already has to read
+  // every oc-list-* key to enforce the 50-list cap, so this avoids a second async round
+  // trip just to check for collisions).
+  function generateListId(existingIds) {
+    var ids = Array.isArray(existingIds) ? existingIds : [];
+    var id;
+    var attempts = 0;
+    do {
+      id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      attempts++;
+    } while (ids.indexOf(id) !== -1 && attempts < 1000);
+    return id;
+  }
+
+  // Reads every oc-list-* key and returns the well-formed { id, name, terms } entries.
+  // Tolerates junk under the prefix (a malformed or partially-written value from a
+  // previous version, a failed write, or a future format this version doesn't understand)
+  // by skipping anything that isn't shaped like a list, rather than throwing.
+  //
+  // terms is run through sanitizeListTerms() here rather than a bare string filter
+  // (oculist-l6m.35): saveList() already stores sanitized terms, so this is a no-op for
+  // anything saved through the UI, but it's also the read path buildListItem() and
+  // loadSavedList() both build on, and all three need to agree on what "empty" means for
+  // a list that was hand-edited or corrupted in sync storage — a list whose only stored
+  // term is whitespace must count as 0 terms everywhere, not just where it's loaded. This
+  // is a read-time transform only; the stored value itself is never rewritten here.
+  // This only affects entries whose terms IS an array (e.g. ['   '] or ['cat', '   ',
+  // 'dog']) — the Array.isArray(entry.terms) shape check just below is unchanged, so an
+  // entry where terms itself isn't an array at all is still treated as junk and skipped
+  // entirely, same as an entry with a malformed id or name.
+  function listSavedLists(callback) {
+    try {
+      chrome.storage.sync.get(null, function (data) {
+        if (chrome.runtime.lastError || !data) {
+          callback([]);
+          return;
+        }
+        var out = [];
+        Object.keys(data).forEach(function (key) {
+          if (key.indexOf(LIST_KEY_PREFIX) !== 0) return;
+          var entry = data[key];
+          if (!entry || typeof entry !== 'object') return;
+          if (typeof entry.id !== 'string' || entry.id === '') return;
+          if (typeof entry.name !== 'string') return;
+          if (!Array.isArray(entry.terms)) return;
+          out.push({
+            id: entry.id,
+            name: entry.name,
+            terms: sanitizeListTerms(entry.terms)
+          });
+        });
+        callback(out);
+      });
+    } catch (err) {
+      callback([]);
+    }
+  }
+
+  // Reads every oc-list-* key once and hands the caller both the current count (for the
+  // 50-list cap) and the id list (for generateListId's collision check) — shared by
+  // saveList so it never has to make two separate chrome.storage.sync.get(null) calls.
+  function readListIndex(callback) {
+    try {
+      chrome.storage.sync.get(null, function (data) {
+        if (chrome.runtime.lastError || !data) {
+          callback({ count: 0, ids: [] });
+          return;
+        }
+        var count = 0;
+        var ids = [];
+        Object.keys(data).forEach(function (key) {
+          if (key.indexOf(LIST_KEY_PREFIX) !== 0) return;
+          count++;
+          var entry = data[key];
+          if (entry && typeof entry.id === 'string') ids.push(entry.id);
+        });
+        callback({ count: count, ids: ids });
+      });
+    } catch (err) {
+      callback({ count: 0, ids: [] });
+    }
+  }
+
+  // name is trimmed; an empty or whitespace-only name is rejected silently (no
+  // showNotice), matching addChipTerm()'s existing whitespace-only rejection further
+  // below in this file. terms is sanitized via sanitizeListTerms() rather than rejected
+  // outright — a saved list is normally built from whatever is in the working list at
+  // save time, which has already been through addChipTerm()'s own caps, so this only
+  // trims a caller that skipped that path. If sanitizing leaves zero terms, though, the
+  // save is rejected outright (oculist-l6m.26): a 0-term saved list is useless to create
+  // and dangerous to load (loadSavedList() has no confirmation, so loading one wipes the
+  // working list with no way back). The UI's own backstop is the primary guard — the
+  // "Save current as…" button is disabled whenever the working list is empty, exactly
+  // the same disabled-control treatment 'empty-name' already gets below — so this check
+  // is a silent, storage-layer belt-and-suspenders for a caller that skips the UI, not a
+  // path a user can hit through it.
+  //
+  // callback (optional) receives { ok: true, list } on success, or
+  // { ok: false, reason } on failure ('empty-name', 'empty-terms', 'cap', 'write-failed',
+  // 'exception'). The two user-facing failure reasons ('cap', 'write-failed') also
+  // surface through showNotice(); 'empty-name' and 'empty-terms' do not, by design —
+  // both are already unreachable through the popover's own disabled-button guards.
+  function saveList(name, terms, callback) {
+    var trimmedName = (name || '').trim();
+    if (trimmedName === '') {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-name' });
+      return;
+    }
+    var cleanTerms = sanitizeListTerms(terms);
+    if (cleanTerms.length === 0) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-terms' });
+      return;
+    }
+    try {
+      readListIndex(function (index) {
+        if (index.count >= MAX_SAVED_LISTS) {
+          showNotice("You've saved 50 lists, the maximum. Delete one to save a new list.", 'list-cap');
+          if (typeof callback === 'function') callback({ ok: false, reason: 'cap' });
+          return;
+        }
+        var id = generateListId(index.ids);
+        var list = { id: id, name: trimmedName, terms: cleanTerms };
+        var setObj = {};
+        setObj[listStorageKey(id)] = list;
+        chrome.storage.sync.set(setObj, function () {
+          if (chrome.runtime.lastError) {
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
+            if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+            return;
+          }
+          if (typeof callback === 'function') callback({ ok: true, list: list });
+        });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Renaming preserves id and terms untouched; only name changes. Rejects an empty or
+  // whitespace-only name the same way saveList() does — silently, no showNotice. A rename
+  // targeting an id with no matching key (already deleted, e.g. from another device)
+  // reports { ok: false, reason: 'not-found' } without writing anything or showing a
+  // notice; that's a stale-UI condition for the list-menu UI to handle, not a storage
+  // failure.
+  function renameList(id, name, callback) {
+    var trimmedName = (name || '').trim();
+    if (trimmedName === '') {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'empty-name' });
+      return;
+    }
+    var key = listStorageKey(id);
+    try {
+      chrome.storage.sync.get(key, function (data) {
+        if (chrome.runtime.lastError || !data || !data[key]) {
+          if (typeof callback === 'function') callback({ ok: false, reason: 'not-found' });
+          return;
+        }
+        var existing = data[key];
+        var updated = {
+          id: id,
+          name: trimmedName,
+          terms: Array.isArray(existing.terms) ? existing.terms : []
+        };
+        var setObj = {};
+        setObj[key] = updated;
+        chrome.storage.sync.set(setObj, function () {
+          if (chrome.runtime.lastError) {
+            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
+            if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+            return;
+          }
+          if (typeof callback === 'function') callback({ ok: true, list: updated });
+        });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Deleting a saved list only ever removes its own oc-list-<id> key. It never reads or
+  // writes the working list ('oc-worklist') — a list currently loaded into the working
+  // list is an independent copy of terms by the time it's in the working list (loading
+  // copies terms in, it does not keep a live reference back to the saved list's id), so
+  // there is nothing here that could leave the working list in a bad state.
+  function deleteList(id, callback) {
+    try {
+      chrome.storage.sync.remove(listStorageKey(id), function () {
+        if (chrome.runtime.lastError) {
+          showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
+          if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
+          return;
+        }
+        if (typeof callback === 'function') callback({ ok: true });
+      });
+    } catch (err) {
+      if (typeof callback === 'function') callback({ ok: false, reason: 'exception' });
+    }
+  }
+
+  // Exposed on window for the same reason __ocLoadWorkList/__ocSaveWorkList are (see
+  // above): content scripts run in an isolated JS world invisible to page.evaluate(), so
+  // a CDP Runtime.evaluate call scoped to this extension's isolated execution context is
+  // the only way a test harness can reach these as plain closures. No UI calls these yet
+  // — the list-menu UI bead calls them directly from inside this closure, not through
+  // window.
+  window.__ocListSavedLists = listSavedLists;
+  window.__ocSaveList = saveList;
+  window.__ocRenameList = renameList;
+  window.__ocDeleteList = deleteList;
+
   function getEffectiveColors() {
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
     var mc = settings.matchColor || '#fef08a';
@@ -124,9 +470,11 @@
     closeTitle: 'Close  Esc',
     noMatch: 'no match',
     of: 'of',
+    matchSingular: 'match',
+    matchPlural: 'matches',
     
     // Preference Panel Strings
-    prefTitle: 'OCULIST PREFERENCES',
+    prefTitle: 'Oculist Preferences',
     prefSubtitle: 'Configure appearance and effects',
     resetBtn: 'Reset',
     visualTheme: 'Visual Theme',
@@ -174,7 +522,21 @@
     effectInfernoFlame: 'Inferno Flame',
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
-    effectPointingArrows: 'Pointing Arrows'
+    effectPointingArrows: 'Pointing Arrows',
+
+    // Saved-list popover (oculist-l6m.9)
+    listsBtnTitle: 'Saved Lists',
+    saveListPlaceholder: 'Save current as…',
+    saveListBtn: 'Save',
+    noSavedLists: 'No saved lists yet.',
+    loadListLabel: 'Load list',
+    renameListLabel: 'Rename list',
+    deleteListLabel: 'Delete list',
+    confirmRenameLabel: 'Confirm rename',
+    cancelRenameLabel: 'Cancel rename',
+    termSingular: 'term',
+    termPlural: 'terms',
+    emptyListHint: 'This saved list has no terms — nothing to load.'
   };
 
   // ── Theme + position tables ───────────────────────────────────────────────────
@@ -231,13 +593,31 @@
   var debounceTimer    = null;
   var activeBeacons    = 0;
   var wrap, wrapRoot, bar, input, countEl, prevBtn, nextBtn, replayBtn, gearBtn, closeBtn, settingsPanel;
+  var listsBtn, listsPanel;
+
+  // The chip row's working list. workListTerms holds the search terms in add order;
+  // activeTermIndex points at the "active" chip, or -1 when none is active (including
+  // whenever workListTerms is empty). termRanges is parallel to workListTerms — each
+  // entry is the array of visible Ranges performListSearch() found for that term, and
+  // its .length is what renderChipRow() shows in each chip's .oc-chip-count slot. It can
+  // be out of sync with workListTerms between a chip add/remove and the next scan; a
+  // missing entry (undefined) renders as a blank count rather than "0".
+  var workListTerms    = [];
+  var activeTermIndex  = -1;
+  var termRanges       = [];
+  var chipRow          = null;
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
-  var noticeDismissed       = false;
+  // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
+  // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')
+  // never silences an unrelated one (e.g. 'term-cap'). An unrecognized/missing key
+  // falls back to a single shared 'default' bucket — never unsuppressable, never
+  // permanently suppressed on its own — rather than either extreme silently.
+  var dismissedNotices      = new Set();
   var overlayResizeTimer    = null;
 
   // Sites known to render page text outside the accessible DOM (canvas, custom
@@ -290,6 +670,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         CSS.highlights.delete('oculist-match');
         CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
       }
     } catch (e) {}
 
@@ -305,7 +686,9 @@
     if (s) s.remove();
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
-    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; noticeDismissed = false;
+    listsBtn = listsPanel = null;
+    lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
+    chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = [];
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -1560,17 +1943,222 @@
     });
   }
 
+  // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
+  // entry: the registry's run(rect) contract only gets a rect, with no access to the
+  // matched text, so this is called directly from drawActiveOverlays() instead, where it
+  // composes with whichever effect happens to be selected.
+  //
+  // Absorbs the "N of M" counter: when it successfully draws, drawActiveOverlays() skips
+  // drawActiveMatchLabel() entirely rather than stacking two boxes in the same spot above
+  // the match. Returns whether it actually drew a card so the caller knows whether to fall
+  // back to the plain label — magnifier off, zero matches, or a match whose text collapses
+  // to nothing after whitespace trimming all decline without leaving anything behind.
+  function drawActiveMatchMagnifier(rect) {
+    var existing = document.getElementById('oc-active-match-magnifier');
+    if (existing) existing.remove();
+
+    if (!rect || rect.width === 0 || rect.height === 0) return false;
+    if (!settings.visionSettings || !settings.visionSettings.magnifier) return false;
+    if (searchRanges.length === 0 || activeIndex < 0 || activeIndex >= searchRanges.length) return false;
+
+    var range = searchRanges[activeIndex];
+    if (!range) return false;
+
+    var rawText;
+    try {
+      rawText = range.toString();
+    } catch (e) {
+      return false;
+    }
+
+    // The real page text with its original casing, not the typed term — search is
+    // case-insensitive and accent-folded, so a search for "peanut" may land on "Peanuts"
+    // or "PEANUT" on the page, and showing the actual hit is the point of "magnify".
+    // Collapse internal whitespace: a match can span text nodes and line breaks.
+    var text = (rawText || '').replace(/\s+/g, ' ').trim();
+    if (!text) return false;
+
+    if (text.length > 24) {
+      text = text.slice(0, 24) + '…';
+    }
+
+    // Size rides the match's own rendered font-size, not getBeaconScale() — that knob is
+    // already wrongly reused for chip sizing (oculist-l6m.11); this must not repeat it.
+    var startNode = range.startContainer;
+    var matchEl = (startNode && startNode.nodeType === 3) ? startNode.parentElement : startNode;
+    var baseFontSize = 16;
+    if (matchEl && window.getComputedStyle) {
+      try {
+        var parsedSize = parseFloat(window.getComputedStyle(matchEl).fontSize);
+        if (!isNaN(parsedSize) && parsedSize > 0) baseFontSize = parsedSize;
+      } catch (e) {}
+    }
+    var fontSize = Math.min(48, Math.max(16, baseFontSize * 2.5));
+
+    var colors = getEffectiveColors();
+    var color = colors.beacon;
+
+    // Read once, before any element exists, so the very first style ever applied to the
+    // card/connector already carries the right starting opacity. The global '.oc-beacon'
+    // rule (see injectHighlightStyles()) sets a CSS `transition: opacity`, which fires on
+    // any LATER opacity change to an already-rendered element (e.g. offsetWidth/Height
+    // below forces a layout, giving the element an observable "before" frame) — starting
+    // 'off' at its final opacity:1 instead of flipping it after the fact avoids that
+    // transition firing and keeps 'off' genuinely static, with zero animations.
+    var motion = effectiveMotion();
+    var initialOpacity = motion === 'off' ? '1' : '0';
+
+    var card = document.createElement('div');
+    card.id = 'oc-active-match-magnifier';
+    card.className = 'oc-beacon';
+    // The word is already page content, and oculist-l6m.16 just made chip counts
+    // announced — announcing a magnified duplicate on top of that would be noise.
+    card.setAttribute('aria-hidden', 'true');
+    card.style.cssText = [
+      'position:absolute',
+      'background:#0f172a',
+      'color:#ffffff',
+      'border:2px solid ' + color,
+      'border-radius:6px',
+      'padding:8px 14px',
+      'font-family:system-ui, -apple-system, sans-serif',
+      'z-index:2147483645',
+      'pointer-events:none',
+      'white-space:nowrap',
+      'text-align:center',
+      'box-shadow:0 4px 10px rgba(0,0,0,0.4)',
+      'opacity:' + initialOpacity
+    ].join(';');
+
+    var wordEl = document.createElement('div');
+    wordEl.style.cssText = [
+      'font-size:' + fontSize + 'px',
+      'font-weight:700',
+      'line-height:1.15'
+    ].join(';');
+    wordEl.textContent = text;
+    card.appendChild(wordEl);
+
+    var counterEl = document.createElement('div');
+    counterEl.style.cssText = [
+      'font-size:11px',
+      'font-weight:600',
+      'color:rgba(255,255,255,0.6)',
+      'margin-top:2px'
+    ].join(';');
+    counterEl.textContent = 'Match #' + (activeIndex + 1) + ' of ' + searchRanges.length;
+    card.appendChild(counterEl);
+
+    // The connector to the match — a short line filling the gap between the card and the
+    // match it points at, on whichever side the card ends up on once flip-below is decided
+    // below.
+    var GAP = 8;
+    var connector = document.createElement('div');
+    connector.style.cssText = [
+      'position:absolute',
+      'left:50%',
+      'width:2px',
+      'height:' + GAP + 'px',
+      'background:' + color,
+      'transform:translateX(-50%)',
+      'opacity:' + initialOpacity
+    ].join(';');
+    card.appendChild(connector);
+
+    document.documentElement.appendChild(card);
+
+    var cw = card.offsetWidth || 120;
+    var ch = card.offsetHeight || 50;
+
+    var cx = rect.left + window.scrollX + rect.width / 2 - cw / 2;
+    var maxLeft = Math.max(0, document.documentElement.scrollWidth - cw - 10);
+    cx = Math.min(Math.max(10, cx), maxLeft);
+
+    // Flip below the match instead of clamping the card on top of it when there is no
+    // room above — e.g. a match near the top of the viewport.
+    var placeAbove = (rect.top - ch - GAP) >= 0;
+    var cy;
+    if (placeAbove) {
+      cy = rect.top + window.scrollY - ch - GAP;
+      connector.style.top = '100%';
+    } else {
+      cy = rect.top + window.scrollY + rect.height + GAP;
+      connector.style.top = (-GAP) + 'px';
+    }
+
+    var maxTop = Math.max(0, document.documentElement.scrollHeight - ch - 10);
+    cy = Math.min(Math.max(10, cy), maxTop);
+
+    card.style.left = cx + 'px';
+    card.style.top = cy + 'px';
+
+    if (motion === 'off') {
+      // Opacity is already baked into the initial cssText above — nothing left to do.
+      return true;
+    }
+
+    if (motion === 'reduced') {
+      // Fades in at final size and position: no scale, no lift. This is a
+      // vision-accessibility product — the magnifier does not get to be the one overlay
+      // that ignores the motion settings.
+      var fadeDuration = getBeaconDuration(220);
+      card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      return true;
+    }
+
+    // Zoom-lift: render at the match's own position at page font size with opacity 0,
+    // scale up and rise ~40px, then the connector to the match fades in last.
+    card.style.transformOrigin = placeAbove ? 'bottom center' : 'top center';
+    var startScale = Math.min(1, Math.max(0.2, baseFontSize / fontSize));
+    var liftPx = 40;
+    var liftDuration = getBeaconDuration(320);
+
+    card.animate([
+      { transform: 'translateY(' + liftPx + 'px) scale(' + startScale + ')', opacity: 0 },
+      { transform: 'translateY(0px) scale(1)', opacity: 1 }
+    ], { duration: liftDuration, easing: 'ease-out', fill: 'forwards' });
+
+    var connectorDuration = getBeaconDuration(150);
+    connector.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: connectorDuration, delay: liftDuration, fill: 'forwards' });
+
+    return true;
+  }
+
+  // The OS-level preference is a downgrade-only signal: it can turn 'full' into
+  // 'reduced', but it never overrides an explicit 'reduced'/'off' upward. Matching
+  // live (not once at load) means toggling the OS setting takes effect immediately.
+  var reducedMotionQuery = window.matchMedia
+    ? window.matchMedia('(prefers-reduced-motion: reduce)')
+    : null;
+
+  function effectiveMotion() {
+    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    if (motion === 'full' && reducedMotionQuery && reducedMotionQuery.matches) return 'reduced';
+    return motion;
+  }
+
   // The accessibility overlays (border, label, shape) are absolutely positioned in
   // document coordinates from a one-shot rect, so any reflow strands them. Split out
   // from animate() so a resize can redraw them in place without replaying the beacon.
   function drawActiveOverlays(rect) {
-    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    var motion = effectiveMotion();
 
     // Draw accessibility overlays (border + label) if motion is not completely off
     if (motion !== 'off') {
       drawActiveMatchBorder(rect);
     }
-    drawActiveMatchLabel(rect);
+
+    // The magnifier absorbs the "N of M" counter when it draws — both want the same
+    // space above the match, so exactly one of them may. Falls back to the plain label
+    // when the magnifier declines (off, or a match whose text collapsed to nothing).
+    var magnifierDrawn = drawActiveMatchMagnifier(rect);
+    if (!magnifierDrawn) {
+      drawActiveMatchLabel(rect);
+    }
     drawActiveMatchShape(rect);
 
     if (motion === 'off') {
@@ -1604,7 +2192,7 @@
 
     drawActiveOverlays(rect);
 
-    var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
+    var motion = effectiveMotion();
 
     if (motion === 'off') {
       return;
@@ -1639,26 +2227,10 @@
     return result;
   }
 
-  function performSearch(term) {
-    try {
-      if (typeof Highlight !== 'undefined' && CSS.highlights) {
-        CSS.highlights.delete('oculist-match');
-        CSS.highlights.delete('oculist-active-match');
-      }
-    } catch (e) {}
-
-    searchRanges = [];
-    activeIndex = -1;
-    firstEnter = false;
-    clearViewportMarkers();
-
-    if (!term) {
-      countEl.textContent = '';
-      setNavEnabled(false);
-      return;
-    }
-
-    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+  // Walks the DOM once per scan, returning the flattened/normalised page text
+  // and the text-node offset maps needed to resolve match ranges. Called once
+  // per scan (not once per term) so multiple terms can share the same index.
+  function buildPageIndex() {
     var flatText = '';
     var textNodeMaps = [];
 
@@ -1721,7 +2293,19 @@
             }
           }
         } else if (child.nodeType === 1) {
-          if (!SKIP_TAGS[child.tagName] && !child.classList.contains('oc-beacon')) {
+          // isOculistNode(): never descend into any Oculist-owned element (bar/chip row,
+          // beacons, viewport markers, ...). wrap's bar/chip row lives in wrap's shadow
+          // root; chip terms render the literal searched text as button labels, so
+          // without this exclusion every chip would always match its own label —
+          // inflating every count by at least 1, and by more for any other chip whose
+          // term happens to be a substring/superstring of it. Routed through the shared
+          // helper (rather than a narrower `child !== wrap` identity check) so any future
+          // Oculist node mounted under body is excluded automatically instead of
+          // silently self-matching. The extra cost per element is a couple of cheap
+          // string/classList comparisons on top of the classList.contains() this branch
+          // already did, not a closest()/getComputedStyle() walk, so it stays cheap on
+          // this hot path.
+          if (!SKIP_TAGS[child.tagName] && !isOculistNode(child)) {
             if (child.shadowRoot) {
               traverse(child.shadowRoot);
             }
@@ -1741,6 +2325,18 @@
     traverse(document.body);
 
     var normalizedFlatText = foldAccentsSafe(flatText.toLowerCase());
+
+    return { flatText: flatText, normalizedFlatText: normalizedFlatText, textNodeMaps: textNodeMaps };
+  }
+
+  // Finds every occurrence of term in a page index built by buildPageIndex()
+  // and returns the visible Ranges (capped at 999). Called once per term.
+  function findRanges(pageIndex, term) {
+    var normalizedFlatText = pageIndex.normalizedFlatText;
+    var textNodeMaps = pageIndex.textNodeMaps;
+    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+    var ranges = [];
+
     var index = 0;
     while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
       var matchStart = index;
@@ -1779,13 +2375,69 @@
           }
         }
         if (isVisible) {
-          searchRanges.push(range);
+          ranges.push(range);
         }
       }
 
       index += term.length;
-      if (searchRanges.length >= 999) break;
+      if (ranges.length >= 999) break;
     }
+
+    return ranges;
+  }
+
+  // Lite Mode's cheap path for an INACTIVE term (oculist-l6m.7): a plain indexOf scan
+  // over normalizedFlatText that counts matches without ever creating a Range or calling
+  // getClientRects — the layout-thrashing part of findRanges(). No visibility filtering
+  // happens here, so this count can be higher than what findRanges() would report for the
+  // same term (invisible matches are counted too); activating the term's chip runs
+  // findRanges() for it and corrects the count. Capped at 999, same ceiling as
+  // findRanges(), so one runaway term can't blow the count display up unboundedly.
+  //
+  // ponytail: 999/2000 are deliberate ceilings, not tuned limits — if a real page needs
+  // more, the fix is switching findRanges()/this function to a streaming/paged scan, not
+  // raising the numbers.
+  function countMatchesOnly(pageIndex, term) {
+    var normalizedFlatText = pageIndex.normalizedFlatText;
+    var normalizedTerm = foldAccentsSafe(term.toLowerCase()).replace(/\s+/g, ' ');
+    var count = 0;
+    var index = 0;
+    while ((index = normalizedFlatText.indexOf(normalizedTerm, index)) !== -1) {
+      count++;
+      index += term.length;
+      if (count >= 999) break;
+    }
+    return count;
+  }
+
+  // Total match budget across every term in a performListSearch() scan (oculist-l6m.7),
+  // separate from findRanges()'s per-term 999 cap. The active term is always materialised
+  // first and is never subject to this cap (see performListSearch()), so the term the
+  // user is currently looking at can never be starved by other terms' matches.
+  var TOTAL_MATCH_CAP = 2000;
+
+  function performSearch(term) {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    if (!term) {
+      countEl.textContent = '';
+      setNavEnabled(false);
+      return;
+    }
+
+    var pageIndex = buildPageIndex();
+    searchRanges = findRanges(pageIndex, term);
 
     if (searchRanges.length > 0) {
       firstEnter = true;
@@ -1793,6 +2445,7 @@
         if (typeof Highlight !== 'undefined' && CSS.highlights) {
           var matchHighlight = new Highlight();
           searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
           CSS.highlights.set('oculist-match', matchHighlight);
         }
       } catch (e) {
@@ -1806,6 +2459,308 @@
     }
 
     checkSiteOverride(searchRanges.length === 0);
+  }
+
+  // Union of every INACTIVE term's Ranges from a performListSearch() scan, so the chip row
+  // can show all terms' hits at once while only the active term gets the bright
+  // oculist-match/oculist-active-match treatment. activeIdx === -1 (no active chip) means
+  // every term is inactive, so nothing is skipped and the whole set is dim. Kept as its own
+  // function with a single call site inside performListSearch() so oculist-l6m.7's Lite
+  // Mode can skip dimming entirely (e.g. by guarding or removing that one call) without
+  // touching how oculist-match/oculist-active-match are built.
+  function updateDimHighlight(terms, ranges, activeIdx) {
+    try {
+      if (typeof Highlight === 'undefined' || !CSS.highlights) return;
+      var dimHighlight = new Highlight();
+      for (var i = 0; i < terms.length; i++) {
+        if (i === activeIdx) continue;
+        var termRangeList = ranges[i];
+        if (!termRangeList) continue;
+        for (var j = 0; j < termRangeList.length; j++) {
+          // oculist-l6m.7's Lite Mode count-only placeholder (new Array(count)) is a
+          // sparse array of holes carrying only a .length — skip falsy entries rather
+          // than passing one to dimHighlight.add(), which throws on anything that is not
+          // a Range and would otherwise abort this whole loop, silently dropping every
+          // other (real) term's dim ranges too.
+          if (termRangeList[j]) dimHighlight.add(termRangeList[j]);
+        }
+      }
+      dimHighlight.priority = 0;
+      CSS.highlights.set('oculist-dim-match', dimHighlight);
+    } catch (e) {}
+  }
+
+  // Scans the page once for every term in the working list, filling termRanges (parallel
+  // to workListTerms) so renderChipRow() can show each chip's own hit count. searchRanges/
+  // activeIndex/firstEnter/countEl continue to describe only the ACTIVE term, exactly as
+  // performSearch() left them, so findNext(), highlightActiveRange(), beacons, and the
+  // viewport markers need no changes to keep working off them.
+  //
+  // buildPageIndex() runs exactly once per call — it is the expensive DOM traversal — and
+  // the active term is materialised first (via findRanges) so a later match cap (bead
+  // oculist-l6m.7) can never starve the term the user is currently looking at.
+  //
+  // When the working list is empty (no chip has been committed yet, e.g. the user is still
+  // typing a draft that hasn't hit Enter), this falls back to lastTerm as an implicit
+  // single term so the mutation-rescan caller below behaves exactly like the old
+  // performSearch(lastTerm) call it replaces. The module-level termRanges array MUST stay
+  // index-aligned with workListTerms at every exit of this function — a zero-length
+  // workListTerms therefore always leaves termRanges zero-length too, even in the implicit
+  // branch below. The implicit term's own Ranges still power searchRanges/countEl/nav/
+  // highlights (its plain find-in-page purpose) via a local newTermRanges, they are simply
+  // never written into the module-level termRanges renderChipRow()/restoreActiveChip()/
+  // findNext() read by index (oculist-l6m.15 — the implicit branch used to write a
+  // length-1 termRanges against a length-0 workListTerms, a state only invisible today
+  // because every reader happens to gate on workListTerms.length first).
+  function performListSearch() {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    var terms = workListTerms;
+    var activeIdx = activeTermIndex;
+    // True only for the implicit-lastTerm fallback below — the sole case where `terms`
+    // diverges from workListTerms itself. Gates the termRanges write-through further down
+    // so the module-level array never grows past workListTerms.length (oculist-l6m.15).
+    var isImplicitTerm = false;
+
+    if (terms.length === 0) {
+      termRanges = [];
+      if (!lastTerm) {
+        countEl.textContent = '';
+        setNavEnabled(false);
+        renderChipRow();
+        return;
+      }
+      terms = [lastTerm];
+      activeIdx = 0;
+      isImplicitTerm = true;
+    }
+
+    var pageIndex = buildPageIndex();
+
+    // Running total across every term this scan materialises, active term included (see
+    // TOTAL_MATCH_CAP above). The active term is always scanned first and unconditionally
+    // — it is exempt from the cap check below — so it can never be the term that gets
+    // starved.
+    var totalMatches = 0;
+    var termsStarved = false;
+
+    var newTermRanges = new Array(terms.length);
+    // This is the only place the module-level termRanges[activeTermIndex] is ever given
+    // real Ranges (Lite Mode's cheap placeholder below is for inactive terms only) — every
+    // writer of activeTermIndex must call performListSearch() synchronously after setting
+    // it. The implicit-lastTerm branch also lands real Ranges in newTermRanges here, but
+    // (per oculist-l6m.15, below) that array is deliberately never copied into the
+    // module-level termRanges, so this invariant still only ever concerns the real
+    // workListTerms/activeTermIndex pairing.
+    if (activeIdx >= 0 && activeIdx < terms.length) {
+      newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
+      totalMatches += newTermRanges[activeIdx].length;
+    }
+    for (var i = 0; i < terms.length; i++) {
+      if (i === activeIdx) continue;
+
+      // Budget already spent by earlier terms in this loop (plus the active term) — stop
+      // materialising any further inactive term entirely rather than truncating one mid-
+      // scan. termsStarved drives the "Showing the first 2000 matches" notice below.
+      if (totalMatches >= TOTAL_MATCH_CAP) {
+        termsStarved = true;
+        continue;
+      }
+
+      if (settings.performanceMode) {
+        // Lite Mode: count-only, no Range objects and no getClientRects for an inactive
+        // term — this is the layout-thrashing cost oculist-l6m.7 exists to bound.
+        newTermRanges[i] = new Array(countMatchesOnly(pageIndex, terms[i]));
+      } else {
+        newTermRanges[i] = findRanges(pageIndex, terms[i]);
+      }
+      totalMatches += newTermRanges[i].length;
+    }
+    // Skipped for the implicit-lastTerm fallback: workListTerms is empty there, and
+    // termRanges must stay empty right alongside it (already set at the top of the
+    // terms.length === 0 branch above) rather than picking up this scan's one-element
+    // array. searchRanges/dim highlighting below read newTermRanges directly instead of
+    // termRanges, so the implicit term's own scan still works exactly as before — only the
+    // module-level array that renderChipRow()/restoreActiveChip()/findNext() index into by
+    // chip position is held back (oculist-l6m.15).
+    if (!isImplicitTerm) {
+      termRanges = newTermRanges;
+    }
+
+    searchRanges = (activeIdx >= 0 && activeIdx < newTermRanges.length) ? newTermRanges[activeIdx] : [];
+
+    // Single call site — this is the one line oculist-l6m.7's Lite Mode skips to turn
+    // dimming off entirely, without touching the oculist-match/oculist-active-match logic
+    // below. No Ranges were built for inactive terms above in Lite Mode, so there would be
+    // nothing real to dim even if this ran.
+    if (!settings.performanceMode) {
+      updateDimHighlight(terms, newTermRanges, activeIdx);
+    }
+
+    // A committed working list can legitimately have no active chip (activeIdx === -1,
+    // e.g. a persisted/restored list before any chip has been (re-)activated — see
+    // dim_highlight.test.js). That is not the same thing as "searched and found zero
+    // matches": every term may well have real hits, just none of them "active" right
+    // now. hasActiveTerm distinguishes the two so a restored-but-unselected list never
+    // writes the misleading "no matches" count or fires checkSiteOverride's unsolicited
+    // notice against terms that are simply sitting dim (oculist-l6m.5, from the .4 review).
+    var hasActiveTerm = activeIdx >= 0 && activeIdx < terms.length;
+
+    if (searchRanges.length > 0) {
+      firstEnter = true;
+      try {
+        if (typeof Highlight !== 'undefined' && CSS.highlights) {
+          var matchHighlight = new Highlight();
+          searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
+          CSS.highlights.set('oculist-match', matchHighlight);
+        }
+      } catch (e) {
+        console.warn('Oculist: CSS Custom Highlight API not supported or blocked.', e);
+      }
+      setNavEnabled(searchRanges.length > 1);
+      countEl.textContent = '0 ' + i18n.of + ' ' + searchRanges.length;
+    } else if (hasActiveTerm) {
+      countEl.textContent = i18n.noMatch;
+      setNavEnabled(false);
+    } else {
+      countEl.textContent = '';
+      setNavEnabled(false);
+    }
+
+    checkSiteOverride(hasActiveTerm && searchRanges.length === 0);
+
+    // Shown after checkSiteOverride() on purpose: checkSiteOverride() unconditionally
+    // removeNotice()s whenever it isn't itself showing a notice (see its zeroMatches
+    // branch), so calling showNotice() any earlier would have this notice wiped out from
+    // under it in the same scan — the same ordering addChipTerm()'s cap message relies on.
+    if (termsStarved) {
+      showNotice('Showing the first 2000 matches. Remove a term for a complete count.', 'match-scan-cap');
+    }
+
+    renderChipRow();
+  }
+
+  // ── Draft input vs. active chip ownership (oculist-l6m.5) ───────────────────────
+  //
+  // A non-empty input holds a DRAFT term that has not been committed to a chip yet. The
+  // draft owns searchRanges and the active highlight (oculist-match/oculist-active-match)
+  // exactly like a lone performSearch() always has — live debounced typing is unchanged.
+  // But committed chips must stay rendered with their last known counts and stay in the
+  // dim registry while the draft is being typed, so this rebuilds oculist-dim-match from
+  // the working list's already-known termRanges (no chip term is re-scanned; only the
+  // draft term itself gets a fresh buildPageIndex() call, exactly one per keystroke as
+  // before). No chip is "active" for highlight purposes while a draft owns the highlight,
+  // so every committed term — including whichever chip was active before typing began —
+  // goes into the dim set (activeIdx -1 excludes nothing, see updateDimHighlight()).
+  function performDraftSearch(term) {
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        // Only touch oculist-dim-match when there is a working list to keep dim — with
+        // no chips at all (today's overwhelmingly common lone-search case) this must
+        // behave byte-for-byte like the old performSearch(), which left it deleted. Lite
+        // Mode always deletes it too (oculist-l6m.7): it is never rebuilt below in that
+        // mode, so leaving a prior scan's registry in place would dim-highlight stale
+        // ranges during draft typing instead of showing none at all.
+        if (workListTerms.length === 0 || settings.performanceMode) CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    var pageIndex = buildPageIndex();
+    searchRanges = findRanges(pageIndex, term);
+
+    if (workListTerms.length > 0 && !settings.performanceMode) {
+      updateDimHighlight(workListTerms, termRanges, -1);
+    }
+
+    if (searchRanges.length > 0) {
+      firstEnter = true;
+      try {
+        if (typeof Highlight !== 'undefined' && CSS.highlights) {
+          var matchHighlight = new Highlight();
+          searchRanges.forEach(function (r) { matchHighlight.add(r); });
+          matchHighlight.priority = 1;
+          CSS.highlights.set('oculist-match', matchHighlight);
+        }
+      } catch (e) {
+        console.warn('Oculist: CSS Custom Highlight API not supported or blocked.', e);
+      }
+      setNavEnabled(searchRanges.length > 1);
+      countEl.textContent = '0 ' + i18n.of + ' ' + searchRanges.length;
+    } else {
+      countEl.textContent = i18n.noMatch;
+      setNavEnabled(false);
+    }
+
+    checkSiteOverride(searchRanges.length === 0);
+  }
+
+  // Clearing the input hands ownership back to whichever chip was active before the draft
+  // started — its cached termRanges become searchRanges again and oculist-match returns,
+  // reusing the last scan rather than re-scanning the page (so rapid type-then-clear never
+  // costs a second buildPageIndex() call and never leaves a stale registry entry: every
+  // registry this function touches is either deleted or freshly .set() before it returns).
+  // Deliberately does not call highlightActiveRange() — restoring a chip must never
+  // trigger the beacon, exactly like a plain chip click never has.
+  function restoreActiveChip() {
+    if (activeTermIndex < 0 || activeTermIndex >= workListTerms.length) {
+      // No chips, or no chip currently active — today's empty state, byte-for-byte via
+      // the same early-return branch a lone performSearch('') has always used.
+      performSearch('');
+      return;
+    }
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-active-match');
+        // Lite Mode never rebuilds oculist-dim-match below (oculist-l6m.7) — delete it
+        // explicitly here rather than leaving a prior (pre-toggle) scan's registry on
+        // screen, since this function otherwise only ever .set()s it, never .delete()s it.
+        if (settings.performanceMode) CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+
+    activeIndex = -1;
+    firstEnter = false;
+    clearViewportMarkers();
+
+    searchRanges = termRanges[activeTermIndex] || [];
+
+    if (!settings.performanceMode) {
+      updateDimHighlight(workListTerms, termRanges, activeTermIndex);
+    }
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        var matchHighlight = new Highlight();
+        searchRanges.forEach(function (r) { matchHighlight.add(r); });
+        matchHighlight.priority = 1;
+        CSS.highlights.set('oculist-match', matchHighlight);
+      }
+    } catch (e) {}
+
+    setNavEnabled(searchRanges.length > 1);
+    countEl.textContent = searchRanges.length > 0
+      ? '0 ' + i18n.of + ' ' + searchRanges.length
+      : i18n.noMatch;
   }
 
   // ── Dynamic content re-scan (infinite scroll / DOM mutation) ───────────────────
@@ -1858,9 +2813,13 @@
 
   function rescanAfterMutation() {
     remountIfDetached();
-    if (!wrap || !lastTerm) return;
+    // Fires as long as there is either a draft term in flight or a committed working
+    // list — the guard used to be "no draft term", but a working list with an empty
+    // input (e.g. right after Enter commits a chip and the user hasn't typed since)
+    // must still keep rescanning.
+    if (!wrap || (!lastTerm && workListTerms.length === 0)) return;
     var previousActiveIndex = activeIndex;
-    performSearch(lastTerm);
+    performListSearch();
     if (searchRanges.length > 0) {
       activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
@@ -1899,8 +2858,15 @@
     }
   }
 
-  function showNotice(text) {
-    if (!wrapRoot || noticeDismissed || noticeEl) return;
+  // key identifies which notice CLASS this is (see the call sites for the full list:
+  // 'site-override', 'term-cap', 'term-length', 'list-cap', 'list-write-failed',
+  // 'match-scan-cap'). Dismissing a notice only suppresses further showNotice() calls
+  // for that same key, for the rest of this session — never every notice, and never
+  // permanently (oculist-l6m.12). A falsy/unrecognized key lands in a shared 'default'
+  // bucket rather than either extreme.
+  function showNotice(text, key) {
+    var noticeKey = key || 'default';
+    if (!wrapRoot || dismissedNotices.has(noticeKey) || noticeEl) return;
     noticeEl = document.createElement('div');
     noticeEl.className = 'oc-notice';
 
@@ -1912,7 +2878,7 @@
     closeEl.className = 'oc-notice-close';
     closeEl.textContent = '✕';
     closeEl.addEventListener('click', function () {
-      noticeDismissed = true;
+      dismissedNotices.add(noticeKey);
       removeNotice();
     });
 
@@ -1925,11 +2891,11 @@
     if (!wrap) return;
     var hostname = window.location.hostname;
     if (KNOWN_OVERRIDE_DOMAINS.indexOf(hostname) !== -1) {
-      showNotice('Oculist may not find text on ' + hostname + ' — it renders content in a way standard page search can\'t scan.');
+      showNotice('Oculist may not find text on ' + hostname + ' — it renders content in a way standard page search can\'t scan.', 'site-override');
       return;
     }
     if (zeroMatches && document.body && document.body.innerText && document.body.innerText.trim().length > 500) {
-      showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.');
+      showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.', 'site-override');
     } else {
       removeNotice();
     }
@@ -1937,24 +2903,77 @@
 
   // ── Navigation ────────────────────────────────────────────────────────────────
 
+  // Ownership rule (oculist-l6m.19): lastTerm is kept in sync with whichever input value
+  // last actually produced the current searchRanges — a plain performSearch()/
+  // performDraftSearch() call sets it to the searched term, an Enter commit sets it to
+  // input.value, and the input's own debounce handler sets it to '' immediately before
+  // calling restoreActiveChip(). So term !== lastTerm is the ONLY reliable staleness
+  // signal: it is true precisely when the user typed something new and got here (Ctrl+G/
+  // F3/prev/next) before the debounced search ran, and false whenever the current
+  // searchRanges already reflects input.value, no matter which of those three paths built
+  // it. Two things that are NOT staleness on their own, and must never force a re-scan
+  // through this signal: an empty searchRanges (a real chip can legitimately have zero
+  // matches) and input.value not matching the active chip's term (leftover text from a
+  // previous commit, sitting untouched in the box after a chip click, still owns nothing).
+  // Treating either as "stale" is exactly what used to wipe oculist-dim-match (case 1) and
+  // desync the count/nav from what was actually highlighted after a restore (case 2).
   function findNext(backwards) {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
     var term = input.value;
-    if (!term) {
-      countEl.textContent = '';
-      setNavEnabled(false);
-      return;
+
+    if (term !== lastTerm) {
+      lastTerm = term;
+      if (term) {
+        // A working list in play must stay list-owned even for this catch-up search —
+        // performSearch() unconditionally deletes oculist-dim-match, which would blow
+        // away every other chip's dim ranges for a keystroke that has nothing to do with
+        // them.
+        if (workListTerms.length > 0) {
+          performDraftSearch(term);
+        } else {
+          performSearch(term);
+        }
+      } else {
+        // Mirrors the input's own debounce handler: an emptied input hands ownership
+        // back to whichever chip was active before (or blanks out via performSearch('')
+        // if there is none).
+        restoreActiveChip();
+      }
     }
 
-    if (term !== lastTerm || searchRanges.length === 0) {
-      lastTerm = term;
-      performSearch(term);
+    var hasActiveChip = activeTermIndex >= 0 && activeTermIndex < workListTerms.length;
+
+    if (!term) {
+      if (!hasActiveChip) {
+        // Nothing is or was being searched: no draft in the input, no chip to fall back
+        // on. Matches performSearch('')'s own blank (not "no match") count text.
+        countEl.textContent = '';
+        setNavEnabled(false);
+        return;
+      }
     }
 
     if (searchRanges.length === 0) {
+      // A restored-but-unscanned active chip (mount carry-over, or a saved list just
+      // loaded) has never had a real search run for it — termRanges[activeTermIndex] is
+      // undefined, not an empty array. Reporting "no match" here would be a false claim
+      // about the page; the carry-over contract is that restoring a list never scans
+      // until the user asks for one (see loadWorkList()/loadSavedList()), so this leaves
+      // the count blank instead, exactly like the pre-restore blank state. A chip that
+      // HAS been scanned and genuinely has zero matches (termRanges[activeTermIndex] is
+      // an array, just an empty one) still falls through to the real "no match" text below.
+      // Gated on !term as well: a non-empty draft with genuinely zero matches already got
+      // its own correct "no match" text from performDraftSearch() above, keyed off the
+      // draft's own scan, not off whatever an unrelated restored-but-unscanned chip's
+      // termRanges slot happens to hold — this branch must never clobber that.
+      if (!term && hasActiveChip && typeof termRanges[activeTermIndex] === 'undefined') {
+        countEl.textContent = '';
+        setNavEnabled(false);
+        return;
+      }
       countEl.textContent = i18n.noMatch;
       setNavEnabled(false);
       return;
@@ -1978,6 +2997,231 @@
     highlightActiveRange(true);
   }
 
+  // ── Working-list chip row ────────────────────────────────────────────────────
+  //
+  // A "working list" of search terms rendered as chips beneath the bar. Every mutation
+  // here persists via saveWorkList() directly (no window.__oc* hook — those two exist
+  // purely for test-reachability into this closure, not as a call path for real UI
+  // code).
+
+  function persistWorkList() {
+    saveWorkList({ terms: workListTerms, activeIndex: activeTermIndex });
+  }
+
+  // Activating a chip re-scans the whole working list (one performListSearch() call),
+  // not just the newly active term — every chip's count slot needs to reflect the
+  // current page state, not just the one that was clicked.
+  function activateChip(i) {
+    if (i < 0 || i >= workListTerms.length) return;
+    activeTermIndex = i;
+    persistWorkList();
+    performListSearch();
+  }
+
+  // Removing the active chip moves the pointer to the previous index (index - 1),
+  // clamped to 0 so removing the first chip while others remain activates the new
+  // leftmost chip rather than clearing. The list-emptying case is handled separately
+  // below, which forces -1 regardless of what this clamp computes.
+  function removeChipAt(index) {
+    if (index < 0 || index >= workListTerms.length) return;
+    workListTerms.splice(index, 1);
+    // Keep termRanges parallel to workListTerms so a stale/misaligned count is never
+    // shown for a term that shifted index — termRanges itself is only fully refreshed
+    // by the next performListSearch() call, splice() here is a no-op if there is no
+    // scan yet (termRanges shorter than index).
+    termRanges.splice(index, 1);
+    if (activeTermIndex === index) {
+      activeTermIndex = Math.max(0, index - 1);
+    } else if (activeTermIndex > index) {
+      activeTermIndex -= 1;
+    }
+    if (workListTerms.length === 0) activeTermIndex = -1;
+    persistWorkList();
+
+    // Reuse performListSearch() — the same single rescan/refresh call activateChip()
+    // already runs on every chip-row interaction — so the count, nav enabled-state,
+    // termRanges, and all three highlight registries (oculist-match, oculist-dim-match,
+    // oculist-active-match) converge on whatever chip is now active, exactly once
+    // (oculist-l6m.33). Before this fix, removal only spliced the term/range arrays and
+    // called renderChipRow(), leaving every registry and the count/nav UI holding the
+    // just-removed chip's stale state.
+    if (workListTerms.length === 0) {
+      // True empty state: no chip left to search for. Backspace can only ever reach
+      // this function with the input already empty (see keydownHandler's Backspace
+      // guard), and the X button's common case matches too. When that holds, force
+      // lastTerm into sync with the empty input *before* calling performListSearch() —
+      // otherwise a lastTerm left stale by an in-flight debounce (the user backspaced
+      // through the chip's own leftover text faster than the 150ms debounce settles)
+      // would make performListSearch() treat it as an implicit lone search and re-scan
+      // the very term that was just removed, reproducing this bug through a different
+      // path. With lastTerm forced to '', performListSearch() takes its existing
+      // no-terms/no-lastTerm early return — the same free "clear" path it already uses
+      // at mount — so removing the only chip never costs a real page rescan
+      // (buildPageIndex() is never called). Also cancels any pending debounce so it
+      // can't independently re-fire restoreActiveChip() against now-stale closures
+      // after we've already settled the empty state.
+      if (input && input.value === '') {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        lastTerm = '';
+      }
+    }
+    performListSearch();
+  }
+
+  function removeLastChip() {
+    if (workListTerms.length === 0) return;
+    removeChipAt(workListTerms.length - 1);
+  }
+
+  // Trims, then: rejects whitespace-only silently, enforces the 100-char cap (checked
+  // against the trimmed length), activates rather than duplicates an existing term, and
+  // enforces the 10-term cap. Both caps surface through showNotice(), each under its own
+  // notice key ('term-length'/'term-cap' — oculist-l6m.12, so dismissing one cap notice
+  // never silences the other); the whitespace-only rejection does not. Returns
+  // { message, key } on either cap (undefined otherwise) so the caller can re-show it,
+  // under the same key, after findNext()'s performSearch -> checkSiteOverride() call —
+  // which runs right after this, in the same Enter handler, and unconditionally clears
+  // whatever notice is up when the term the user just typed matches the page — has had a
+  // chance to wipe it out from under this same keystroke.
+  //
+  // oculist-l6m.5: a real commit (a new chip pushed, or an existing one re-activated on a
+  // duplicate) now runs performListSearch() itself, so dim highlights and every chip's
+  // count are on screen the instant Enter lands a chip — not just after a later chip
+  // click or DOM-mutation rescan. A cap hit never reaches either scan call below.
+  function addChipTerm(rawTerm) {
+    var trimmed = (rawTerm || '').trim();
+    if (trimmed === '') return;
+
+    if (trimmed.length > 100) {
+      // removeNotice() first: showNotice() is a no-op while a notice is already showing
+      // (e.g. a stale "no matches" notice from the search that is about to run right
+      // after this, via keydownHandler's Enter -> findNext fall-through). A cap being hit
+      // must always surface, not lose a race with whatever notice happened to be up.
+      removeNotice();
+      var lengthMessage = 'Search terms are limited to 100 characters. Shorten the term and try again.';
+      showNotice(lengthMessage, 'term-length');
+      return { message: lengthMessage, key: 'term-length' };
+    }
+
+    var existingIndex = workListTerms.indexOf(trimmed);
+    if (existingIndex !== -1) {
+      activateChip(existingIndex);
+      return;
+    }
+
+    if (workListTerms.length >= 10) {
+      removeNotice();
+      var capMessage = 'Oculist searches up to 10 terms at once. Remove a term to add another.';
+      showNotice(capMessage, 'term-cap');
+      return { message: capMessage, key: 'term-cap' };
+    }
+
+    workListTerms.push(trimmed);
+    activeTermIndex = workListTerms.length - 1;
+    persistWorkList();
+    performListSearch();
+  }
+
+  // Called from keydownHandler's Enter branch. Adds/activates a chip as a side effect of
+  // Enter when the input holds a term that differs from the currently active chip;
+  // otherwise Enter is next-match exactly as before. Never clears the input — the search
+  // bar keeps whatever the user typed.
+  //
+  // Returns { committed, message, key }. committed is true only when addChipTerm()
+  // actually pushed or (re)activated a chip — i.e. ran its one performListSearch() scan —
+  // so keydownHandler can land directly off that fresh state instead of falling through to
+  // findNext(), which would otherwise re-scan the page a second time on the same
+  // keystroke (oculist-l6m.5). message/key are the cap notice's text and notice key
+  // (oculist-l6m.12) on a cap hit, undefined otherwise; committed is always false
+  // whenever message is set.
+  function maybeAddChipFromInput() {
+    if (!input || !input.value) return { committed: false };
+    var activeTerm = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
+      ? workListTerms[activeTermIndex]
+      : null;
+    var trimmed = input.value.trim();
+    if (trimmed === '' || trimmed === activeTerm) return { committed: false };
+    var result = addChipTerm(input.value);
+    return { committed: !result, message: result && result.message, key: result && result.key };
+  }
+
+  function renderChipRow() {
+    if (!wrapRoot || !chipRow) return;
+
+    // oculist-l6m.26 fix-pass: keep the lists popover's Save button in sync with main-bar
+    // chip edits (add/remove) while the popover stays open, in both directions. Guarded on
+    // listsPanel so this is a no-op whenever the popover is closed.
+    if (listsPanel) updateSaveBtnDisabled();
+
+    chipRow.textContent = '';
+
+    if (workListTerms.length === 0) {
+      chipRow.hidden = true;
+      chipRow.style.display = 'none';
+      return;
+    }
+
+    chipRow.hidden = false;
+    chipRow.style.display = '';
+
+    // 'full' is the only motion level chips animate under; 'reduced' and 'off' both
+    // suppress it, matching effectiveMotion()'s own two-tier gate elsewhere.
+    var noMotion = effectiveMotion() !== 'full';
+
+    workListTerms.forEach(function (term, i) {
+      var isActive = i === activeTermIndex;
+
+      var chip = document.createElement('span');
+      chip.className = 'oc-chip' + (noMotion ? ' oc-no-motion' : '');
+
+      // termRanges[i] is undefined until performListSearch() has scanned this term at
+      // least once — right after addChipTerm() pushes it before any scan, or a term
+      // skipped outright by the oculist-l6m.7 total-match cap (termsStarved). Both cases
+      // leave the visual slot blank, and the accessible name must not claim a count for
+      // either: "0 matches" is only correct once termRanges[i] is a real (possibly empty)
+      // array from an actual scan (oculist-l6m.19's undefined-vs-empty-array distinction).
+      var hasCount = !!termRanges[i];
+      var countValue = hasCount ? termRanges[i].length : 0;
+
+      var termBtn = document.createElement('button');
+      termBtn.type = 'button';
+      termBtn.className = 'oc-chip-term' + (isActive ? ' active' : '');
+      termBtn.textContent = term;
+      termBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      var termLabel = (isActive ? 'Active search term: ' : 'Search term: ') + term;
+      if (hasCount) {
+        termLabel += ', ' + countValue + ' ' + (countValue === 1 ? i18n.matchSingular : i18n.matchPlural);
+      }
+      termBtn.setAttribute('aria-label', termLabel);
+      termBtn.addEventListener('click', function () { activateChip(i); });
+
+      // The visual count span stays aria-hidden — its value is already folded into
+      // termBtn's aria-label above, so a screen reader is never asked to read it twice.
+      var chipCountEl = document.createElement('span');
+      chipCountEl.className = 'oc-chip-count';
+      chipCountEl.setAttribute('aria-hidden', 'true');
+      chipCountEl.textContent = hasCount ? String(countValue) : '';
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'oc-chip-remove';
+      removeBtn.textContent = '✕';
+      removeBtn.setAttribute('aria-label', 'Remove search term: ' + term);
+      removeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        removeChipAt(i);
+      });
+
+      chip.appendChild(termBtn);
+      chip.appendChild(chipCountEl);
+      chip.appendChild(removeBtn);
+      chipRow.appendChild(chip);
+    });
+  }
+
   // Display the active match with the high-visibility visual animation
   function highlightActiveRange(shouldAnimate, skipScroll) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
@@ -1988,6 +3232,7 @@
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
         var activeHighlight = new Highlight();
         activeHighlight.add(activeRange);
+        activeHighlight.priority = 2;
         CSS.highlights.set('oculist-active-match', activeHighlight);
       }
     } catch (e) {}
@@ -2236,8 +3481,23 @@
       return;
     }
     if (!wrap) return;
-    if (e.key === 'Escape') { window.__ocDestroy(); return; }
-    
+    if (e.key === 'Escape') {
+      // Both dialogs (lists popover, settings panel) get their own first Escape, closing
+      // only themselves and returning focus to their trigger button, so a user browsing
+      // saved lists or adjusting settings never loses the whole overlay by accident — they
+      // now carry identical role="dialog" semantics (oculist-l6m.27) and so must behave
+      // identically for Escape per the WAI-ARIA APG (oculist-l6m.37). A second Escape, with
+      // both dialogs already gone, falls through to the existing full-destroy below exactly
+      // as before oculist-l6m.9. toggleListsMenu()/toggleSettings() keep the two mutually
+      // exclusive, so in practice only one of the next two branches can ever fire — the
+      // listsPanel check simply stays first for a deterministic order if that invariant is
+      // ever broken.
+      if (listsPanel) { closeListsMenu(); return; }
+      if (settingsPanel) { closeSettings(); return; }
+      window.__ocDestroy();
+      return;
+    }
+
     var isGKey = (e.key && e.key.toLowerCase() === 'g') || e.keyCode === 71 || e.code === 'KeyG';
     var isF3Key = e.key === 'F3' || e.keyCode === 114;
     if (((e.ctrlKey || e.metaKey) && isGKey) || isF3Key) {
@@ -2248,29 +3508,128 @@
       return;
     }
     
+    // Backspace with the input in focus and empty removes the last chip. Scoped to the
+    // input specifically (not "focus anywhere in wrap") so backspacing inside, say, a
+    // settings field never eats a chip by accident.
+    if (e.key === 'Backspace' && wrapRoot && wrapRoot.activeElement === input && input && input.value === '') {
+      removeLastChip();
+      return;
+    }
+
     if (e.key === 'Enter') {
+      // Enter inside the list popover's own text inputs (Save current as…/rename) is
+      // handled entirely by their own confirm-button bindings — this is not the main
+      // find input's commit-a-chip Enter, and must not fall through to it (which reads
+      // input.value, the MAIN find input, regardless of what's actually focused, and
+      // could otherwise silently commit a stray draft term as a chip).
+      if (listsPanel && wrapRoot && wrapRoot.activeElement && listsPanel.contains(wrapRoot.activeElement)) {
+        return;
+      }
+      // Same reasoning as the listsPanel guard above, mirrored for the settings panel:
+      // Enter on a settings control (a <button>, a color <input>, a link) must trigger
+      // its own native activation, not be swallowed into a chip-commit on the main find
+      // input (oculist-oxh).
+      if (settingsPanel && wrapRoot && wrapRoot.activeElement && settingsPanel.contains(wrapRoot.activeElement)) {
+        return;
+      }
       if (document.activeElement === wrap || wrap.contains(document.activeElement) || (wrapRoot && wrapRoot.activeElement)) {
         try { e.preventDefault(); } catch (err) {}
-        findNext(e.shiftKey);
+        // A non-empty term that differs from the active chip becomes a chip and the
+        // active one, as a side effect. maybeAddChipFromInput() itself runs the one
+        // performListSearch() scan when it actually commits (new chip or duplicate
+        // activation), so a committed Enter lands directly off that fresh state below
+        // instead of falling through to findNext() — which called a bare performSearch()
+        // here before oculist-l6m.5, wiping the dim registry and rebuilding oculist-match
+        // for a single term, undoing the scan that just ran.
+        var commitResult = maybeAddChipFromInput();
+        if (commitResult.committed) {
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
+          lastTerm = input.value;
+          // Land on match 0 (or the last match, backwards) via the existing firstEnter
+          // flag — performListSearch() already set it when the fresh scan found matches,
+          // exactly like a lone performSearch() always has.
+          if (searchRanges.length > 0) {
+            if (firstEnter) {
+              firstEnter = false;
+              activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
+            } else {
+              activeIndex = e.shiftKey
+                ? (activeIndex <= 0 ? searchRanges.length - 1 : activeIndex - 1)
+                : (activeIndex >= searchRanges.length - 1 ? 0 : activeIndex + 1);
+            }
+            highlightActiveRange(true);
+          }
+        } else {
+          // No commit happened (blank/whitespace input, a cap hit, or the input already
+          // matches the active chip) — Enter is plain next-match, exactly as before.
+          findNext(e.shiftKey);
+        }
+        // A cap hit never commits, so it always takes the findNext() branch above, whose
+        // performSearch() -> checkSiteOverride() call unconditionally clears whatever
+        // notice is up when the just-typed term matches the page — erasing the cap notice
+        // addChipTerm() just showed in the same keystroke. Re-show it.
+        if (commitResult.message) {
+          removeNotice();
+          showNotice(commitResult.message, commitResult.key);
+        }
       }
     }
   }
 
   // ── Settings panel ────────────────────────────────────────────────────────────
 
-  function toggleSettings() {
+  // skipFocusReturn mirrors closeListsMenu()'s option (oculist-l6m.27): set when this
+  // close is a step on the way to focus landing somewhere else on purpose — here, only
+  // the list popover's own toggleListsMenu() mutual-exclusion branch, where focus is
+  // about to move into the list popover instead of back to gearBtn.
+  function closeSettings(opts) {
+    var returnFocus = !(opts && opts.skipFocusReturn);
     var t = T();
     if (settingsPanel) {
       settingsPanel.remove();
       settingsPanel = null;
-      if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
-    } else {
-      buildSettingsPanel();
-      if (gearBtn) { gearBtn.classList.add('active'); gearBtn.style.color = t.accent; }
+    }
+    if (gearBtn) {
+      gearBtn.classList.remove('active');
+      gearBtn.style.color = t.text;
+      gearBtn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) gearBtn.focus();
     }
   }
 
-  function makeOptionGroup(items, currentVal, onChange) {
+  function openSettings() {
+    buildSettingsPanel();
+    if (gearBtn) {
+      gearBtn.classList.add('active');
+      gearBtn.style.color = T().accent;
+      gearBtn.setAttribute('aria-expanded', 'true');
+    }
+    // Move focus into the dialog itself (tabIndex -1, set in buildSettingsPanel()) rather
+    // than guessing at a "first" control — the panel has no single obvious default field,
+    // and landing on a text input by default is its own anti-pattern.
+    if (settingsPanel) settingsPanel.focus();
+  }
+
+  function toggleSettings() {
+    if (settingsPanel) {
+      closeSettings();
+    } else {
+      // Opening Settings while the list popover is open must close the list popover —
+      // the two are mutually exclusive (oculist-l6m.9 edge case). skipFocusReturn: focus
+      // is about to move into the settings panel instead of back to listsBtn.
+      if (listsPanel) { closeListsMenu({ skipFocusReturn: true }); }
+      openSettings();
+    }
+  }
+
+  // groupKey (optional) + item.value forms a stable data-oc-key identifier
+  // (oculist-l6m.38) that survives an in-place settings-panel rebuild — the item arrays
+  // themselves are static per call site, so the same key always resolves to the "same"
+  // control across a rebuild even though the DOM node itself is new.
+  function makeOptionGroup(items, currentVal, onChange, groupKey) {
     var group = document.createElement('div');
     group.className = 'oc-toggle-group';
 
@@ -2279,6 +3638,7 @@
       btn.className = 'oc-toggle-btn' + (item.value === currentVal ? ' active' : '');
       btn.textContent = item.label;
       btn.title = item.title || item.label;
+      if (groupKey) btn.setAttribute('data-oc-key', groupKey + ':' + item.value);
       btn.addEventListener('click', function () {
         onChange(item.value);
         group.querySelectorAll('.oc-toggle-btn').forEach(function (b) {
@@ -2292,7 +3652,7 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange, disabled) {
+  function makeRadioList(items, currentVal, onChange, disabled, groupKey) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
     if (disabled) {
@@ -2303,6 +3663,7 @@
     items.forEach(function (item) {
       var row = document.createElement('button');
       row.className = 'oc-radio-item' + (item.value === currentVal ? ' active' : '');
+      if (groupKey) row.setAttribute('data-oc-key', groupKey + ':' + item.value);
       if (disabled) {
         row.disabled = true;
         row.style.cursor = 'not-allowed';
@@ -2371,6 +3732,21 @@
 
     settingsPanel = document.createElement('div');
     settingsPanel.id = 'oc-settings-panel';
+    // role="dialog" + a focusable (tabIndex -1) container match listsPanel below
+    // (oculist-l6m.27) — the two panels are the same interaction pattern and must expose
+    // and behave identically for assistive tech. A dialog sharing its accessible name with
+    // its trigger button is a normal, correct pattern (screen readers disambiguate by role,
+    // e.g. "Options button" vs. "Options dialog") — listsPanel's aria-label below does
+    // exactly that, and this panel deliberately matches it rather than using aria-labelledby:
+    // Blink applies CSS text-transform when computing a name from a *referenced* element, so
+    // pointing aria-labelledby at the visible header (which is uppercase via CSS, see
+    // .oc-settings-title below) would ship a shouty, letter-spelled announced name even
+    // though i18n.prefTitle itself is sentence case. aria-label reads the JS string directly,
+    // bypassing that CSS, so the announced name stays sentence case while the header still
+    // renders in caps. Do not "fix" this back to aria-labelledby.
+    settingsPanel.setAttribute('role', 'dialog');
+    settingsPanel.setAttribute('aria-label', i18n.prefTitle);
+    settingsPanel.tabIndex = -1;
     settingsPanel.style.fontFamily = 'system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
 
     // Title / Header in Settings panel
@@ -2396,6 +3772,7 @@
     // Right: Reset Button
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
+    resetBtn.setAttribute('data-oc-key', 'reset');
     resetBtn.appendChild(document.createTextNode('↺ ' + i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
@@ -2408,9 +3785,7 @@
       saveSettings();
       applyWrapPosition();
       injectHighlightStyles();
-      settingsPanel.remove();
-      settingsPanel = null;
-      buildSettingsPanel();
+      rebuildSettingsPanelPreservingFocus();
     });
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
@@ -2447,7 +3822,7 @@
         if (idx !== -1) settings.disabledSites.splice(idx, 1);
       }
       saveSettings();
-    })));
+    }, 'site')));
 
     col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
       { value: 'dark',  label: i18n.dark  },
@@ -2457,16 +3832,15 @@
       settings.theme = v; saveSettings();
       injectHighlightStyles();
       applyWrapPosition();
-      settingsPanel.remove(); settingsPanel = null;
-      buildSettingsPanel();
-    })));
+      rebuildSettingsPanelPreservingFocus();
+    }, 'theme')));
 
     var scrollBehaviorField = makeSettingsField(i18n.scrollBehavior, i18n.scrollBehaviorDesc, makeOptionGroup([
       { value: 'smooth', label: i18n.smooth },
       { value: 'instant', label: i18n.instant }
     ], settings.scrollBehavior, function (v) {
       settings.scrollBehavior = v; saveSettings();
-    }));
+    }, 'scroll'));
     scrollBehaviorField.style.marginTop = '8px';
     col1.appendChild(scrollBehaviorField);
 
@@ -2487,7 +3861,8 @@
       effectOptions,
       settings.effect,
       function (v) { settings.effect = v; saveSettings(); },
-      constraints.effectDisabled
+      constraints.effectDisabled,
+      'effect'
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -2504,21 +3879,20 @@
     ], settings.position, function (v) {
       settings.position = v; saveSettings();
       applyWrapPosition();
-      settingsPanel.remove(); settingsPanel = null;
-      buildSettingsPanel();
-    })));
+      rebuildSettingsPanelPreservingFocus();
+    }, 'position')));
 
     var pickerGroup = document.createElement('div');
     pickerGroup.className = 'oc-settings-picker-group';
 
     var items = [
-      { label: i18n.matchLabel, val: effColors.match, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.activeLabel, val: effColors.active, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.beaconColorLabel || i18n.beaconLabel, val: effColors.beacon, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
+      { key: 'match', label: i18n.matchLabel, val: effColors.match, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
+      { key: 'active', label: i18n.activeLabel, val: effColors.active, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
+      { key: 'beacon', label: i18n.beaconColorLabel || i18n.beaconLabel, val: effColors.beacon, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
     ];
 
     items.forEach(function (item) {
-      var picker = makeColorPicker(item.label, item.val, item.title, item.cb, constraints.colorsDisabled);
+      var picker = makeColorPicker(item.label, item.val, item.title, item.cb, constraints.colorsDisabled, item.key);
       pickerGroup.appendChild(picker);
     });
 
@@ -2566,7 +3940,50 @@
     });
   }
 
-  function makeColorPicker(label, val, title, onChange, disabled) {
+  // Rebuilds the settings panel in place (theme/position/reset changes, or a settings
+  // change syncing in from another tab/the popup) without ejecting keyboard focus to
+  // document body (oculist-l6m.38). buildSettingsPanel() tears the whole subtree down and
+  // recreates it, so the previously focused node is gone; this captures a data-oc-key
+  // identifier for whatever was focused *inside the panel* beforehand (see makeOptionGroup/
+  // makeRadioList/makeColorPicker) and re-resolves the equivalent control afterward,
+  // falling back to the panel container (tabIndex -1) if no key was captured, the control
+  // no longer exists, or the control exists but is no longer a valid focus target (e.g. a
+  // control that's now profile-disabled) — verified by checking wrapRoot.activeElement
+  // actually landed on it after calling .focus(), rather than trusting a bare `disabled`
+  // check, since disabled is only one of several reasons a focus() call can silently no-op
+  // (hidden, display:none, inert, removed from the tab order, etc).
+  //
+  // Deliberately does NOT restore focus if it wasn't inside the panel to begin with — a
+  // rebuild triggered by a remote settings change (the storage.onChanged listener) must
+  // never steal focus from the page/find-input/another overlay into the panel.
+  function rebuildSettingsPanelPreservingFocus() {
+    if (!settingsPanel) { buildSettingsPanel(); return; }
+
+    var focusWasInPanel = false;
+    var focusKey = null;
+    if (wrapRoot && wrapRoot.activeElement && settingsPanel.contains(wrapRoot.activeElement)) {
+      focusWasInPanel = true;
+      var fe = wrapRoot.activeElement;
+      focusKey = (fe.getAttribute && fe.getAttribute('data-oc-key')) || null;
+    }
+
+    settingsPanel.remove();
+    settingsPanel = null;
+    buildSettingsPanel();
+    if (!settingsPanel) return;
+
+    if (focusWasInPanel) {
+      var restored = focusKey
+        ? settingsPanel.querySelector('[data-oc-key="' + focusKey + '"]')
+        : null;
+      if (restored) restored.focus();
+      if (!restored || !wrapRoot || wrapRoot.activeElement !== restored) {
+        settingsPanel.focus();
+      }
+    }
+  }
+
+  function makeColorPicker(label, val, title, onChange, disabled, key) {
     var badge = document.createElement('div');
     badge.className = 'oc-color-badge';
     badge.title = title;
@@ -2588,6 +4005,7 @@
     input.type = 'color';
     input.value = val;
     input.className = 'oc-color-input';
+    if (key) input.setAttribute('data-oc-key', 'color:' + key);
     if (disabled) {
       input.disabled = true;
     }
@@ -2605,6 +4023,415 @@
     badge.appendChild(text);
     badge.appendChild(input);
     return badge;
+  }
+
+  // ── List menu (saved lists popover, oculist-l6m.9) ─────────────────────────────
+  //
+  // Reuses the settings panel's popover styling and shadow-root mount pattern (same
+  // wrapRoot.appendChild + entrance animation), but is its own element (#oc-lists-panel)
+  // so it and #oc-settings-panel stay mutually exclusive rather than one incidentally
+  // hiding the other.
+
+  // Newest-first ordering with no stored timestamp: generateListId() ids are
+  // Date.now().toString(36) + random suffix, so for ids of equal length a plain string
+  // compare is equivalent to a numeric compare of the timestamp prefix. The length check
+  // guards the (currently many decades off) day base36 timestamps grow an extra digit,
+  // so a longer id always outranks a shorter one regardless of the character comparison.
+  function compareListsNewestFirst(a, b) {
+    if (a.id.length !== b.id.length) return b.id.length - a.id.length;
+    if (a.id === b.id) return 0;
+    return a.id < b.id ? 1 : -1;
+  }
+
+  function closeListsMenu(opts) {
+    var returnFocus = !(opts && opts.skipFocusReturn);
+    if (listsPanel) {
+      listsPanel.remove();
+      listsPanel = null;
+    }
+    if (listsBtn) {
+      listsBtn.classList.remove('active');
+      listsBtn.style.color = T().text;
+      listsBtn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) listsBtn.focus();
+    }
+  }
+
+  function openListsMenu() {
+    buildListsPanel();
+    if (listsBtn) {
+      listsBtn.classList.add('active');
+      listsBtn.style.color = T().accent;
+      listsBtn.setAttribute('aria-expanded', 'true');
+    }
+    // Move focus into the dialog itself (tabIndex -1, set in buildListsPanel()) — same
+    // rationale as openSettings() (oculist-l6m.27): no single obvious default control,
+    // and a text input (Save current as…) is the wrong thing to autofocus.
+    if (listsPanel) listsPanel.focus();
+  }
+
+  function toggleListsMenu() {
+    if (listsPanel) {
+      closeListsMenu();
+      return;
+    }
+    // Opening the list popover while Settings is open must close Settings — the two are
+    // mutually exclusive (oculist-l6m.9 edge case). skipFocusReturn: focus is about to
+    // move into the list popover instead of back to gearBtn.
+    if (settingsPanel) {
+      closeSettings({ skipFocusReturn: true });
+    }
+    openListsMenu();
+  }
+
+  // Loading a saved list replaces the working list outright, with no confirmation —
+  // "Save current as…" sits directly above the list for exactly this reason. Mirrors the
+  // same blank-counts, no-scan state loadWorkList() leaves a freshly restored working
+  // list in on mount (oculist-l6m.3): chips render immediately, but hit counts and the
+  // active highlight stay blank until the user clicks a chip to scan.
+  //
+  // sanitizeListTerms() re-caps to MAX_LIST_TERMS defensively — saveList() already caps
+  // saved terms to 10 before they ever reach storage, so this should never trim anything
+  // in practice, but a saved list is stored data a future format change (or a manual
+  // edit of chrome.storage.sync) could still hand back over-length, and the working list
+  // must never be corrupted by it.
+  function loadSavedList(list) {
+    var terms = sanitizeListTerms(list.terms);
+
+    // Storage-layer backstop for oculist-l6m.26, mirroring the disabled load control in
+    // buildListItem() above: this function has no other caller, so the button's disabled
+    // attribute already stops a real click from reaching here, but a 0-term list must
+    // never be allowed to replace the working list regardless of how this got called —
+    // loading has no confirmation step, so there would be no way back from the wipe.
+    if (terms.length === 0) return;
+
+    try {
+      if (typeof Highlight !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('oculist-match');
+        CSS.highlights.delete('oculist-active-match');
+        CSS.highlights.delete('oculist-dim-match');
+      }
+    } catch (e) {}
+    clearViewportMarkers();
+
+    // Cancel any in-flight debounce so it can't fire after this function returns and
+    // independently re-invoke restoreActiveChip()/performSearch() against now-stale
+    // closures — the same reasoning oculist-l6m.33 applied to removeChipAt()'s
+    // list-emptying branch. Unlike that branch, this reset is unconditional rather than
+    // gated on `input.value === ''`: loadSavedList() always force-clears input.value and
+    // lastTerm below regardless of what the user had typed, so there is no "leftover
+    // draft text" case to preserve here the way Backspace's guard has to.
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+
+    workListTerms = terms;
+    activeTermIndex = -1;
+    termRanges = [];
+    searchRanges = [];
+    activeIndex = -1;
+    firstEnter = false;
+    lastTerm = '';
+    if (input) input.value = '';
+    if (countEl) countEl.textContent = '';
+    setNavEnabled(false);
+    removeNotice();
+
+    persistWorkList();
+    renderChipRow();
+    closeListsMenu({ skipFocusReturn: true });
+    if (input) input.focus();
+  }
+
+  function refreshListsPanel() {
+    if (!listsPanel) return;
+    var saveInput = listsPanel.querySelector('.oc-list-save-input');
+    var saveBtn = listsPanel.querySelector('.oc-list-save-btn');
+    if (saveInput) saveInput.value = '';
+    if (saveBtn) saveBtn.disabled = true;
+    var listContainer = listsPanel.querySelector('.oc-list-items');
+    if (!listContainer) return;
+    listSavedLists(function (lists) {
+      if (!listsPanel) return;
+      renderListItems(listContainer, lists);
+    });
+  }
+
+  function buildListItem(list) {
+    var item = document.createElement('div');
+    item.className = 'oc-list-item';
+    item.title = list.terms.join(', ');
+
+    function renderView() {
+      item.textContent = '';
+      item.classList.remove('oc-list-item-editing');
+
+      var nameBtn = document.createElement('button');
+      nameBtn.type = 'button';
+      nameBtn.className = 'oc-list-item-name';
+      nameBtn.textContent = list.name;
+      nameBtn.setAttribute('aria-label', i18n.loadListLabel + ': ' + list.name);
+      // A 0-term saved list is unreachable through today's Save control (oculist-l6m.26
+      // disables it whenever the working list is empty), but one can still exist here: it
+      // may have been saved by a version of the extension before this fix, then synced in
+      // from another device, or hand-edited/corrupted in sync storage (e.g. terms: ['   '],
+      // whitespace-only — oculist-l6m.35). loadSavedList() has no confirmation step
+      // by design, so loading a 0-term list would silently wipe the working list with no
+      // way back — disable the load control outright for it, the same disabled-control
+      // treatment the Save button and the rename confirm button already get elsewhere in
+      // this popover, rather than let the click through to a destructive no-op.
+      //
+      // list.terms is already sanitizeListTerms()'d by listSavedLists() before it ever
+      // reaches here, so this is the same "real terms" definition loadSavedList() itself
+      // gates on below — a list badged N terms is guaranteed to load exactly N terms.
+      if (list.terms.length === 0) {
+        nameBtn.disabled = true;
+        nameBtn.title = i18n.emptyListHint;
+      }
+      nameBtn.addEventListener('click', function () {
+        loadSavedList(list);
+      });
+
+      var countBadge = document.createElement('span');
+      countBadge.className = 'oc-list-item-count';
+      countBadge.setAttribute('aria-hidden', 'true');
+      countBadge.textContent = String(list.terms.length) + ' ' +
+        (list.terms.length === 1 ? i18n.termSingular : i18n.termPlural);
+
+      var renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'oc-list-rename-btn';
+      renameBtn.textContent = '✎';
+      renameBtn.setAttribute('aria-label', i18n.renameListLabel + ': ' + list.name);
+      renameBtn.addEventListener('click', function () {
+        renderEdit();
+      });
+
+      var deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'oc-list-delete-btn';
+      deleteBtn.textContent = '✕';
+      deleteBtn.setAttribute('aria-label', i18n.deleteListLabel + ': ' + list.name);
+      deleteBtn.addEventListener('click', function () {
+        deleteList(list.id, function (result) {
+          // 'write-failed' already shows its own notice via deleteList(); leave the item
+          // in place so the user can retry. 'exception' is silent by design — same, leave
+          // it. Only a genuine delete (or a stale item already gone elsewhere) refreshes.
+          if (result && (result.ok || result.reason === 'not-found')) {
+            refreshListsPanel();
+          }
+        });
+      });
+
+      item.appendChild(nameBtn);
+      item.appendChild(countBadge);
+      item.appendChild(renameBtn);
+      item.appendChild(deleteBtn);
+    }
+
+    function renderEdit() {
+      item.textContent = '';
+      item.classList.add('oc-list-item-editing');
+
+      var renameInput = document.createElement('input');
+      renameInput.type = 'text';
+      renameInput.className = 'oc-list-rename-input';
+      renameInput.value = list.name;
+      renameInput.maxLength = 100;
+      renameInput.setAttribute('aria-label', i18n.renameListLabel + ': ' + list.name);
+
+      var confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'oc-list-rename-confirm';
+      confirmBtn.textContent = '✓';
+      confirmBtn.setAttribute('aria-label', i18n.confirmRenameLabel);
+
+      var cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'oc-list-rename-cancel';
+      cancelBtn.textContent = '✕';
+      cancelBtn.setAttribute('aria-label', i18n.cancelRenameLabel);
+
+      // Inherited obligation (oculist-l6m.8 review, carried into this bead): renameList()
+      // rejects a blank/whitespace-only name SILENTLY (no notice) — the confirm control
+      // must therefore stay disabled on blank input rather than let the user press it
+      // into a silent no-op.
+      function updateConfirmState() {
+        confirmBtn.disabled = renameInput.value.trim() === '';
+      }
+      updateConfirmState();
+
+      renameInput.addEventListener('input', updateConfirmState);
+      renameInput.addEventListener('keydown', function (e) {
+        e.stopPropagation();
+        if (e.key === 'Enter' && !confirmBtn.disabled) {
+          e.preventDefault();
+          confirmBtn.click();
+        }
+      });
+
+      confirmBtn.addEventListener('click', function () {
+        var name = renameInput.value;
+        if (name.trim() === '') return;
+        renameList(list.id, name, function (result) {
+          if (!result) return;
+          if (result.ok || result.reason === 'not-found') {
+            // A genuine rename, or the item having vanished from under the edit (e.g.
+            // deleted from another device mid-edit) — either way the panel needs a
+            // fresh read.
+            refreshListsPanel();
+          }
+          // 'write-failed' already shows its own notice via renameList(); leave the edit
+          // row open (with the user's typed text intact) so they can retry. 'empty-name'
+          // cannot occur here (confirm is disabled on blank input) and 'exception' is
+          // silent by design — both also leave the row as-is.
+        });
+      });
+
+      cancelBtn.addEventListener('click', function () {
+        renderView();
+      });
+
+      item.appendChild(renameInput);
+      item.appendChild(confirmBtn);
+      item.appendChild(cancelBtn);
+      renameInput.focus();
+      renameInput.select();
+    }
+
+    renderView();
+    return item;
+  }
+
+  function renderListItems(container, lists) {
+    container.textContent = '';
+    if (!lists || lists.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'oc-list-empty';
+      empty.textContent = i18n.noSavedLists;
+      container.appendChild(empty);
+      return;
+    }
+    var sorted = lists.slice().sort(compareListsNewestFirst);
+    sorted.forEach(function (list) {
+      container.appendChild(buildListItem(list));
+    });
+  }
+
+  // Shared between buildListsPanel's own 'input' listener and renderChipRow (oculist-l6m.26
+  // fix-pass): main-bar chip edits (add/remove) never touched the popover before, so the
+  // Save button's disabled state could go stale in *either* direction while the popover
+  // stayed open — not just enabled-when-it-should-be-disabled (the click-handler re-check
+  // above guards that), but disabled-when-it-should-be-enabled too, with no recovery short
+  // of retyping the name or closing/reopening the popover. Queries listsPanel by selector
+  // rather than closing over buildListsPanel's local saveInput/saveBtn so it can be called
+  // from outside that closure.
+  function updateSaveBtnDisabled() {
+    if (!listsPanel) return;
+    var saveInput = listsPanel.querySelector('.oc-list-save-input');
+    var saveBtn = listsPanel.querySelector('.oc-list-save-btn');
+    if (!saveInput || !saveBtn) return;
+    saveBtn.disabled = saveInput.value.trim() === '' || workListTerms.length === 0;
+  }
+
+  function buildListsPanel() {
+    var p = P();
+
+    listsPanel = document.createElement('div');
+    listsPanel.id = 'oc-lists-panel';
+    listsPanel.setAttribute('role', 'dialog');
+    listsPanel.setAttribute('aria-label', i18n.listsBtnTitle);
+    listsPanel.tabIndex = -1;
+
+    var saveRow = document.createElement('div');
+    saveRow.className = 'oc-list-save-row';
+
+    var saveInput = document.createElement('input');
+    saveInput.type = 'text';
+    saveInput.className = 'oc-list-save-input';
+    saveInput.placeholder = i18n.saveListPlaceholder;
+    saveInput.maxLength = 100;
+    saveInput.setAttribute('aria-label', i18n.saveListPlaceholder);
+
+    var saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'oc-list-save-btn';
+    saveBtn.textContent = i18n.saveListBtn;
+    saveBtn.setAttribute('aria-label', i18n.saveListBtn);
+    // Inherited obligation (oculist-l6m.8 review): saveList() rejects a blank/whitespace-
+    // only name SILENTLY. Disabled-by-default plus the live 'input' listener below means
+    // the confirm control can never be pressed into that silent no-op. oculist-l6m.26
+    // extends the same treatment to an empty working list: saveList() also silently
+    // rejects zero terms, so the button must also stay disabled whenever workListTerms
+    // is empty, not just whenever the name field is blank.
+    saveBtn.disabled = true;
+
+    saveInput.addEventListener('input', updateSaveBtnDisabled);
+    saveInput.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter' && !saveBtn.disabled) {
+        e.preventDefault();
+        saveBtn.click();
+      }
+    });
+
+    saveBtn.addEventListener('click', function () {
+      var name = saveInput.value;
+      // workListTerms.length === 0 is re-checked here as belt-and-braces: renderChipRow()
+      // now calls updateSaveBtnDisabled() on every chip add/remove while the popover is
+      // open, so the disabled attribute should already be current. This guard just avoids
+      // an unnecessary round trip if it somehow isn't, and keeps the click a true no-op
+      // rather than a click that goes nowhere visibly. saveList() itself would reject an
+      // empty terms array anyway ('empty-terms', silent).
+      if (name.trim() === '' || workListTerms.length === 0) return;
+      saveList(name, workListTerms, function (result) {
+        // 'cap' and 'write-failed' already show their own notice via saveList(); leave
+        // the input populated either way so the user can retry (e.g. after freeing up a
+        // slot) without retyping the name. 'empty-name'/'empty-terms'/'exception' can't
+        // surface here (both the name and the working list are validated above and the
+        // button is disabled on either being empty) but are handled the same, doing
+        // nothing further.
+        if (result && result.ok) {
+          refreshListsPanel();
+        }
+      });
+    });
+
+    saveRow.appendChild(saveInput);
+    saveRow.appendChild(saveBtn);
+    listsPanel.appendChild(saveRow);
+
+    var divider = document.createElement('div');
+    divider.className = 'oc-list-divider';
+    listsPanel.appendChild(divider);
+
+    var listContainer = document.createElement('div');
+    listContainer.className = 'oc-list-items';
+    listsPanel.appendChild(listContainer);
+
+    wrapRoot.appendChild(listsPanel);
+
+    listSavedLists(function (lists) {
+      // A rapid close before this async read lands would already have torn listsPanel
+      // down — skip a stale render into a detached container.
+      if (!listsPanel) return;
+      renderListItems(listContainer, lists);
+    });
+
+    // 'full' is the only motion level the settings panel's own entrance animation runs
+    // under too in spirit — 'reduced' and 'off' both suppress it here, matching
+    // effectiveMotion()'s two-tier gate used elsewhere (chip row, beacons).
+    if (effectiveMotion() === 'full') {
+      listsPanel.animate([
+        { opacity: 0, transform: p.isBottom ? 'translateY(8px)' : 'translateY(-8px)' },
+        { opacity: 1, transform: 'translateY(0)' }
+      ], {
+        duration: 180,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'forwards'
+      });
+    }
   }
 
   // ── Apply position / theme to live elements ───────────────────────────────────
@@ -2650,7 +4477,7 @@
 
   // ── UI build ──────────────────────────────────────────────────────────────────
 
-  var ICON_CHARS = { up: '↑', down: '↓', replay: '↺', gear: '⚙', close: '✕' };
+  var ICON_CHARS = { up: '↑', down: '↓', replay: '↺', gear: '⚙', close: '✕', list: '☰' };
 
   function makeIconBtn(iconName, title) {
     var btn = document.createElement('button');
@@ -2696,10 +4523,17 @@
       debounceTimer = setTimeout(function () {
         var term = input.value;
         lastTerm = term;
-        performSearch(term);
-        if (searchRanges.length > 0) {
-          activeIndex = 0;
-          highlightActiveRange(false);
+        // Rule 1: a non-empty input is a draft that owns searchRanges/the active
+        // highlight. Rule 4: an emptied input hands ownership back to whichever chip was
+        // active before the draft started (oculist-l6m.5).
+        if (term) {
+          performDraftSearch(term);
+          if (searchRanges.length > 0) {
+            activeIndex = 0;
+            highlightActiveRange(false);
+          }
+        } else {
+          restoreActiveChip();
         }
       }, settings.performanceMode ? 400 : 150);
     });
@@ -2716,7 +4550,18 @@
     replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
+    // aria-haspopup="dialog" + a live aria-expanded (oculist-l6m.27) signal that these two
+    // buttons open a role="dialog" panel and whether it is currently open — kept identical
+    // between the two since they are the same interaction pattern. aria-expanded itself is
+    // flipped by open/closeListsMenu() and open/closeSettings(), never set again here.
+    listsBtn = makeIconBtn('list', i18n.listsBtnTitle);
+    listsBtn.setAttribute('aria-haspopup', 'dialog');
+    listsBtn.setAttribute('aria-expanded', 'false');
+    listsBtn.addEventListener('click', toggleListsMenu);
+
     gearBtn = makeIconBtn('gear', i18n.optionsTitle);
+    gearBtn.setAttribute('aria-haspopup', 'dialog');
+    gearBtn.setAttribute('aria-expanded', 'false');
     gearBtn.addEventListener('click', toggleSettings);
 
     closeBtn = makeIconBtn('close', i18n.closeTitle);
@@ -2729,12 +4574,34 @@
     bar.appendChild(prevBtn);
     bar.appendChild(nextBtn);
     bar.appendChild(replayBtn);
+    bar.appendChild(listsBtn);
     bar.appendChild(gearBtn);
     bar.appendChild(closeBtn);
 
     wrapRoot.appendChild(bar);
+
+    chipRow = document.createElement('div');
+    chipRow.className = 'oc-chip-row';
+    // Hidden until a real term list renders — an empty working list must be pixel-
+    // identical to the overlay before this bead existed.
+    chipRow.hidden = true;
+    chipRow.style.display = 'none';
+    wrapRoot.appendChild(chipRow);
+
     document.body.appendChild(wrap);
     input.focus();
+
+    // Restore any working list carried over from a previous mount in this tab. This must
+    // never trigger a search — carry-over to a new page/mount is deliberately manual, so
+    // only workListTerms/activeTermIndex and the chip DOM are touched here.
+    loadWorkList(function (list) {
+      // A rapid close before this callback lands would have already torn wrapRoot/chipRow
+      // down; __ocDestroy() also resets workListTerms/activeTermIndex, so skip stale data.
+      if (!wrapRoot || !chipRow) return;
+      workListTerms = list.terms;
+      activeTermIndex = list.activeIndex;
+      renderChipRow();
+    });
   }
 
   function getContrastColor(hex) {
@@ -2784,6 +4651,88 @@
     return '#'+[r,g,b].map(function(v){return Math.round((v+m)*255).toString(16).padStart(2,'0');}).join('');
   }
 
+  // WCAG 2.2 SC 1.4.11 (non-text contrast) relative-luminance formula: sRGB channels are
+  // linearized, then combined with the standard luminance weights.
+  function relativeLuminance(rgb) {
+    var srgb = rgb.map(function (v) {
+      var c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+  }
+
+  function contrastRatio(rgbA, rgbB) {
+    var lA = relativeLuminance(rgbA);
+    var lB = relativeLuminance(rgbB);
+    var lighter = Math.max(lA, lB);
+    var darker = Math.min(lA, lB);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  function hexToRgbArray(hex) {
+    var c = hex.substring(1);
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    var rgb = parseInt(c, 16);
+    return [(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff];
+  }
+
+  // Blends matchColor at the dim wash's alpha over bgRgb (simple alpha compositing —
+  // matches what `background-color: rgba(...)` actually renders on top of an opaque page
+  // background). Falls back to the same amber hexToRgba() falls back to, so an unset
+  // matchColor measures consistently with what would actually be painted.
+  function blendOverBackground(hex, alpha, bgRgb) {
+    var rgb = hex ? hexToRgbArray(hex) : [245, 158, 11];
+    return [
+      alpha * rgb[0] + (1 - alpha) * bgRgb[0],
+      alpha * rgb[1] + (1 - alpha) * bgRgb[1],
+      alpha * rgb[2] + (1 - alpha) * bgRgb[2]
+    ];
+  }
+
+  function parseComputedColor(str) {
+    if (!str) return null;
+    if (str === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+    var m = str.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)$/);
+    if (!m) return null;
+    return { r: parseFloat(m[1]), g: parseFloat(m[2]), b: parseFloat(m[3]), a: m[4] !== undefined ? parseFloat(m[4]) : 1 };
+  }
+
+  // Oculist highlights text on arbitrary host pages, so there is no single background it
+  // can know for certain — a match's actual ancestor background can differ per element,
+  // and walking each highlighted range's own ancestor chain would be per-range work on
+  // pages with thousands of matches. Instead this takes one cheap, page-level reading:
+  // <body>'s computed background, falling through to <html>'s, and finally to white if
+  // both are transparent/unresolvable (matching how an unstyled page actually renders).
+  // LIMITATION: pages where the matched text sits on a differently-coloured container
+  // (a dark card on a light page, or vice versa) are measured against the wrong swatch —
+  // this is a deliberate page-level approximation, not a per-element measurement.
+  function getPageBackgroundRgb() {
+    try {
+      var candidates = [document.body, document.documentElement];
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el) continue;
+        var parsed = parseComputedColor(window.getComputedStyle(el).backgroundColor);
+        if (parsed && parsed.a > 0) return [parsed.r, parsed.g, parsed.b];
+      }
+    } catch (e) {
+      // getComputedStyle can throw in detached/foreign-document edge cases; fall through.
+    }
+    return [255, 255, 255];
+  }
+
+  // Live (not cached across calls) the same way reducedMotionQuery is: matchMedia's
+  // .matches is itself O(1) to read, so there is no cost to checking it fresh each time
+  // injectHighlightStyles() runs rather than snapshotting it once at load.
+  var prefersMoreContrastQuery = window.matchMedia
+    ? window.matchMedia('(prefers-contrast: more)')
+    : null;
+
+  // WCAG 2.2 SC 1.4.11 non-text contrast minimum. Below this, the dotted-underline
+  // treatment (oculist-l6m.17) is used instead of the alpha wash regardless of vision
+  // profile name — see dimHighlightCss below.
+  var DIM_CONTRAST_THRESHOLD = 3;
+
   function injectHighlightStyles() {
     var globalStyleId = 'oc-global-highlight-styles';
     var globalEl = document.getElementById(globalStyleId);
@@ -2822,10 +4771,27 @@
       '}'
     ].join('\n');
 
+    // A translucent wash shifts lightness/saturation but not hue, so it never introduces a
+    // colour-blind confusion — but a pale matchColor (tritanopia's #ffcbd1, or any pale
+    // custom colour) blends to near-invisible against a light page background (oculist-
+    // l6m.17). Rather than keying this off a profile name, measure the ACTUAL blended dim
+    // colour's contrast against the page background and fall back to the full-strength
+    // dotted underline whenever that falls below the WCAG 2.2 SC 1.4.11 non-text minimum
+    // (3:1), or whenever the OS/browser signals prefers-contrast: more.
+    var dimPageBgRgb = getPageBackgroundRgb();
+    var dimBlendedRgb = blendOverBackground(matchColor, 0.35, dimPageBgRgb);
+    var dimContrastRatio = contrastRatio(dimBlendedRgb, dimPageBgRgb);
+    var dimPrefersMoreContrast = !!(prefersMoreContrastQuery && prefersMoreContrastQuery.matches);
+    var dimIsHighContrast = dimContrastRatio < DIM_CONTRAST_THRESHOLD || dimPrefersMoreContrast;
+    var dimHighlightCss = dimIsHighContrast
+      ? '::highlight(oculist-dim-match) { text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: ' + matchColor + '; text-decoration-thickness: 2px; }'
+      : '::highlight(oculist-dim-match) { background-color: ' + hexToRgba(matchColor, 0.35) + '; }';
+
     var highlightCss = [
       designTokensCss,
       '::highlight(oculist-match) { background-color: ' + matchColor + '; color: ' + matchTextColor + '; }',
       '::highlight(oculist-active-match) { background-color: ' + activeColor + '; color: ' + activeTextColor + '; }',
+      dimHighlightCss,
       '.oc-beacon { will-change: transform, opacity; transition: opacity 50ms ease-out; }'
     ].join('\n');
 
@@ -2874,6 +4840,7 @@
         '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
         '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(colors.beacon, 0.2) + ';',
+        '  --oc-chip-scale: ' + getBeaconScale() + ';',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
         '.oc-bar {',
@@ -2973,7 +4940,7 @@
         '}',
         'button:hover, .oc-bar button:hover {',
         '  color: ' + t.accent + ';',
-        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  transform: scale(1.05);',
         '}',
         'button:active, .oc-bar button:active {',
@@ -3029,6 +4996,7 @@
         '  font-family: inherit;',
         '  font-weight: 700;',
         '  letter-spacing: 0.05em;',
+        '  text-transform: uppercase;',
         '}',
         '.oc-settings-subtitle {',
         '  font-size: .875rem;',
@@ -3317,6 +5285,255 @@
         '}',
         '.oc-notice-close:hover {',
         '  opacity: 1;',
+        '}',
+        '.oc-chip-row {',
+        '  display: flex;',
+        '  flex-wrap: wrap;',
+        '  align-items: center;',
+        '  gap: 6px;',
+        '  padding: 6px 10px;',
+        // Same trick as .oc-notice / #oc-settings-panel: width:0 keeps the row out of the
+        // shadow host's intrinsic width so it cannot stretch the bar; min-width:100% then
+        // fills whatever width the bar settled on.
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  box-sizing: border-box;',
+        '  background: ' + t.bg + ';',
+        '  border-top: 1px solid ' + t.divider + ';',
+        '}',
+        '.oc-chip-row[hidden] {',
+        '  display: none;',
+        '}',
+        '.oc-chip {',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  gap: 4px;',
+        '  border-radius: calc(10px * var(--oc-chip-scale, 1));',
+        '  background: var(--oc-input-bg);',
+        '  border: 1px solid var(--oc-input-border);',
+        '  padding: calc(2px * var(--oc-chip-scale, 1)) calc(6px * var(--oc-chip-scale, 1));',
+        '  box-sizing: border-box;',
+        '  max-width: 100%;',
+        '}',
+        '.oc-chip-term {',
+        '  color: var(--oc-text);',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '  font-size: calc(12px * var(--oc-chip-scale, 1));',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  max-width: 160px;',
+        '  overflow: hidden;',
+        '  text-overflow: ellipsis;',
+        '  white-space: nowrap;',
+        '  transition: color 150ms, transform 150ms;',
+        '  box-shadow: none;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-height: none;',
+        '  line-height: 1.3;',
+        '  border-radius: 0;',
+        '}',
+        '.oc-chip-term:hover, .oc-chip-term:focus-visible {',
+        '  color: ' + t.accent + ';',
+        '}',
+        '.oc-chip-term.active {',
+        '  color: ' + t.accent + ';',
+        '  font-weight: 700;',
+        '}',
+        '.oc-chip-count {',
+        '  font-size: calc(10px * var(--oc-chip-scale, 1));',
+        '  color: ' + t.subtle + ';',
+        '  opacity: 0.7;',
+        '  white-space: nowrap;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  user-select: none;',
+        '}',
+        '.oc-chip-remove {',
+        '  color: ' + t.text + ';',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '  font-size: calc(10px * var(--oc-chip-scale, 1));',
+        '  width: calc(14px * var(--oc-chip-scale, 1));',
+        '  height: calc(14px * var(--oc-chip-scale, 1));',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  display: inline-flex;',
+        '  align-items: center;',
+        '  justify-content: center;',
+        '  cursor: pointer;',
+        '  border-radius: 50%;',
+        '  opacity: 0.6;',
+        '  line-height: 1;',
+        '  box-shadow: none;',
+        '  transition: opacity 150ms, background-color 150ms, transform 150ms;',
+        '}',
+        '.oc-chip-remove:hover {',
+        '  opacity: 1;',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '}',
+        // effectiveMotion() !== 'full' (i.e. 'reduced' or 'off') suppresses chip
+        // transitions entirely, same two-tier gate used elsewhere for beacon motion.
+        '.oc-chip.oc-no-motion .oc-chip-term, .oc-chip.oc-no-motion .oc-chip-remove {',
+        '  transition: none;',
+        '}',
+        // ── List menu popover (oculist-l6m.9) ──────────────────────────────────
+        '#oc-lists-panel {',
+        '  background: var(--oc-panel-bg);',
+        '  padding: 10px 12px;',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 8px;',
+        '  box-sizing: border-box;',
+        // Same trick as #oc-settings-panel: width:0 keeps the popover out of the shadow
+        // host's intrinsic width so it cannot stretch the bar; min-width:100% then fills
+        // whatever width the bar settled on.
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  max-height: 320px;',
+        '  overflow-y: auto;',
+        '  box-sizing: border-box;',
+        '}',
+        ':host(.is-bottom) #oc-lists-panel {',
+        '  border-bottom: 1px solid var(--oc-divider);',
+        '}',
+        ':host(.is-top) #oc-lists-panel {',
+        '  border-top: 1px solid var(--oc-divider);',
+        '}',
+        '.oc-list-save-row {',
+        '  display: flex;',
+        '  gap: 6px;',
+        '  align-items: center;',
+        '}',
+        'input.oc-list-save-input, input.oc-list-rename-input {',
+        '  flex: 1;',
+        '  border: 1px solid var(--oc-input-border);',
+        '  border-radius: 6px;',
+        '  background: var(--oc-input-bg);',
+        '  color: var(--oc-input-text);',
+        '  padding: 4px 8px;',
+        '  font-size: 13px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  outline: none;',
+        '  box-sizing: border-box;',
+        '  margin: 0;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  transition: border-color 150ms, box-shadow 150ms;',
+        '}',
+        'input.oc-list-save-input:focus, input.oc-list-rename-input:focus {',
+        '  border-color: var(--oc-accent);',
+        '  box-shadow: 0 0 0 2px var(--oc-accent-alpha);',
+        '}',
+        '.oc-list-save-btn {',
+        '  flex-shrink: 0;',
+        '  background: var(--oc-btn-active-bg);',
+        '  color: var(--oc-btn-active-text);',
+        '  font-size: 12px;',
+        '  font-weight: 600;',
+        '  padding: 5px 10px;',
+        '  border-radius: 6px;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  box-shadow: none;',
+        '}',
+        '.oc-list-divider {',
+        '  height: 1px;',
+        '  background: var(--oc-divider);',
+        '  flex-shrink: 0;',
+        '}',
+        '.oc-list-items {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 4px;',
+        '}',
+        '.oc-list-empty {',
+        '  font-size: 12px;',
+        '  color: var(--oc-subtle);',
+        '  opacity: 0.75;',
+        '  padding: 4px 2px;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '}',
+        '.oc-list-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  gap: 6px;',
+        '  padding: 4px 2px;',
+        '  border-radius: 6px;',
+        '}',
+        '.oc-list-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '}',
+        '.oc-list-item-name {',
+        '  flex: 1;',
+        '  text-align: left;',
+        '  color: var(--oc-text);',
+        '  background: none;',
+        '  border: none;',
+        '  padding: 2px 4px;',
+        '  font-size: 13px;',
+        '  font-weight: 500;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  cursor: pointer;',
+        '  overflow: hidden;',
+        '  text-overflow: ellipsis;',
+        '  white-space: nowrap;',
+        '  width: auto;',
+        '  height: auto;',
+        '  min-width: 0;',
+        '  min-height: 0;',
+        '  max-width: none;',
+        '  max-height: none;',
+        '  box-shadow: none;',
+        '  justify-content: flex-start;',
+        '}',
+        '.oc-list-item-name:hover, .oc-list-item-name:focus-visible {',
+        '  color: ' + t.accent + ';',
+        '}',
+        '.oc-list-item-count {',
+        '  font-size: 11px;',
+        '  color: ' + t.subtle + ';',
+        '  opacity: 0.7;',
+        '  flex-shrink: 0;',
+        '  white-space: nowrap;',
+        '  font-family: system-ui, -apple-system, sans-serif;',
+        '  user-select: none;',
+        '}',
+        '.oc-list-rename-btn, .oc-list-delete-btn, .oc-list-rename-confirm, .oc-list-rename-cancel {',
+        '  flex-shrink: 0;',
+        '  width: 22px;',
+        '  height: 22px;',
+        '  min-width: 22px;',
+        '  min-height: 22px;',
+        '  max-width: 22px;',
+        '  max-height: 22px;',
+        '  font-size: 11px;',
+        '  border-radius: 50%;',
+        '  opacity: 0.7;',
+        '}',
+        '.oc-list-rename-btn:hover, .oc-list-delete-btn:hover, .oc-list-rename-confirm:hover, .oc-list-rename-cancel:hover {',
+        '  opacity: 1;',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '}',
+        '.oc-list-rename-confirm:disabled, .oc-list-save-btn:disabled {',
+        '  opacity: 0.4;',
+        '  cursor: default;',
+        '}',
+        '.oc-list-item-editing {',
+        '  align-items: center;',
         '}'
       ].join('\n');
 
@@ -3384,9 +5601,23 @@
       }
 
       var changed = false;
+      var performanceModeChanged = false;
+      // Only these keys feed drawActiveOverlays()/getEffectiveColors(): visionSettings
+      // carries magnifier/textLabels/borderStyle/colorPalette/customColors/motionSensitivity,
+      // and matchColor/activeColor/beaconColor are the 'default' palette's own colours.
+      // Everything else in SETTINGS_KEYS (disabledSites, effect, position, theme,
+      // scrollBehavior, performanceMode, visionProfile, ...) is either handled by its own
+      // branch below or never read by the active-match overlays, so redrawing on it would
+      // just be unnecessary DOM churn on an unrelated change.
+      var OVERLAY_AFFECTING_KEYS = { visionSettings: 1, matchColor: 1, activeColor: 1, beaconColor: 1 };
+      var overlaysAffected = false;
       SETTINGS_KEYS.forEach(function(k) {
         if (!(k in nv)) return;
-        if (stableStringify(nv[k]) !== stableStringify(settings[k])) changed = true;
+        if (stableStringify(nv[k]) !== stableStringify(settings[k])) {
+          changed = true;
+          if (k === 'performanceMode') performanceModeChanged = true;
+          if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
+        }
         settings[k] = nv[k];
       });
       if (!changed) return;
@@ -3395,12 +5626,37 @@
         window.__ocDestroy();
       } else {
         injectHighlightStyles();
-        applyWrapPosition();
-        updateViewportMarkers();
+        // The overlay may be closed (wrap null) when a settings change lands from another
+        // context (popup, another tab, or a direct storage write) — applyWrapPosition()
+        // dereferences wrap unconditionally, so skip it until the overlay is reopened.
+        // `settings` above is already updated regardless, so reopening picks up the
+        // change via buildUI() -> applyWrapPosition() on its own.
+        if (wrap) {
+          applyWrapPosition();
+          updateViewportMarkers();
+          // Placed after applyWrapPosition()/updateViewportMarkers() (geometry unrelated to
+          // the active-match overlays anyway) but still inside this `if (wrap)` guard, since
+          // repositionActiveOverlays() redraws the border/label/magnifier for whatever match
+          // is currently active — without this, flipping the magnifier or Match Labels
+          // toggle left the on-screen match showing the stale overlay state until the next
+          // navigation or redraw (oculist-l6m.42). repositionActiveOverlays() already
+          // no-ops safely when there is no active match (activeIndex out of range) or the
+          // match's rect collapses to zero size, so gating on overlaysAffected here is only
+          // about not doing needless work on unrelated settings changes, not about safety.
+          if (overlaysAffected) {
+            repositionActiveOverlays();
+          }
+        }
         if (settingsPanel) {
-          settingsPanel.remove();
-          settingsPanel = null;
-          buildSettingsPanel();
+          rebuildSettingsPanelPreservingFocus();
+        }
+        // Toggling Lite Mode changes both which terms get Ranges (and thus counts) and
+        // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
+        // that is already on screen has to be rescanned immediately, or its dim
+        // highlights/counts stay stuck showing the mode that was active when it was last
+        // scanned instead of the one now in effect.
+        if (performanceModeChanged && workListTerms.length > 0) {
+          performListSearch();
         }
       }
     });

@@ -1,5 +1,22 @@
 // background.js - Routes the keyboard command to the finder and handles first-run onboarding.
 
+// Content scripts cannot read chrome.storage.session at all until this is set — it
+// defaults to trusted (extension) contexts only. Wrapped in try/catch: older Chrome
+// builds don't have setAccessLevel, and the call also returns a promise that can
+// reject; either failure must not stop the rest of the worker (listener registration
+// below) from running.
+try {
+  var setAccessLevelResult = chrome.storage.session && chrome.storage.session.setAccessLevel &&
+    chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+  if (setAccessLevelResult && typeof setAccessLevelResult.catch === 'function') {
+    setAccessLevelResult.catch(function (err) {
+      console.error('Oculist: chrome.storage.session.setAccessLevel failed.', err);
+    });
+  }
+} catch (err) {
+  console.error('Oculist: chrome.storage.session.setAccessLevel threw.', err);
+}
+
 var BLOCKED_PREFIXES = [
   'chrome://', 'chrome-extension://', 'edge://', 'about:',
   'https://chrome.google.com/webstore', 'https://chromewebstore.google.com'

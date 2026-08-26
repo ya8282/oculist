@@ -1,0 +1,452 @@
+// performListSearch() and per-term chip counts (oculist-l6m.4): every term in the
+// working list gets its own scan, searchRanges keeps describing only the ACTIVE term
+// (so findNext/highlightActiveRange/beacons/viewport markers/countEl need no changes),
+// and buildPageIndex() — the expensive DOM traversal — runs exactly once per scan
+// regardless of how many terms are in the list.
+//
+// Needs a real browser for the same reasons as chip_row.test.js: real layout (JSDOM has
+// none), real Ranges, and a real chrome.storage.session round trip. buildPageIndex/
+// findRanges/performListSearch are IIFE-internal and not importable, so counts and the
+// "exactly once" assertion have to be observed from outside via CDP against the content
+// script's isolated execution context, the same pattern worklist_storage.test.js uses.
+
+const { test, describe, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert');
+const http = require('node:http');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const EXTENSION = path.resolve(__dirname, '../extension');
+
+// Known, hand-verified occurrence counts (substring match, same algorithm findRanges
+// uses): "cat" appears 7 times total (4 standalone + 3 as the prefix of "cats"), "cats"
+// appears 3 times, "dog" once. This is the load-bearing fixture for the overlapping-term
+// assertion: "cat" and "cats" must each get their own correct, independent range count
+// even though every "cats" is also a "cat" match.
+//
+// The hidden block adds 3 more "cat"s that findRanges() always filters out (its immediate
+// parent <span> is not itself display:none, so buildPageIndex() includes it in flatText,
+// but the enclosing <div> is display:none, so getClientRects() on any Range inside it
+// returns zero rects) — every existing exact-count assertion below is unaffected. It
+// exists solely for oculist-l6m.7's Lite Mode test: Lite Mode's count-only path scans
+// flatText directly with no visibility filter, so it reports 10 "cat"s (7 real + 3
+// hidden) where findRanges()/exact mode reports 7.
+const PAGE = `<!doctype html><meta charset="utf-8">
+<style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; }</style>
+<p>cat cats cat dog cats bird cat cats cat</p>
+<div style="display:none"><span>cat cat cat</span></div>`;
+
+const INPUT = '#oc-wrap >> .oc-input';
+const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
+const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
+const COUNT = '#oc-wrap >> .oc-count';
+
+describe('performListSearch() and per-term chip counts', () => {
+  let server, ctx, page, client, isolatedContextId, extId;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // channel:'chromium' is load-bearing — the default bundled build is the headless
+    // shell, which silently loads no extensions at all.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    extId = sw.url().split('/')[2];
+
+    page = await ctx.newPage();
+
+    // Attach CDP and watch for execution-context creation *before* navigating, so the
+    // event for the content script's isolated world is never missed.
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+    assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
+
+  // Every test starts from a closed overlay and an empty working list, so chips and
+  // instrumentation never leak from one test into the next.
+  beforeEach(async () => {
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(100);
+    await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForTimeout(150);
+  });
+
+  async function addTerm(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+  }
+
+  // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), the same path
+  // a user toggling the setting takes — not a direct storage write — so content.js's
+  // chrome.storage.onChanged listener is exercised exactly as it would be in production.
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
+  }
+
+  function chipTerms() {
+    return page.locator(CHIP_TERM).allTextContents();
+  }
+
+  function chipCounts() {
+    return page.locator(CHIP_COUNT).allTextContents();
+  }
+
+  test('each chip shows its own hit count, overlapping terms included, zero-match terms show 0', async () => {
+    await addTerm('cat');
+    await addTerm('cats');
+    await addTerm('dog');
+    await addTerm('elephant'); // not present on the page anywhere
+
+    assert.deepStrictEqual(await chipTerms(), ['cat', 'cats', 'dog', 'elephant']);
+
+    // oculist-l6m.5: committing a chip with Enter now runs performListSearch() itself
+    // (inside addChipTerm()), so every chip's count is already populated the moment the
+    // 4th chip lands — before any chip click. See draft_ownership.test.js for the
+    // dedicated coverage of that Enter-driven scan.
+    assert.deepStrictEqual(await chipCounts(), ['7', '3', '1', '0']);
+
+    // Re-activating a chip via a click re-scans the whole list in one performListSearch()
+    // call and keeps every chip's count correct, not just the one that was clicked.
+    await page.locator(CHIP_TERM).nth(0).click();
+    await page.waitForTimeout(250);
+
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['7', '3', '1', '0'],
+      '"cat" and "cats" must each get their own correct range count despite every "cats" also matching "cat"'
+    );
+
+    // searchRanges = termRanges[activeTermIndex] is the load-bearing line downstream —
+    // countEl (fed by searchRanges.length, unchanged code) must show the clicked term's
+    // own count, not some other term's.
+    assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '0 of 7');
+
+    // Clicking a different chip re-scans the whole list again and keeps every count
+    // correct, not just the newly active one.
+    await page.locator(CHIP_TERM).nth(2).click(); // 'dog'
+    await page.waitForTimeout(250);
+    assert.deepStrictEqual(await chipCounts(), ['7', '3', '1', '0']);
+    assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '0 of 1');
+  });
+
+  // Regression guard for oculist-l6m.14: traverse()'s Oculist-node exclusion must route
+  // through the shared isOculistNode() helper, not a narrower `child !== wrap` identity
+  // check, so any Oculist-owned node mounted directly under <body> (not just `wrap`
+  // itself) is still excluded from the scan. Production never mounts a
+  // .oc-viewport-marker under <body> today (it goes on documentElement), but that is
+  // exactly the kind of node the narrower identity check would silently start
+  // self-matching against if it ever did — this plants one under <body> directly to prove
+  // the exclusion is keyed off "is this ours", not "is this literally the wrap element".
+  test('an Oculist-owned node mounted under <body> is never traversed into (oculist-l6m.14)', async () => {
+    await page.evaluate(() => {
+      const marker = document.createElement('div');
+      marker.id = 'oc-l6m14-probe';
+      marker.className = 'oc-viewport-marker';
+      marker.textContent = 'zplerptastic';
+      document.body.appendChild(marker);
+    });
+
+    try {
+      await addTerm('zplerptastic');
+      assert.deepStrictEqual(
+        await chipCounts(),
+        ['0'],
+        'a node carrying an Oculist marker class must be excluded even when mounted under <body>, not just when it is `wrap` itself'
+      );
+    } finally {
+      // beforeEach does not reload the page, so the probe would otherwise outlive this
+      // test and sit in the fixture for every later one in this file.
+      await page.evaluate(() => {
+        const el = document.getElementById('oc-l6m14-probe');
+        if (el) el.remove();
+      });
+    }
+  });
+
+  test('removing the only chip in the working list yields activeIndex -1', async () => {
+    await addTerm('solo');
+    assert.deepStrictEqual(await chipTerms(), ['solo']);
+
+    await page.locator(CHIP_REMOVE).first().click();
+    await page.waitForTimeout(150);
+
+    assert.deepStrictEqual(await chipTerms(), [], 'the chip must actually be gone');
+
+    const stored = await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.get('oc-worklist', (r) => resolve(r['oc-worklist'])))"
+    );
+    assert.strictEqual(stored.terms.length, 0);
+    assert.strictEqual(stored.activeIndex, -1, 'removing the only chip must leave activeIndex at -1');
+
+    const chipRowState = await page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const row = root.querySelector('.oc-chip-row');
+      return row ? { hidden: row.hidden, display: getComputedStyle(row).display } : null;
+    });
+    assert.strictEqual(chipRowState.hidden, true, 'an emptied working list must hide the chip row again');
+    assert.strictEqual(chipRowState.display, 'none');
+  });
+
+  test('buildPageIndex() runs exactly once per performListSearch() call', async () => {
+    await addTerm('cat');
+    await addTerm('cats');
+    await addTerm('dog');
+
+    // Monkeypatch window.getComputedStyle *inside the content script's own isolated
+    // world* — content.js reads window.getComputedStyle dynamically on every
+    // buildPageIndex() call, so this is visible to it despite isolated worlds not
+    // sharing JS state, because both worlds' `window` proxy the same underlying page
+    // and this assignment happens directly in the isolated world's own global object.
+    await evalInContentScript(`
+      (function () {
+        if (window.__ocGCSInstalled) return true;
+        window.__ocGCSInstalled = true;
+        window.__ocGCSCalls = 0;
+        var orig = window.getComputedStyle;
+        window.getComputedStyle = function () {
+          window.__ocGCSCalls++;
+          return orig.apply(window, arguments);
+        };
+        return true;
+      })()
+    `);
+
+    // Baseline: exactly one known-good buildPageIndex() call, via the untouched
+    // draft-typing path (performSearch()), against the *same* DOM as the chip-click
+    // measurement below (typing into the input never touches the chip row, so the page
+    // and the 3-chip row are byte-for-byte identical for both measurements).
+    const before1 = await evalInContentScript('window.__ocGCSCalls');
+    await page.locator(INPUT).fill('no-such-term-zyxwvut');
+    await page.waitForTimeout(400); // clears the 150ms/400ms debounce
+    const after1 = await evalInContentScript('window.__ocGCSCalls');
+    const baselineCalls = after1 - before1;
+    assert.ok(baselineCalls > 0, 'the baseline single-buildPageIndex call made no getComputedStyle calls at all — instrumentation is broken');
+
+    // Test: one performListSearch() call, triggered by a single chip click, against a
+    // 3-term working list and the identical page/chip-row DOM used above.
+    const before3 = await evalInContentScript('window.__ocGCSCalls');
+    await page.locator(CHIP_TERM).nth(0).click();
+    await page.waitForTimeout(250);
+    const after3 = await evalInContentScript('window.__ocGCSCalls');
+    const listCalls = after3 - before3;
+
+    // If performListSearch() called buildPageIndex() once per term (a bug) instead of
+    // once total, listCalls would be ~3x baselineCalls instead of equal to it.
+    assert.strictEqual(
+      listCalls,
+      baselineCalls,
+      `expected performListSearch() to call buildPageIndex() exactly once (${baselineCalls} getComputedStyle calls, ` +
+        `matching the known-single-call baseline), got ${listCalls} for a 3-term list`
+    );
+  });
+
+  test('activating a chip corrects an inflated Lite Mode count exactly (oculist-l6m.7)', async () => {
+    await setLiteMode(true);
+    try {
+      // 'cat' committed first (briefly active), then 'dog' committed second — addChipTerm()
+      // always activates the newest chip, so this leaves 'cat' inactive and 'dog' active,
+      // which is what triggers 'cat''s Lite Mode count-only path.
+      await addTerm('cat');
+      await addTerm('dog');
+
+      assert.deepStrictEqual(await chipTerms(), ['cat', 'dog']);
+
+      const countsBeforeActivation = await chipCounts();
+      assert.strictEqual(
+        countsBeforeActivation[0],
+        '10',
+        '"cat" is inactive under Lite Mode: its count must be the uncorrected indexOf scan (7 visible + 3 hidden), not the exact 7'
+      );
+
+      // Activating 'cat' re-scans the whole list; 'cat' is now the active term, so it
+      // always gets an exact findRanges() scan (visibility-filtered) regardless of Lite
+      // Mode — the stale inflated count must not survive activation.
+      await page.locator(CHIP_TERM).nth(0).click();
+      await page.waitForTimeout(250);
+
+      const countsAfterActivation = await chipCounts();
+      assert.strictEqual(
+        countsAfterActivation[0],
+        '7',
+        'activating the chip must correct the inflated Lite Mode count to the exact, visibility-filtered count'
+      );
+      assert.strictEqual(
+        (await page.locator(COUNT).textContent()).trim(),
+        '0 of 7',
+        'the active term\'s own count element must also reflect the exact count, not the inflated one'
+      );
+    } finally {
+      await setLiteMode(false);
+    }
+  });
+});
+
+// A separate describe (own server, context, and fixture) so the large repeated-term page
+// below never shares state with the fixture above — this test needs distinct terms whose
+// per-term counts are each near or at findRanges()'s own 999 cap, which the small
+// cat/cats/dog fixture above cannot produce.
+describe('performListSearch() total match cap across all terms (oculist-l6m.7)', () => {
+  // Four distinct, non-overlapping terms. Lite Mode is used so only the active term
+  // ('zzalpha', added last) pays the real Range/getClientRects cost — 'zzbravo' and
+  // 'zzcharlie' are counted via the cheap indexOf path, keeping this fixture fast despite
+  // ~3000 total words. 'zzbravo' and 'zzcharlie' each have 1000 raw occurrences (capped at
+  // findRanges()/countMatchesOnly()'s existing 999-per-term ceiling); 'zzdelta' has only 5
+  // — by the time it is scanned, the running total (999 active + 999 + 999 = 2997) has
+  // already crossed TOTAL_MATCH_CAP (2000), so 'zzdelta' must be skipped entirely rather
+  // than showing its real count.
+  const CAP_PAGE = `<!doctype html><meta charset="utf-8">
+<style>body { margin: 0; font: 12px/1.2 system-ui, sans-serif; padding: 10px; }</style>
+<p>${'zzbravo '.repeat(1000)}</p>
+<p>${'zzcharlie '.repeat(1000)}</p>
+<p>${'zzdelta '.repeat(5)}</p>
+<p>${'zzalpha '.repeat(1000)}</p>`;
+
+  const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
+
+  let server, ctx, page, extId;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(CAP_PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    extId = sw.url().split('/')[2];
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+    await page.waitForTimeout(300);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function setLiteMode(enabled) {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    const checked = await popup.isChecked('#toggle-lite-mode');
+    // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
+    // <label> (the actionable, visible element) instead of the input.
+    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForTimeout(300);
+    await popup.close();
+    await page.bringToFront();
+    await page.waitForTimeout(300);
+  }
+
+  async function addTerm(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+  }
+
+  test('exceeding the 2000-match total cap stops materialising further terms, fires the notice, and never starves the active term', async () => {
+    await setLiteMode(true);
+    try {
+      await page.keyboard.press('Control+f');
+      await page.waitForSelector(INPUT, { timeout: 5000 });
+      await page.waitForTimeout(150);
+
+      await addTerm('zzbravo');
+      await addTerm('zzcharlie');
+      await addTerm('zzdelta');
+      await addTerm('zzalpha'); // added last -> active; must never be starved
+
+      const counts = await page.locator(CHIP_COUNT).allTextContents();
+      assert.deepStrictEqual(
+        counts,
+        ['999', '999', '', '999'],
+        '"zzbravo"/"zzcharlie" hit the per-term 999 cap, "zzdelta" is starved by the total cap (blank, not "5"), ' +
+          '"zzalpha" (active) still shows its full per-term-capped count'
+      );
+
+      // Enter-driven commits land on match 0 via highlightActiveRange() (see
+      // keydownHandler's Enter branch), so the active term's count shows "1 of 999", not
+      // the static "0 of 999" a chip click leaves behind — either way, the load-bearing
+      // part is the "999", not a starved/lower number.
+      assert.strictEqual(
+        (await page.locator(COUNT).textContent()).trim(),
+        '1 of 999',
+        'the active term ("zzalpha") must never be starved by the total cap'
+      );
+
+      const noticeText = await page.locator(NOTICE_TEXT).textContent();
+      assert.strictEqual(noticeText, 'Showing the first 2000 matches. Remove a term for a complete count.');
+    } finally {
+      await setLiteMode(false);
+    }
+  });
+});
