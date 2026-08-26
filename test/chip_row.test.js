@@ -17,9 +17,14 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 
 const FILLER = 'filler words to fill the page and push it past the no-matches notice threshold. ';
 
+// Two fixture terms with known, distinct occurrence counts (oculist-l6m.33) — zenithquokka
+// appears 3 times (matching the bug repro's own "0 of 3" description), brindlefalcon 2 —
+// so a chip-removal test can assert on a specific, non-trivial highlight count rather than
+// merely "some" or "none".
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; }</style>
-<p>${FILLER.repeat(20)} <span id="target">quarklet</span></p>`;
+<p>${FILLER.repeat(20)} <span id="target">quarklet</span>
+zenithquokka zenithquokka zenithquokka brindlefalcon brindlefalcon</p>`;
 
 // A >100-char term that is a literal substring of PAGE's own filler text (the repeated
 // FILLER phrase), so it both trips the 100-char cap and matches the page — needed to
@@ -130,6 +135,38 @@ describe('Chip row and working-list state', () => {
     });
   }
 
+  // Empties the input via real per-character Backspace presses (never .fill('')) and
+  // waits for the resulting debounce to settle. This matters: .fill('') dispatches a
+  // single synthetic 'input' event whose 150ms debounce can still be *pending* right when
+  // a following Backspace removes the chip, and that pending debounce's own
+  // restoreActiveChip()/performSearch('') call can accidentally clean up the very state
+  // this suite exists to catch — masking oculist-l6m.33's bug entirely. The real repro
+  // requires the input's debounce to have already converged (searchRanges/highlights
+  // already reflect the active chip) *before* the chip-removing Backspace, exactly like a
+  // real user backspacing through the chip's own leftover text one key at a time.
+  async function emptyInputByBackspace() {
+    await page.locator(INPUT).focus();
+    const value = await page.locator(INPUT).inputValue();
+    for (let i = 0; i < value.length; i++) {
+      await page.keyboard.press('Backspace');
+    }
+    await page.waitForTimeout(250);
+  }
+
+  // Reads the real oculist-match/oculist-dim-match CSS Custom Highlight registries via
+  // the content script's own isolated world (same approach as dim_highlight.test.js) —
+  // the point of oculist-l6m.33's tests is to catch the count TEXT and the actual lit
+  // highlights disagreeing, so asserting on the registry itself (not the count string) is
+  // load-bearing.
+  function highlightCount(registryName) {
+    return evalInContentScript(`
+      (function () {
+        var h = CSS.highlights.get('${registryName}');
+        return h ? Array.from(h).length : 0;
+      })()
+    `);
+  }
+
   test('Enter with a new term adds a chip, activates it, and next-match still works', async () => {
     await addTerm('quarklet');
 
@@ -161,12 +198,68 @@ describe('Chip row and working-list state', () => {
     await addTerm('two');
     assert.deepStrictEqual(await chipTerms(), ['one', 'two']);
 
-    await page.locator(INPUT).fill('');
+    await emptyInputByBackspace();
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(150);
 
     assert.deepStrictEqual(await chipTerms(), ['one']);
     assert.strictEqual(await activeChipTerm(), 'one', 'removing the active last chip should activate the previous one');
+  });
+
+  // oculist-l6m.33: removeChipAt() used to only splice the term/range arrays and call
+  // renderChipRow() — it never rescanned, so the count text, the nav enabled-state, and
+  // the real oculist-match highlight registry disagreed after a removal (the count/nav
+  // kept claiming the just-removed term's matches while the highlights either stayed lit
+  // or silently detached). Backspace is used (a real key event, not a direct
+  // removeChipAt() call) both to match the bug's own repro and per the brief.
+  test('Backspace-removal of the only chip clears the count, disables nav, and clears every highlight', async () => {
+    await addTerm('zenithquokka');
+    assert.deepStrictEqual(await chipTerms(), ['zenithquokka']);
+    assert.strictEqual(await activeChipTerm(), 'zenithquokka');
+    assert.strictEqual(await highlightCount('oculist-match'), 3, 'sanity check: zenithquokka must have 3 real matches before removal');
+
+    await emptyInputByBackspace();
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(150);
+
+    assert.deepStrictEqual(await chipTerms(), [], 'the only chip must be gone');
+    assert.strictEqual(await activeChipTerm(), null, 'no chip remains to be active');
+    assert.strictEqual(await page.locator(COUNT).textContent(), '', 'count text must return to the true empty state');
+    assert.strictEqual(await page.locator(PREV_BTN).isDisabled(), true, 'nav must be disabled with no chip left');
+    assert.strictEqual(await page.locator(NEXT_BTN).isDisabled(), true, 'nav must be disabled with no chip left');
+    // The bug's signature: assert on the real highlight registry, not just the count
+    // text, since the two used to disagree.
+    assert.strictEqual(await highlightCount('oculist-match'), 0, 'zero oculist-match highlights must remain lit after removing the only chip');
+    assert.strictEqual(await highlightCount('oculist-dim-match'), 0, 'zero oculist-dim-match highlights must remain lit after removing the only chip');
+    assert.strictEqual(await highlightCount('oculist-active-match'), 0, 'zero oculist-active-match highlights must remain lit after removing the only chip');
+  });
+
+  test('Backspace-removal of the active chip among several activates the previous chip and its highlights', async () => {
+    // zenithquokka (3 matches) is added first, so it ends up at index 0 once
+    // brindlefalcon (2 matches) is added second and becomes the active, last-index chip
+    // — exactly the shape Backspace's removeLastChip() removes.
+    await addTerm('zenithquokka');
+    await addTerm('brindlefalcon');
+    assert.deepStrictEqual(await chipTerms(), ['zenithquokka', 'brindlefalcon']);
+    assert.strictEqual(await activeChipTerm(), 'brindlefalcon');
+    assert.strictEqual(await highlightCount('oculist-match'), 2, 'sanity check: brindlefalcon must have 2 real matches before removal');
+
+    await emptyInputByBackspace();
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(150);
+
+    assert.deepStrictEqual(await chipTerms(), ['zenithquokka'], 'only the removed chip should be gone');
+    assert.strictEqual(await activeChipTerm(), 'zenithquokka', 'the previous chip should become active');
+
+    const count = await page.locator(COUNT).textContent();
+    assert.match(count, /of 3$/, `count must reflect the newly active chip's own 3 matches, got "${count}"`);
+    assert.strictEqual(await page.locator(PREV_BTN).isDisabled(), false, 'nav must be enabled: the new active chip has more than one match');
+    assert.strictEqual(await page.locator(NEXT_BTN).isDisabled(), false, 'nav must be enabled: the new active chip has more than one match');
+
+    // The real highlight registry must hold exactly the new active chip's 3 ranges —
+    // brindlefalcon's 2 must be gone, not merely uncounted.
+    assert.strictEqual(await highlightCount('oculist-match'), 3, 'oculist-match must hold exactly zenithquokka\'s 3 ranges');
+    assert.strictEqual(await highlightCount('oculist-dim-match'), 0, 'no other chip remains to be dimmed');
   });
 
   test('removing the active first chip of several activates the new leftmost chip', async () => {

@@ -2977,7 +2977,38 @@
     }
     if (workListTerms.length === 0) activeTermIndex = -1;
     persistWorkList();
-    renderChipRow();
+
+    // Reuse performListSearch() — the same single rescan/refresh call activateChip()
+    // already runs on every chip-row interaction — so the count, nav enabled-state,
+    // termRanges, and all three highlight registries (oculist-match, oculist-dim-match,
+    // oculist-active-match) converge on whatever chip is now active, exactly once
+    // (oculist-l6m.33). Before this fix, removal only spliced the term/range arrays and
+    // called renderChipRow(), leaving every registry and the count/nav UI holding the
+    // just-removed chip's stale state.
+    if (workListTerms.length === 0) {
+      // True empty state: no chip left to search for. Backspace can only ever reach
+      // this function with the input already empty (see keydownHandler's Backspace
+      // guard), and the X button's common case matches too. When that holds, force
+      // lastTerm into sync with the empty input *before* calling performListSearch() —
+      // otherwise a lastTerm left stale by an in-flight debounce (the user backspaced
+      // through the chip's own leftover text faster than the 150ms debounce settles)
+      // would make performListSearch() treat it as an implicit lone search and re-scan
+      // the very term that was just removed, reproducing this bug through a different
+      // path. With lastTerm forced to '', performListSearch() takes its existing
+      // no-terms/no-lastTerm early return — the same free "clear" path it already uses
+      // at mount — so removing the only chip never costs a real page rescan
+      // (buildPageIndex() is never called). Also cancels any pending debounce so it
+      // can't independently re-fire restoreActiveChip() against now-stale closures
+      // after we've already settled the empty state.
+      if (input && input.value === '') {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        lastTerm = '';
+      }
+    }
+    performListSearch();
   }
 
   function removeLastChip() {
