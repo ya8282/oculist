@@ -387,7 +387,18 @@ describe('Dim highlight registry for inactive terms', () => {
   // Kept last: it changes the persisted visionProfile setting (chrome.storage.sync, not
   // reset by beforeEach) and resets it back to 'none' at the end so it never leaks into
   // an earlier-run test.
-  test('low-vision profile swaps the dim wash for a full-color dotted underline', async () => {
+  //
+  // oculist-l6m.17: the dim treatment is now gated on the blended dim colour's MEASURED
+  // contrast against the page background (WCAG 2.2 SC 1.4.11, 3:1), not on
+  // settings.visionProfile === 'low-vision' by name. On this file's white-background
+  // fixture, the default matchColor (#fef08a) blended at 35% alpha measures ~1.06:1 —
+  // already well under 3:1 — so the DEFAULT profile (no vision profile active at all) must
+  // also be using the underline treatment here, for the same measured reason low-vision is.
+  // That default/low-vision parity is itself the regression check: if the gate were still
+  // keyed on the profile name, only low-vision would come out underlined. See
+  // dim_contrast.test.js for the full measured-contrast matrix across every built-in
+  // profile, the prefers-contrast: more trigger, and the alpha-wash-survives case.
+  test('dim treatment uses the underline fallback by measured contrast, not by the "low-vision" profile name (oculist-l6m.17)', async () => {
     const defaultCss = await page.evaluate(
       () => document.getElementById('oc-global-highlight-styles').textContent
     );
@@ -395,13 +406,8 @@ describe('Dim highlight registry for inactive terms', () => {
     assert.ok(defaultRule, 'oculist-dim-match rule must be present in the injected stylesheet');
     assert.match(
       defaultRule[1],
-      /background-color:\s*rgba\([^)]*,\s*0\.35\s*\)/,
-      'default profile must render dim as a 35% alpha wash of matchColor'
-    );
-    assert.doesNotMatch(
-      defaultRule[1],
-      /text-decoration/,
-      'default profile must not use the low-vision underline treatment'
+      /text-decoration-line:\s*underline/,
+      'default profile\'s pale matchColor blends to ~1.06:1 against this page\'s white background — well under 3:1 — so dim must already be the underline treatment even with no vision profile active'
     );
 
     const popup = await ctx.newPage();
@@ -411,15 +417,12 @@ describe('Dim highlight registry for inactive terms', () => {
     await popup.waitForTimeout(300);
     await popup.close();
 
+    // Not a waitForFunction-on-change here: low-vision's colorPalette is 'default', the
+    // same as the 'none' preset just asserted above, so the injected stylesheet text can be
+    // byte-identical before and after this switch. A fixed settle window (the same one used
+    // elsewhere in this file for profile switches) is the correct wait here, not a diff.
     await page.bringToFront();
-    await page.waitForFunction(
-      () => {
-        var el = document.getElementById('oc-global-highlight-styles');
-        return !!el && /oculist-dim-match[^}]*text-decoration-line/.test(el.textContent);
-      },
-      null,
-      { timeout: 5000 }
-    );
+    await page.waitForTimeout(300);
 
     const lowVisionCss = await page.evaluate(
       () => document.getElementById('oc-global-highlight-styles').textContent
@@ -431,7 +434,7 @@ describe('Dim highlight registry for inactive terms', () => {
     assert.doesNotMatch(
       lowVisionRule[1],
       /background-color/,
-      'low-vision must drop the background wash entirely — a 35% wash would defeat the contrast the profile exists to provide'
+      'low-vision must not use the background wash — its blended colour also measures below 3:1 on this page'
     );
 
     // Reset so this test's side effect never leaks into another test file run against the
