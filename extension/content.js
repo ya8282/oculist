@@ -3518,7 +3518,11 @@
     }
   }
 
-  function makeOptionGroup(items, currentVal, onChange) {
+  // groupKey (optional) + item.value forms a stable data-oc-key identifier
+  // (oculist-l6m.38) that survives an in-place settings-panel rebuild — the item arrays
+  // themselves are static per call site, so the same key always resolves to the "same"
+  // control across a rebuild even though the DOM node itself is new.
+  function makeOptionGroup(items, currentVal, onChange, groupKey) {
     var group = document.createElement('div');
     group.className = 'oc-toggle-group';
 
@@ -3527,6 +3531,7 @@
       btn.className = 'oc-toggle-btn' + (item.value === currentVal ? ' active' : '');
       btn.textContent = item.label;
       btn.title = item.title || item.label;
+      if (groupKey) btn.setAttribute('data-oc-key', groupKey + ':' + item.value);
       btn.addEventListener('click', function () {
         onChange(item.value);
         group.querySelectorAll('.oc-toggle-btn').forEach(function (b) {
@@ -3540,7 +3545,7 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange, disabled) {
+  function makeRadioList(items, currentVal, onChange, disabled, groupKey) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
     if (disabled) {
@@ -3551,6 +3556,7 @@
     items.forEach(function (item) {
       var row = document.createElement('button');
       row.className = 'oc-radio-item' + (item.value === currentVal ? ' active' : '');
+      if (groupKey) row.setAttribute('data-oc-key', groupKey + ':' + item.value);
       if (disabled) {
         row.disabled = true;
         row.style.cursor = 'not-allowed';
@@ -3659,6 +3665,7 @@
     // Right: Reset Button
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
+    resetBtn.setAttribute('data-oc-key', 'reset');
     resetBtn.appendChild(document.createTextNode('↺ ' + i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
@@ -3671,9 +3678,7 @@
       saveSettings();
       applyWrapPosition();
       injectHighlightStyles();
-      settingsPanel.remove();
-      settingsPanel = null;
-      buildSettingsPanel();
+      rebuildSettingsPanelPreservingFocus();
     });
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
@@ -3710,7 +3715,7 @@
         if (idx !== -1) settings.disabledSites.splice(idx, 1);
       }
       saveSettings();
-    })));
+    }, 'site')));
 
     col1.appendChild(makeSettingsField(i18n.visualTheme, i18n.themeDesc, makeOptionGroup([
       { value: 'dark',  label: i18n.dark  },
@@ -3720,16 +3725,15 @@
       settings.theme = v; saveSettings();
       injectHighlightStyles();
       applyWrapPosition();
-      settingsPanel.remove(); settingsPanel = null;
-      buildSettingsPanel();
-    })));
+      rebuildSettingsPanelPreservingFocus();
+    }, 'theme')));
 
     var scrollBehaviorField = makeSettingsField(i18n.scrollBehavior, i18n.scrollBehaviorDesc, makeOptionGroup([
       { value: 'smooth', label: i18n.smooth },
       { value: 'instant', label: i18n.instant }
     ], settings.scrollBehavior, function (v) {
       settings.scrollBehavior = v; saveSettings();
-    }));
+    }, 'scroll'));
     scrollBehaviorField.style.marginTop = '8px';
     col1.appendChild(scrollBehaviorField);
 
@@ -3750,7 +3754,8 @@
       effectOptions,
       settings.effect,
       function (v) { settings.effect = v; saveSettings(); },
-      constraints.effectDisabled
+      constraints.effectDisabled,
+      'effect'
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -3767,21 +3772,20 @@
     ], settings.position, function (v) {
       settings.position = v; saveSettings();
       applyWrapPosition();
-      settingsPanel.remove(); settingsPanel = null;
-      buildSettingsPanel();
-    })));
+      rebuildSettingsPanelPreservingFocus();
+    }, 'position')));
 
     var pickerGroup = document.createElement('div');
     pickerGroup.className = 'oc-settings-picker-group';
 
     var items = [
-      { label: i18n.matchLabel, val: effColors.match, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.activeLabel, val: effColors.active, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
-      { label: i18n.beaconColorLabel || i18n.beaconLabel, val: effColors.beacon, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
+      { key: 'match', label: i18n.matchLabel, val: effColors.match, title: i18n.matchTitle, cb: function (v) { settings.matchColor = v; saveSettings(); injectHighlightStyles(); } },
+      { key: 'active', label: i18n.activeLabel, val: effColors.active, title: i18n.activeTitle, cb: function (v) { settings.activeColor = v; saveSettings(); injectHighlightStyles(); } },
+      { key: 'beacon', label: i18n.beaconColorLabel || i18n.beaconLabel, val: effColors.beacon, title: i18n.beaconTitle, cb: function (v) { settings.beaconColor = v; saveSettings(); } }
     ];
 
     items.forEach(function (item) {
-      var picker = makeColorPicker(item.label, item.val, item.title, item.cb, constraints.colorsDisabled);
+      var picker = makeColorPicker(item.label, item.val, item.title, item.cb, constraints.colorsDisabled, item.key);
       pickerGroup.appendChild(picker);
     });
 
@@ -3829,7 +3833,50 @@
     });
   }
 
-  function makeColorPicker(label, val, title, onChange, disabled) {
+  // Rebuilds the settings panel in place (theme/position/reset changes, or a settings
+  // change syncing in from another tab/the popup) without ejecting keyboard focus to
+  // document body (oculist-l6m.38). buildSettingsPanel() tears the whole subtree down and
+  // recreates it, so the previously focused node is gone; this captures a data-oc-key
+  // identifier for whatever was focused *inside the panel* beforehand (see makeOptionGroup/
+  // makeRadioList/makeColorPicker) and re-resolves the equivalent control afterward,
+  // falling back to the panel container (tabIndex -1) if no key was captured, the control
+  // no longer exists, or the control exists but is no longer a valid focus target (e.g. a
+  // control that's now profile-disabled) — verified by checking wrapRoot.activeElement
+  // actually landed on it after calling .focus(), rather than trusting a bare `disabled`
+  // check, since disabled is only one of several reasons a focus() call can silently no-op
+  // (hidden, display:none, inert, removed from the tab order, etc).
+  //
+  // Deliberately does NOT restore focus if it wasn't inside the panel to begin with — a
+  // rebuild triggered by a remote settings change (the storage.onChanged listener) must
+  // never steal focus from the page/find-input/another overlay into the panel.
+  function rebuildSettingsPanelPreservingFocus() {
+    if (!settingsPanel) { buildSettingsPanel(); return; }
+
+    var focusWasInPanel = false;
+    var focusKey = null;
+    if (wrapRoot && wrapRoot.activeElement && settingsPanel.contains(wrapRoot.activeElement)) {
+      focusWasInPanel = true;
+      var fe = wrapRoot.activeElement;
+      focusKey = (fe.getAttribute && fe.getAttribute('data-oc-key')) || null;
+    }
+
+    settingsPanel.remove();
+    settingsPanel = null;
+    buildSettingsPanel();
+    if (!settingsPanel) return;
+
+    if (focusWasInPanel) {
+      var restored = focusKey
+        ? settingsPanel.querySelector('[data-oc-key="' + focusKey + '"]')
+        : null;
+      if (restored) restored.focus();
+      if (!restored || !wrapRoot || wrapRoot.activeElement !== restored) {
+        settingsPanel.focus();
+      }
+    }
+  }
+
+  function makeColorPicker(label, val, title, onChange, disabled, key) {
     var badge = document.createElement('div');
     badge.className = 'oc-color-badge';
     badge.title = title;
@@ -3851,6 +3898,7 @@
     input.type = 'color';
     input.value = val;
     input.className = 'oc-color-input';
+    if (key) input.setAttribute('data-oc-key', 'color:' + key);
     if (disabled) {
       input.disabled = true;
     }
@@ -5366,9 +5414,7 @@
           updateViewportMarkers();
         }
         if (settingsPanel) {
-          settingsPanel.remove();
-          settingsPanel = null;
-          buildSettingsPanel();
+          rebuildSettingsPanelPreservingFocus();
         }
         // Toggling Lite Mode changes both which terms get Ranges (and thus counts) and
         // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
