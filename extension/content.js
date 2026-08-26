@@ -4095,6 +4095,18 @@
     } catch (e) {}
     clearViewportMarkers();
 
+    // Cancel any in-flight debounce so it can't fire after this function returns and
+    // independently re-invoke restoreActiveChip()/performSearch() against now-stale
+    // closures — the same reasoning oculist-l6m.33 applied to removeChipAt()'s
+    // list-emptying branch. Unlike that branch, this reset is unconditional rather than
+    // gated on `input.value === ''`: loadSavedList() always force-clears input.value and
+    // lastTerm below regardless of what the user had typed, so there is no "leftover
+    // draft text" case to preserve here the way Backspace's guard has to.
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+
     workListTerms = terms;
     activeTermIndex = -1;
     termRanges = [];
