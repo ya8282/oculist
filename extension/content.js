@@ -4904,7 +4904,7 @@
         '}',
         'button:hover, .oc-bar button:hover {',
         '  color: ' + t.accent + ';',
-        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  transform: scale(1.05);',
         '}',
         'button:active, .oc-bar button:active {',
@@ -5343,7 +5343,7 @@
         '}',
         '.oc-chip-remove:hover {',
         '  opacity: 1;',
-        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '}',
         // effectiveMotion() !== 'full' (i.e. 'reduced' or 'off') suppresses chip
         // transitions entirely, same two-tier gate used elsewhere for beacon motion.
@@ -5490,7 +5490,7 @@
         '}',
         '.oc-list-rename-btn:hover, .oc-list-delete-btn:hover, .oc-list-rename-confirm:hover, .oc-list-rename-cancel:hover {',
         '  opacity: 1;',
-        '  background-color: ' + (settings.theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
+        '  background-color: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '}',
         '.oc-list-rename-confirm:disabled, .oc-list-save-btn:disabled {',
         '  opacity: 0.4;',
