@@ -189,6 +189,40 @@ describe('performListSearch() and per-term chip counts', () => {
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '0 of 1');
   });
 
+  // Regression guard for oculist-l6m.14: traverse()'s Oculist-node exclusion must route
+  // through the shared isOculistNode() helper, not a narrower `child !== wrap` identity
+  // check, so any Oculist-owned node mounted directly under <body> (not just `wrap`
+  // itself) is still excluded from the scan. Production never mounts a
+  // .oc-viewport-marker under <body> today (it goes on documentElement), but that is
+  // exactly the kind of node the narrower identity check would silently start
+  // self-matching against if it ever did — this plants one under <body> directly to prove
+  // the exclusion is keyed off "is this ours", not "is this literally the wrap element".
+  test('an Oculist-owned node mounted under <body> is never traversed into (oculist-l6m.14)', async () => {
+    await page.evaluate(() => {
+      const marker = document.createElement('div');
+      marker.id = 'oc-l6m14-probe';
+      marker.className = 'oc-viewport-marker';
+      marker.textContent = 'zplerptastic';
+      document.body.appendChild(marker);
+    });
+
+    try {
+      await addTerm('zplerptastic');
+      assert.deepStrictEqual(
+        await chipCounts(),
+        ['0'],
+        'a node carrying an Oculist marker class must be excluded even when mounted under <body>, not just when it is `wrap` itself'
+      );
+    } finally {
+      // beforeEach does not reload the page, so the probe would otherwise outlive this
+      // test and sit in the fixture for every later one in this file.
+      await page.evaluate(() => {
+        const el = document.getElementById('oc-l6m14-probe');
+        if (el) el.remove();
+      });
+    }
+  });
+
   test('removing the only chip in the working list yields activeIndex -1', async () => {
     await addTerm('solo');
     assert.deepStrictEqual(await chipTerms(), ['solo']);
