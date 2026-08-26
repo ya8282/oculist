@@ -4615,6 +4615,88 @@
     return '#'+[r,g,b].map(function(v){return Math.round((v+m)*255).toString(16).padStart(2,'0');}).join('');
   }
 
+  // WCAG 2.2 SC 1.4.11 (non-text contrast) relative-luminance formula: sRGB channels are
+  // linearized, then combined with the standard luminance weights.
+  function relativeLuminance(rgb) {
+    var srgb = rgb.map(function (v) {
+      var c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+  }
+
+  function contrastRatio(rgbA, rgbB) {
+    var lA = relativeLuminance(rgbA);
+    var lB = relativeLuminance(rgbB);
+    var lighter = Math.max(lA, lB);
+    var darker = Math.min(lA, lB);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  function hexToRgbArray(hex) {
+    var c = hex.substring(1);
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    var rgb = parseInt(c, 16);
+    return [(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff];
+  }
+
+  // Blends matchColor at the dim wash's alpha over bgRgb (simple alpha compositing —
+  // matches what `background-color: rgba(...)` actually renders on top of an opaque page
+  // background). Falls back to the same amber hexToRgba() falls back to, so an unset
+  // matchColor measures consistently with what would actually be painted.
+  function blendOverBackground(hex, alpha, bgRgb) {
+    var rgb = hex ? hexToRgbArray(hex) : [245, 158, 11];
+    return [
+      alpha * rgb[0] + (1 - alpha) * bgRgb[0],
+      alpha * rgb[1] + (1 - alpha) * bgRgb[1],
+      alpha * rgb[2] + (1 - alpha) * bgRgb[2]
+    ];
+  }
+
+  function parseComputedColor(str) {
+    if (!str) return null;
+    if (str === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+    var m = str.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)$/);
+    if (!m) return null;
+    return { r: parseFloat(m[1]), g: parseFloat(m[2]), b: parseFloat(m[3]), a: m[4] !== undefined ? parseFloat(m[4]) : 1 };
+  }
+
+  // Oculist highlights text on arbitrary host pages, so there is no single background it
+  // can know for certain — a match's actual ancestor background can differ per element,
+  // and walking each highlighted range's own ancestor chain would be per-range work on
+  // pages with thousands of matches. Instead this takes one cheap, page-level reading:
+  // <body>'s computed background, falling through to <html>'s, and finally to white if
+  // both are transparent/unresolvable (matching how an unstyled page actually renders).
+  // LIMITATION: pages where the matched text sits on a differently-coloured container
+  // (a dark card on a light page, or vice versa) are measured against the wrong swatch —
+  // this is a deliberate page-level approximation, not a per-element measurement.
+  function getPageBackgroundRgb() {
+    try {
+      var candidates = [document.body, document.documentElement];
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el) continue;
+        var parsed = parseComputedColor(window.getComputedStyle(el).backgroundColor);
+        if (parsed && parsed.a > 0) return [parsed.r, parsed.g, parsed.b];
+      }
+    } catch (e) {
+      // getComputedStyle can throw in detached/foreign-document edge cases; fall through.
+    }
+    return [255, 255, 255];
+  }
+
+  // Live (not cached across calls) the same way reducedMotionQuery is: matchMedia's
+  // .matches is itself O(1) to read, so there is no cost to checking it fresh each time
+  // injectHighlightStyles() runs rather than snapshotting it once at load.
+  var prefersMoreContrastQuery = window.matchMedia
+    ? window.matchMedia('(prefers-contrast: more)')
+    : null;
+
+  // WCAG 2.2 SC 1.4.11 non-text contrast minimum. Below this, the dotted-underline
+  // treatment (oculist-l6m.17) is used instead of the alpha wash regardless of vision
+  // profile name — see dimHighlightCss below.
+  var DIM_CONTRAST_THRESHOLD = 3;
+
   function injectHighlightStyles() {
     var globalStyleId = 'oc-global-highlight-styles';
     var globalEl = document.getElementById(globalStyleId);
@@ -4653,12 +4735,18 @@
       '}'
     ].join('\n');
 
-    // Low-vision/high-contrast presets exist to maximise contrast, so a translucent wash
-    // there would defeat their purpose — swap it for a full-strength matchColor dotted
-    // underline with no background instead. Every other profile (including no profile at
-    // all) keeps the 35%-alpha wash so inactive terms read as visibly muted next to the
-    // active term's solid background.
-    var dimIsHighContrast = settings.visionProfile === 'low-vision';
+    // A translucent wash shifts lightness/saturation but not hue, so it never introduces a
+    // colour-blind confusion — but a pale matchColor (tritanopia's #ffcbd1, or any pale
+    // custom colour) blends to near-invisible against a light page background (oculist-
+    // l6m.17). Rather than keying this off a profile name, measure the ACTUAL blended dim
+    // colour's contrast against the page background and fall back to the full-strength
+    // dotted underline whenever that falls below the WCAG 2.2 SC 1.4.11 non-text minimum
+    // (3:1), or whenever the OS/browser signals prefers-contrast: more.
+    var dimPageBgRgb = getPageBackgroundRgb();
+    var dimBlendedRgb = blendOverBackground(matchColor, 0.35, dimPageBgRgb);
+    var dimContrastRatio = contrastRatio(dimBlendedRgb, dimPageBgRgb);
+    var dimPrefersMoreContrast = !!(prefersMoreContrastQuery && prefersMoreContrastQuery.matches);
+    var dimIsHighContrast = dimContrastRatio < DIM_CONTRAST_THRESHOLD || dimPrefersMoreContrast;
     var dimHighlightCss = dimIsHighContrast
       ? '::highlight(oculist-dim-match) { text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: ' + matchColor + '; text-decoration-thickness: 2px; }'
       : '::highlight(oculist-dim-match) { background-color: ' + hexToRgba(matchColor, 0.35) + '; }';
