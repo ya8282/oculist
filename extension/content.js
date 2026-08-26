@@ -461,7 +461,7 @@
     matchPlural: 'matches',
     
     // Preference Panel Strings
-    prefTitle: 'OCULIST PREFERENCES',
+    prefTitle: 'Oculist Preferences',
     prefSubtitle: 'Configure appearance and effects',
     resetBtn: 'Reset',
     visualTheme: 'Visual Theme',
@@ -3281,18 +3281,47 @@
 
   // ── Settings panel ────────────────────────────────────────────────────────────
 
-  function toggleSettings() {
+  // skipFocusReturn mirrors closeListsMenu()'s option (oculist-l6m.27): set when this
+  // close is a step on the way to focus landing somewhere else on purpose — here, only
+  // the list popover's own toggleListsMenu() mutual-exclusion branch, where focus is
+  // about to move into the list popover instead of back to gearBtn.
+  function closeSettings(opts) {
+    var returnFocus = !(opts && opts.skipFocusReturn);
     var t = T();
     if (settingsPanel) {
       settingsPanel.remove();
       settingsPanel = null;
-      if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
+    }
+    if (gearBtn) {
+      gearBtn.classList.remove('active');
+      gearBtn.style.color = t.text;
+      gearBtn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) gearBtn.focus();
+    }
+  }
+
+  function openSettings() {
+    buildSettingsPanel();
+    if (gearBtn) {
+      gearBtn.classList.add('active');
+      gearBtn.style.color = T().accent;
+      gearBtn.setAttribute('aria-expanded', 'true');
+    }
+    // Move focus into the dialog itself (tabIndex -1, set in buildSettingsPanel()) rather
+    // than guessing at a "first" control — the panel has no single obvious default field,
+    // and landing on a text input by default is its own anti-pattern.
+    if (settingsPanel) settingsPanel.focus();
+  }
+
+  function toggleSettings() {
+    if (settingsPanel) {
+      closeSettings();
     } else {
       // Opening Settings while the list popover is open must close the list popover —
-      // the two are mutually exclusive (oculist-l6m.9 edge case).
+      // the two are mutually exclusive (oculist-l6m.9 edge case). skipFocusReturn: focus
+      // is about to move into the settings panel instead of back to listsBtn.
       if (listsPanel) { closeListsMenu({ skipFocusReturn: true }); }
-      buildSettingsPanel();
-      if (gearBtn) { gearBtn.classList.add('active'); gearBtn.style.color = t.accent; }
+      openSettings();
     }
   }
 
@@ -3397,6 +3426,21 @@
 
     settingsPanel = document.createElement('div');
     settingsPanel.id = 'oc-settings-panel';
+    // role="dialog" + a focusable (tabIndex -1) container match listsPanel below
+    // (oculist-l6m.27) — the two panels are the same interaction pattern and must expose
+    // and behave identically for assistive tech. A dialog sharing its accessible name with
+    // its trigger button is a normal, correct pattern (screen readers disambiguate by role,
+    // e.g. "Options button" vs. "Options dialog") — listsPanel's aria-label below does
+    // exactly that, and this panel deliberately matches it rather than using aria-labelledby:
+    // Blink applies CSS text-transform when computing a name from a *referenced* element, so
+    // pointing aria-labelledby at the visible header (which is uppercase via CSS, see
+    // .oc-settings-title below) would ship a shouty, letter-spelled announced name even
+    // though i18n.prefTitle itself is sentence case. aria-label reads the JS string directly,
+    // bypassing that CSS, so the announced name stays sentence case while the header still
+    // renders in caps. Do not "fix" this back to aria-labelledby.
+    settingsPanel.setAttribute('role', 'dialog');
+    settingsPanel.setAttribute('aria-label', i18n.prefTitle);
+    settingsPanel.tabIndex = -1;
     settingsPanel.style.fontFamily = 'system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
 
     // Title / Header in Settings panel
@@ -3660,13 +3704,22 @@
     if (listsBtn) {
       listsBtn.classList.remove('active');
       listsBtn.style.color = T().text;
+      listsBtn.setAttribute('aria-expanded', 'false');
       if (returnFocus) listsBtn.focus();
     }
   }
 
   function openListsMenu() {
     buildListsPanel();
-    if (listsBtn) { listsBtn.classList.add('active'); listsBtn.style.color = T().accent; }
+    if (listsBtn) {
+      listsBtn.classList.add('active');
+      listsBtn.style.color = T().accent;
+      listsBtn.setAttribute('aria-expanded', 'true');
+    }
+    // Move focus into the dialog itself (tabIndex -1, set in buildListsPanel()) — same
+    // rationale as openSettings() (oculist-l6m.27): no single obvious default control,
+    // and a text input (Save current as…) is the wrong thing to autofocus.
+    if (listsPanel) listsPanel.focus();
   }
 
   function toggleListsMenu() {
@@ -3675,12 +3728,10 @@
       return;
     }
     // Opening the list popover while Settings is open must close Settings — the two are
-    // mutually exclusive (oculist-l6m.9 edge case).
+    // mutually exclusive (oculist-l6m.9 edge case). skipFocusReturn: focus is about to
+    // move into the list popover instead of back to gearBtn.
     if (settingsPanel) {
-      var t = T();
-      settingsPanel.remove();
-      settingsPanel = null;
-      if (gearBtn) { gearBtn.classList.remove('active'); gearBtn.style.color = t.text; }
+      closeSettings({ skipFocusReturn: true });
     }
     openListsMenu();
   }
@@ -3926,6 +3977,7 @@
     listsPanel.id = 'oc-lists-panel';
     listsPanel.setAttribute('role', 'dialog');
     listsPanel.setAttribute('aria-label', i18n.listsBtnTitle);
+    listsPanel.tabIndex = -1;
 
     var saveRow = document.createElement('div');
     saveRow.className = 'oc-list-save-row';
@@ -4133,10 +4185,18 @@
     replayBtn = makeIconBtn('replay', i18n.replayTitle);
     replayBtn.addEventListener('click', function () { highlightActiveRange(true); });
 
+    // aria-haspopup="dialog" + a live aria-expanded (oculist-l6m.27) signal that these two
+    // buttons open a role="dialog" panel and whether it is currently open — kept identical
+    // between the two since they are the same interaction pattern. aria-expanded itself is
+    // flipped by open/closeListsMenu() and open/closeSettings(), never set again here.
     listsBtn = makeIconBtn('list', i18n.listsBtnTitle);
+    listsBtn.setAttribute('aria-haspopup', 'dialog');
+    listsBtn.setAttribute('aria-expanded', 'false');
     listsBtn.addEventListener('click', toggleListsMenu);
 
     gearBtn = makeIconBtn('gear', i18n.optionsTitle);
+    gearBtn.setAttribute('aria-haspopup', 'dialog');
+    gearBtn.setAttribute('aria-expanded', 'false');
     gearBtn.addEventListener('click', toggleSettings);
 
     closeBtn = makeIconBtn('close', i18n.closeTitle);
@@ -4483,6 +4543,7 @@
         '  font-family: inherit;',
         '  font-weight: 700;',
         '  letter-spacing: 0.05em;',
+        '  text-transform: uppercase;',
         '}',
         '.oc-settings-subtitle {',
         '  font-size: .875rem;',
