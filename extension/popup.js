@@ -88,6 +88,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  // Union of every key any PRESETS entry sets. A direct edit to one of these keys means
+  // the user just diverged from whatever preset governs it, so the active profile must
+  // drop to 'custom'. A key no preset governs (e.g. magnifier, oculist-l6m.39/.40) can be
+  // freely toggled without disturbing a named profile — derived from PRESETS itself so a
+  // future setting added outside the presets doesn't silently regain this bug.
+  const GOVERNED_SETTING_KEYS = new Set(
+    Object.values(PRESETS).flatMap((preset) => Object.keys(preset || {}))
+  );
+
+  // Shared by every listener below that writes directly into settings.visionSettings.
+  // Only forces the profile to 'custom' when the changed key is actually governed by a
+  // preset; otherwise leaves whatever profile (named or custom) was already active alone.
+  function applyDirectSettingChange(key) {
+    if (GOVERNED_SETTING_KEYS.has(key)) {
+      settings.visionProfile = 'custom';
+      visionProfileSelect.value = 'custom';
+    }
+    updateOverridesUI(visionProfileSelect.value);
+  }
+
   // Display name used in the override banner and lock badges.
   const PROFILE_NAMES = {
     'low-vision': 'Low Vision Profile',
@@ -212,13 +232,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   customControls.forEach(([selectEl, key]) => {
     selectEl.addEventListener('change', async () => {
-      // Force profile to 'custom' when tweaking values
-      settings.visionProfile = 'custom';
-      visionProfileSelect.value = 'custom';
-      updateOverridesUI('custom');
+      // Force profile to 'custom' only if a preset actually governs this key
+      applyDirectSettingChange(key);
 
       settings.visionSettings[key] = selectEl.value;
-      
+
       if (key === 'colorPalette') {
         toggleCustomColors(selectEl.value === 'custom');
       }
@@ -229,9 +247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Match labels listener (boolean conversion)
   matchLabelsSelect.addEventListener('change', async () => {
-    settings.visionProfile = 'custom';
-    visionProfileSelect.value = 'custom';
-    updateOverridesUI('custom');
+    applyDirectSettingChange('textLabels');
 
     settings.visionSettings.textLabels = matchLabelsSelect.value === 'true';
     await saveSettings();
@@ -240,10 +256,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Magnifier listener (boolean conversion). Deliberately not part of any PRESETS
   // entry above (oculist-l6m.39): it is not auto-gated by vision profile the way the
   // other custom controls are, so switching profiles never flips it out from under you.
+  // applyDirectSettingChange() below (oculist-l6m.40) is what actually honours that —
+  // 'magnifier' is absent from GOVERNED_SETTING_KEYS, so this leaves the active named
+  // profile in place instead of forcing 'custom'.
   magnifierSelect.addEventListener('change', async () => {
-    settings.visionProfile = 'custom';
-    visionProfileSelect.value = 'custom';
-    updateOverridesUI('custom');
+    applyDirectSettingChange('magnifier');
 
     settings.visionSettings.magnifier = magnifierSelect.value === 'true';
     await saveSettings();
@@ -258,9 +275,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   colorPickers.forEach(([inputEl, key]) => {
     inputEl.addEventListener('change', async () => {
-      settings.visionProfile = 'custom';
-      visionProfileSelect.value = 'custom';
-      updateOverridesUI('custom');
+      // Custom colors only ever surface once colorPalette is 'custom', which itself is a
+      // governed key — so the profile is already 'custom' by the time this can fire. Keyed
+      // on 'customColors' (not governed by any preset) for consistency with the other
+      // listeners above.
+      applyDirectSettingChange('customColors');
 
       if (!settings.visionSettings.customColors) {
         settings.visionSettings.customColors = {};
