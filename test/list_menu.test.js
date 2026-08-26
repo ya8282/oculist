@@ -37,6 +37,7 @@ const LISTS_PANEL = '#oc-wrap >> #oc-lists-panel';
 const SAVE_INPUT = '#oc-wrap >> .oc-list-save-input';
 const SAVE_BTN = '#oc-wrap >> .oc-list-save-btn';
 const LIST_ITEM_NAME = '#oc-wrap >> .oc-list-item-name';
+const LIST_ITEM_COUNT = '#oc-wrap >> .oc-list-item-count';
 const LIST_RENAME_BTN = '#oc-wrap >> .oc-list-rename-btn';
 const LIST_DELETE_BTN = '#oc-wrap >> .oc-list-delete-btn';
 const LIST_RENAME_INPUT = '#oc-wrap >> .oc-list-rename-input';
@@ -531,6 +532,95 @@ describe('List menu popover (saved lists UI)', () => {
     // The working list is untouched — nothing was ever loaded.
     assert.deepStrictEqual(await chipTerms(), ['keepme']);
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover stays open; no load happened');
+  });
+
+  // oculist-l6m.35: a stored list whose terms are all whitespace (e.g. terms: ['   '])
+  // is a variant of the same oculist-l6m.26 hazard the test above covers, but one that
+  // used to slip past it — buildListItem() gated the load control on the raw,
+  // unsanitized terms.length, so a list like this rendered ENABLED and badged "1 term"
+  // while loadSavedList() sanitized the whitespace away and hit its own zero-terms
+  // early return, a silent no-op click. All three gates (buildListItem, loadSavedList,
+  // listSavedLists) must now agree on sanitizeListTerms()'s definition of a real term.
+  test('a stored list with only whitespace-only terms badges 0 terms and is disabled, not "1 term" and enabled', async () => {
+    // Seeded directly into chrome.storage.sync, bypassing saveList() entirely — this
+    // exact shape (terms: ['   ']) is rejected by saveList() itself (oculist-l6m.26), so
+    // it can only reach storage via a hand edit or a corrupted sync payload.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-wsonly': { id: 'wsonly', name: 'Whitespace Only List', terms: ['   '] }}," +
+      " resolve))"
+    );
+
+    await openListsMenu();
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Whitespace Only List']);
+    assert.strictEqual(
+      await page.locator(LIST_ITEM_COUNT).textContent(),
+      '0 terms',
+      'the badge must show the SANITIZED count, not the raw stored array length ("1 term")'
+    );
+    assert.strictEqual(
+      await page.locator(LIST_ITEM_NAME).isDisabled(),
+      true,
+      "a whitespace-only saved list's load control must be disabled, matching its 0-term badge"
+    );
+  });
+
+  test('clicking the disabled control on an all-whitespace saved list does nothing, does not throw, and does not mutate the stored entry', async () => {
+    await addTerm('keepme');
+    assert.deepStrictEqual(await chipTerms(), ['keepme']);
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-wsonly': { id: 'wsonly', name: 'Whitespace Only List', terms: ['   '] }}," +
+      " resolve))"
+    );
+
+    await openListsMenu();
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    assert.strictEqual(await page.locator(LIST_ITEM_NAME).isDisabled(), true);
+
+    // A disabled <button> suppresses its own click event natively; force:true performs a
+    // real click at the element regardless, so this actually exercises "does nothing"
+    // rather than just asserting the disabled attribute. Must not throw.
+    await page.locator(LIST_ITEM_NAME).click({ force: true });
+    await page.waitForTimeout(150);
+
+    // Nothing loaded: the working list is untouched and the popover stayed open.
+    assert.deepStrictEqual(await chipTerms(), ['keepme']);
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover stays open; no load happened');
+
+    // Rendering (and the no-op click) must not have rewritten the corrupted entry —
+    // this stays a read-time-only fix, never a "repair" that mutates stored data.
+    const raw = await rawSavedLists();
+    assert.strictEqual(raw.length, 1);
+    assert.deepStrictEqual(raw[0], { id: 'wsonly', name: 'Whitespace Only List', terms: ['   '] });
+  });
+
+  // Companion to the all-whitespace case above: a mix of real and whitespace-only terms
+  // must badge and gate on the sanitized count (2), and loading it must load exactly the
+  // real terms in order, with the whitespace-only entry silently dropped.
+  test('a stored list with a mix of real and whitespace-only terms badges and loads only the real terms', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-mixed': { id: 'mixed', name: 'Mixed List', terms: ['cat', '   ', 'dog'] }}," +
+      " resolve))"
+    );
+
+    await openListsMenu();
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    assert.strictEqual(await page.locator(LIST_ITEM_COUNT).textContent(), '2 terms');
+    assert.strictEqual(await page.locator(LIST_ITEM_NAME).isDisabled(), false);
+
+    await page.locator(LIST_ITEM_NAME).click();
+    await page.waitForTimeout(250);
+
+    assert.deepStrictEqual(await chipTerms(), ['cat', 'dog']);
+
+    // The stored entry itself is untouched by the load either.
+    const raw = await rawSavedLists();
+    assert.strictEqual(raw.length, 1);
+    assert.deepStrictEqual(raw[0], { id: 'mixed', name: 'Mixed List', terms: ['cat', '   ', 'dog'] });
   });
 
   test('opening the list popover closes an open settings panel and the reverse; Escape closes only the popover', async () => {
