@@ -163,6 +163,19 @@ describe('List menu popover (saved lists UI)', () => {
     });
   }
 
+  // Reads a real CSS Custom Highlight registry via the content script's own isolated
+  // world (same approach chip_row.test.js uses for its oculist-l6m.33 coverage) — used
+  // below to confirm no highlight survives from either the draft or the pre-load working
+  // list once a load has won the race.
+  function highlightCount(registryName) {
+    return evalInContentScript(`
+      (function () {
+        var h = CSS.highlights.get('${registryName}');
+        return h ? Array.from(h).length : 0;
+      })()
+    `);
+  }
+
   async function openListsMenu() {
     await page.locator(LISTS_BTN).click();
     await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
@@ -222,6 +235,115 @@ describe('List menu popover (saved lists UI)', () => {
     assert.strictEqual(await page.locator(INPUT).inputValue(), '', 'the find input is not touched by a load');
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'loading a list must never raise a "no matches" notice');
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'the popover closes itself once a list is loaded');
+  });
+
+  // oculist-l6m.29: loadSavedList() used to leave any in-flight input debounce running.
+  // Typing a draft and loading a list inside the 150ms window let the debounce fire
+  // afterwards with input.value === '' (loadSavedList() itself already force-clears the
+  // input), reaching restoreActiveChip() -> performSearch('') with activeTermIndex ===
+  // -1. That specific fallback is a true no-op today (an early return before
+  // buildPageIndex() and before touching anything loadSavedList() hasn't already reset
+  // to the exact same value) — so this test's real signature of the bug is the pending
+  // 150ms setTimeout itself firing at all post-load, not any visible state it produces.
+  // See this bead's report for why a buildPageIndex()/getComputedStyle counter (the
+  // technique list_search.test.js uses to prove "no scan ran") cannot distinguish fixed
+  // from unfixed code on this exact race.
+  test('loading a saved list mid-debounce cancels the pending debounce instead of letting it fire later', async () => {
+    await addTerm('zzzalpha');
+    await addTerm('zzzbeta');
+    await openListsMenu();
+    await saveCurrentAs('Debounce List');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+
+    // A third chip, committed via Enter (never touches the debounce), so the load below
+    // has a visibly different pre-load working list to replace — same shape as the
+    // preceding "no scan" test's own before/after contrast.
+    await addTerm('zzzgamma');
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta', 'zzzgamma']);
+
+    // Open the popover *before* typing the draft below, so the only Playwright action
+    // needed inside the 150ms race window is the load click itself — opening the panel
+    // here doesn't touch input, lastTerm, or the debounce timer at all.
+    await openListsMenu();
+
+    // Monkeypatches window.setTimeout inside the content script's own isolated world
+    // (same cross-world trick list_search.test.js's getComputedStyle patch relies on) so
+    // every timer scheduled with either input-debounce delay increments __oc150Fires,
+    // and only when that callback actually executes — independent of what it does once
+    // it runs. Both delays are matched (150ms normally, 400ms under Lite Mode, see
+    // content.js's `settings.performanceMode ? 400 : 150`) so that making Lite Mode the
+    // default could never leave this test vacuously green with no timer to count. No
+    // other timer in content.js uses either delay; the mutation-observer, scroll,
+    // viewport-marker and beacon timers all use different ones.
+    await evalInContentScript(`
+      (function () {
+        if (window.__ocSTInstalled) return true;
+        window.__ocSTInstalled = true;
+        window.__oc150Fires = 0;
+        var orig = window.setTimeout;
+        window.setTimeout = function (fn, delay) {
+          if (delay === 150 || delay === 400) {
+            var wrapped = function () {
+              window.__oc150Fires++;
+              return fn.apply(this, arguments);
+            };
+            var args = [wrapped, delay].concat(Array.prototype.slice.call(arguments, 2));
+            return orig.apply(window, args);
+          }
+          return orig.apply(window, arguments);
+        };
+        return true;
+      })()
+    `);
+
+    const before150 = await evalInContentScript('window.__oc150Fires');
+
+    // Type a draft (never committed — a synthetic 'input' event, same trigger .fill()
+    // uses per chip_row.test.js's own note) and immediately click to load the saved list,
+    // both within a single page.evaluate() round trip. This is the exact race the bead
+    // describes — typing a draft, then loading a list, inside the 150ms debounce window
+    // — but done as one round trip (rather than two separate Playwright actions, e.g.
+    // .fill() then .click()) because Playwright's own actionability wait on .click() alone
+    // measured ~200ms+ in this environment, comfortably past the 150ms window and masking
+    // the race entirely; a single synchronous in-page turn keeps the gap at native JS
+    // speed, reliably inside the window regardless of test-runner/CDP overhead.
+    await page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const draftInput = root.querySelector('.oc-input');
+      const item = root.querySelector('.oc-list-item-name');
+      draftInput.value = 'strayDraftText';
+      draftInput.dispatchEvent(new Event('input', { bubbles: true }));
+      item.click();
+    });
+    await page.waitForTimeout(250); // well past the 150ms the stale debounce would need
+
+    const after150 = await evalInContentScript('window.__oc150Fires');
+    assert.strictEqual(
+      after150,
+      before150,
+      'loadSavedList() must clearTimeout() the pending input debounce so it can never fire after a load'
+    );
+
+    // The load must win outright: the loaded 2-term list renders, not the 3-term
+    // pre-load working list and not the just-typed draft.
+    assert.deepStrictEqual(await chipTerms(), ['zzzalpha', 'zzzbeta']);
+    assert.strictEqual(await activeChipTerm(), null, 'a freshly loaded list has no active chip yet');
+    assert.deepStrictEqual(
+      await page.locator(CHIP_COUNT).allTextContents(),
+      ['', ''],
+      'chip hit counts must stay blank until the user clicks a chip to scan'
+    );
+    assert.strictEqual(await page.locator(COUNT).textContent(), '', 'no scan ran for either the draft or the loaded list');
+    assert.strictEqual(await page.locator(INPUT).inputValue(), '', 'the draft must not survive the load');
+    assert.strictEqual(await page.locator(NOTICE).count(), 0, 'loading a list must never raise a "no matches" notice');
+    assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'the popover closes itself once a list is loaded');
+
+    // Real highlight registries agree with the count text — same defense-in-depth check
+    // chip_row.test.js uses for its oculist-l6m.33 coverage.
+    assert.strictEqual(await highlightCount('oculist-match'), 0);
+    assert.strictEqual(await highlightCount('oculist-dim-match'), 0);
+    assert.strictEqual(await highlightCount('oculist-active-match'), 0);
   });
 
   test('rename and delete work through the popover', async () => {
