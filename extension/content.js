@@ -5566,11 +5566,21 @@
 
       var changed = false;
       var performanceModeChanged = false;
+      // Only these keys feed drawActiveOverlays()/getEffectiveColors(): visionSettings
+      // carries magnifier/textLabels/borderStyle/colorPalette/customColors/motionSensitivity,
+      // and matchColor/activeColor/beaconColor are the 'default' palette's own colours.
+      // Everything else in SETTINGS_KEYS (disabledSites, effect, position, theme,
+      // scrollBehavior, performanceMode, visionProfile, ...) is either handled by its own
+      // branch below or never read by the active-match overlays, so redrawing on it would
+      // just be unnecessary DOM churn on an unrelated change.
+      var OVERLAY_AFFECTING_KEYS = { visionSettings: 1, matchColor: 1, activeColor: 1, beaconColor: 1 };
+      var overlaysAffected = false;
       SETTINGS_KEYS.forEach(function(k) {
         if (!(k in nv)) return;
         if (stableStringify(nv[k]) !== stableStringify(settings[k])) {
           changed = true;
           if (k === 'performanceMode') performanceModeChanged = true;
+          if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
         }
         settings[k] = nv[k];
       });
@@ -5588,6 +5598,18 @@
         if (wrap) {
           applyWrapPosition();
           updateViewportMarkers();
+          // Placed after applyWrapPosition()/updateViewportMarkers() (geometry unrelated to
+          // the active-match overlays anyway) but still inside this `if (wrap)` guard, since
+          // repositionActiveOverlays() redraws the border/label/magnifier for whatever match
+          // is currently active — without this, flipping the magnifier or Match Labels
+          // toggle left the on-screen match showing the stale overlay state until the next
+          // navigation or redraw (oculist-l6m.42). repositionActiveOverlays() already
+          // no-ops safely when there is no active match (activeIndex out of range) or the
+          // match's rect collapses to zero size, so gating on overlaysAffected here is only
+          // about not doing needless work on unrelated settings changes, not about safety.
+          if (overlaysAffected) {
+            repositionActiveOverlays();
+          }
         }
         if (settingsPanel) {
           rebuildSettingsPanelPreservingFocus();

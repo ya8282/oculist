@@ -205,6 +205,19 @@ describe('Active-match magnifier overlay', () => {
     );
   }
 
+  // Polls fn() until it returns a truthy value or the deadline passes, then resolves with
+  // whatever the last call returned — deliberately never throws/times out itself. Used by
+  // the oculist-l6m.42 regression tests below so a fix-absent run fails on a clean
+  // assert.strictEqual mismatch instead of a Playwright waitFor timeout error.
+  async function pollUntil(fn, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 4000);
+    for (;;) {
+      const result = await fn();
+      if (result || Date.now() > deadline) return result;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
   before(async () => {
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -514,5 +527,103 @@ describe('Active-match magnifier overlay', () => {
 
     const magnifierCount = await page.locator(MAGNIFIER).count();
     assert.strictEqual(magnifierCount, 0, 'a whitespace-only match must never render a magnifier card');
+  });
+
+  // Regression for oculist-l6m.42: the chrome.storage.onChanged listener in content.js
+  // updated `settings` and repositioned the wrap/viewport markers on a relevant settings
+  // change, but never redrew the active match's own overlays (border/label/magnifier) — so
+  // flipping the magnifier toggle with a match already on screen produced no visible
+  // change until the next navigation or redraw (e.g. Ctrl+G). Deliberately does NOT call
+  // advanceMatch()/redrawUntil() (unlike the other tests in this file) or re-issue the
+  // search after setVisionSettings() — the whole point is to prove the card appears/
+  // disappears from the settings write alone, with no further user action.
+  test('a vision-settings change redraws the active match magnifier in place, without navigating (oculist-l6m.42)', async () => {
+    await setVisionSettings({ magnifier: false, textLabels: false, motionSensitivity: 'off' });
+    await search('quarklet');
+
+    // Confirm the match actually landed (activeIndex set, count updated) before touching
+    // vision settings — otherwise a race between the search landing and the settings
+    // write below could let this test pass for the wrong reason.
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        const count = root.querySelector('.oc-count');
+        return !!count && /of 1\b/.test(count.textContent);
+      },
+      null,
+      { timeout: 5000 }
+    );
+    // highlightActiveRange() updates the count synchronously above but, when the match is
+    // already fully in view, defers its own animate() redraw by a bare setTimeout(..., 50)
+    // (see content.js). That deferred call reads `settings` at the moment it *fires*, not
+    // at schedule time — so without this margin, a settings write issued right after the
+    // count update can land before that pending timeout fires and get incidentally picked
+    // up by it, making this test pass even without repositionActiveOverlays() wired into
+    // the storage listener. Wait it out first so the settings write below is unambiguously
+    // what triggers the redraw under test.
+    await page.waitForTimeout(300);
+    assert.strictEqual(await page.locator(MAGNIFIER).count(), 0, 'sanity: magnifier must not be showing yet');
+
+    // Foreign settings write — same chrome.storage.sync.set path the popup takes — with
+    // the match still on screen and nothing else touching the page afterward.
+    await setVisionSettings({ magnifier: true });
+    const appeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c > 0), 4000);
+    assert.strictEqual(
+      appeared,
+      true,
+      'the magnifier card must appear in place after the settings change, without navigating'
+    );
+    const word = await magnifierWordText();
+    assert.strictEqual(word, 'quarklet', 'the redrawn magnifier must show the currently active match');
+
+    // Reverse direction: the bead only names the ON case, but OFF must equally take
+    // effect in place.
+    await setVisionSettings({ magnifier: false });
+    const disappeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c === 0), 4000);
+    assert.strictEqual(
+      disappeared,
+      true,
+      'toggling the magnifier off must remove the card in place, without navigating'
+    );
+  });
+
+  // Same regression, for the plain label (drawActiveMatchLabel()) — a separate function
+  // from the magnifier's, reached through the same drawActiveOverlays() call inside
+  // repositionActiveOverlays(), so this exercises a genuinely different render path rather
+  // than duplicating the magnifier assertions above.
+  test('a vision-settings change redraws the active match label in place, without navigating (oculist-l6m.42)', async () => {
+    await setVisionSettings({ magnifier: false, textLabels: false, motionSensitivity: 'off' });
+    await search('quarklet');
+
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        const count = root.querySelector('.oc-count');
+        return !!count && /of 1\b/.test(count.textContent);
+      },
+      null,
+      { timeout: 5000 }
+    );
+    // See the magnifier test above: wait out highlightActiveRange()'s own deferred
+    // animate() (setTimeout(..., 50)) before writing settings, so that pending redraw
+    // can't be mistaken for the one under test.
+    await page.waitForTimeout(300);
+    assert.strictEqual(await page.locator(LABEL).count(), 0, 'sanity: label must not be showing yet');
+
+    await setVisionSettings({ textLabels: true });
+    const appeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c > 0), 4000);
+    assert.strictEqual(
+      appeared,
+      true,
+      'the plain label must appear in place after the settings change, without navigating'
+    );
+
+    await setVisionSettings({ textLabels: false });
+    const disappeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c === 0), 4000);
+    assert.strictEqual(
+      disappeared,
+      true,
+      'toggling textLabels off must remove the label in place, without navigating'
+    );
   });
 });
