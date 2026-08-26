@@ -3388,12 +3388,18 @@
     }
     if (!wrap) return;
     if (e.key === 'Escape') {
-      // The list popover gets its own first Escape (closing only itself) so a user
-      // browsing saved lists never loses the whole overlay by accident; a second Escape,
-      // with the popover already gone, falls through to the existing full-destroy below
-      // exactly as before oculist-l6m.9 (settings panel intentionally keeps today's
-      // behaviour — Escape there still closes the whole overlay, that wasn't in scope).
+      // Both dialogs (lists popover, settings panel) get their own first Escape, closing
+      // only themselves and returning focus to their trigger button, so a user browsing
+      // saved lists or adjusting settings never loses the whole overlay by accident — they
+      // now carry identical role="dialog" semantics (oculist-l6m.27) and so must behave
+      // identically for Escape per the WAI-ARIA APG (oculist-l6m.37). A second Escape, with
+      // both dialogs already gone, falls through to the existing full-destroy below exactly
+      // as before oculist-l6m.9. toggleListsMenu()/toggleSettings() keep the two mutually
+      // exclusive, so in practice only one of the next two branches can ever fire — the
+      // listsPanel check simply stays first for a deterministic order if that invariant is
+      // ever broken.
       if (listsPanel) { closeListsMenu(); return; }
+      if (settingsPanel) { closeSettings(); return; }
       window.__ocDestroy();
       return;
     }

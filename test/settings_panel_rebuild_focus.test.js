@@ -170,7 +170,15 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
   // Every test starts from a closed overlay, so panel/focus state never leaks between
   // tests.
   beforeEach(async () => {
-    await page.keyboard.press('Escape').catch(() => {});
+    // A single Escape now only closes a dialog panel, if one is left open by the previous
+    // test (oculist-l6m.37) — settingsPanel behaves like listsPanel and no longer falls all
+    // the way through to the full overlay destroy on the first press. Every test in this
+    // file leaves the settings panel mounted, so press repeatedly (bounded) until the
+    // overlay itself is actually gone.
+    for (let attempts = 0; attempts < 3 && (await page.locator('#oc-wrap').count()) > 0; attempts++) {
+      await page.keyboard.press('Escape').catch(() => {});
+      await waitForOverlayClosed().catch(() => {});
+    }
     await waitForOverlayClosed();
     await page.keyboard.press('Control+f');
     await page.waitForSelector(INPUT, { timeout: 5000 });
