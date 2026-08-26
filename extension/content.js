@@ -5356,8 +5356,15 @@
         window.__ocDestroy();
       } else {
         injectHighlightStyles();
-        applyWrapPosition();
-        updateViewportMarkers();
+        // The overlay may be closed (wrap null) when a settings change lands from another
+        // context (popup, another tab, or a direct storage write) — applyWrapPosition()
+        // dereferences wrap unconditionally, so skip it until the overlay is reopened.
+        // `settings` above is already updated regardless, so reopening picks up the
+        // change via buildUI() -> applyWrapPosition() on its own.
+        if (wrap) {
+          applyWrapPosition();
+          updateViewportMarkers();
+        }
         if (settingsPanel) {
           settingsPanel.remove();
           settingsPanel = null;
