@@ -189,17 +189,14 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
 
     // Move focus onto the "Light" theme toggle button via a real DOM focus() call (not a
-    // click), then activate it with a real Space keypress — the setting change itself goes
-    // through native button keyboard activation, not a programmatic .click(). (Not Enter:
-    // content.js's window-level keydown capture handler treats any Enter press while focus
-    // is inside the shadow root as "commit the find chip" and calls preventDefault() on it,
-    // which — being a capture-phase listener that runs before the button's own default
-    // action — suppresses the native Enter-activates-button behavior entirely. That's a
-    // pre-existing interaction outside this bead's scope; Space isn't intercepted by that
-    // handler and is just as valid a native button-activation key.)
+    // click), then activate it with a real Enter keypress — the setting change itself goes
+    // through native button keyboard activation, not a programmatic .click(). (oculist-oxh
+    // added a settingsPanel guard to the window-level keydown capture handler mirroring the
+    // pre-existing listsPanel one, so Enter here now reaches the button's own default action
+    // instead of being swallowed as a find-chip commit.)
     await page.locator(THEME_LIGHT_BTN).focus();
     await waitForActiveElement('[data-oc-key="theme:light"]');
-    await page.keyboard.press('Space');
+    await page.keyboard.press('Enter');
 
     // The panel is torn down and rebuilt as a side effect of the theme change — wait for
     // the rebuilt "Light" button to actually reflect the new state, confirming the rebuild
