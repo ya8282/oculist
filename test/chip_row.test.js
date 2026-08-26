@@ -35,7 +35,9 @@ const LONG_MATCHING_TERM = FILLER.repeat(2).slice(0, 108);
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
+const NOTICE = '#oc-wrap >> .oc-notice';
 const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
+const NOTICE_CLOSE = '#oc-wrap >> .oc-notice-close';
 const PREV_BTN = '#oc-wrap >> .oc-up-btn';
 const NEXT_BTN = '#oc-wrap >> .oc-down-btn';
 const COUNT = '#oc-wrap >> .oc-count';
@@ -321,6 +323,75 @@ describe('Chip row and working-list state', () => {
     assert.strictEqual(
       notice,
       'Search terms are limited to 100 characters. Shorten the term and try again.'
+    );
+  });
+
+  // oculist-l6m.12: showNotice() used to gate on a single session-wide noticeDismissed
+  // flag, so dismissing ANY notice — including the unrelated site-override notice below —
+  // silenced every later notice for the rest of the session, including the 10-term cap.
+  // Dismissal is now keyed per notice class, so the two must not interfere.
+  test('dismissing a site-override notice does not suppress a later term-cap notice', async () => {
+    // A draft search (no Enter, so no chip/slot is consumed) for a term absent from the
+    // page trips checkSiteOverride()'s zero-matches branch — PAGE's FILLER text pushes
+    // body length well past its >500-char threshold — raising the 'site-override' notice.
+    await page.locator(INPUT).fill('nonexistentxyzzyterm');
+    await page.waitForTimeout(250);
+    assert.match(await page.locator(NOTICE_TEXT).textContent(), /No matches found/);
+
+    await page.locator(NOTICE_CLOSE).click();
+    await page.waitForTimeout(100);
+    assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the site-override notice must actually dismiss');
+
+    await emptyInputByBackspace();
+
+    for (let i = 1; i <= 10; i++) {
+      await addTerm('capterm' + i);
+    }
+    assert.strictEqual((await chipTerms()).length, 10);
+
+    // 'quarklet' exists on the page, so this Enter also runs checkSiteOverride() again —
+    // exactly the erasure/race path the 10-term cap test above exercises.
+    await addTerm('quarklet');
+    assert.strictEqual((await chipTerms()).length, 10, 'the 11th term must still be refused');
+
+    await page.waitForSelector(NOTICE, { timeout: 5000 }).catch(() => {});
+    assert.strictEqual(
+      await page.locator(NOTICE).count(),
+      1,
+      'the term-cap notice must still surface after an unrelated site-override notice was dismissed'
+    );
+    assert.strictEqual(
+      await page.locator(NOTICE_TEXT).textContent(),
+      'Oculist searches up to 10 terms at once. Remove a term to add another.'
+    );
+  });
+
+  // Guard against over-correcting oculist-l6m.12: per-class keying must not simply disable
+  // dismissal altogether — dismissing a term-cap notice must still suppress a later,
+  // identical term-cap hit for the rest of the session.
+  test('dismissing a term-cap notice suppresses a subsequent identical term-cap notice', async () => {
+    for (let i = 1; i <= 10; i++) {
+      await addTerm('capterm' + i);
+    }
+    assert.strictEqual((await chipTerms()).length, 10);
+
+    await addTerm('quarklet');
+    assert.strictEqual((await chipTerms()).length, 10);
+    assert.strictEqual(
+      await page.locator(NOTICE_TEXT).textContent(),
+      'Oculist searches up to 10 terms at once. Remove a term to add another.'
+    );
+
+    await page.locator(NOTICE_CLOSE).click();
+    await page.waitForTimeout(100);
+    assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the term-cap notice must actually dismiss');
+
+    await addTerm('quarklet');
+    assert.strictEqual((await chipTerms()).length, 10, 'still refused past the cap');
+    assert.strictEqual(
+      await page.locator(NOTICE).count(),
+      0,
+      'a dismissed term-cap notice must stay suppressed for a later identical cap hit'
     );
   });
 
