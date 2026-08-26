@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "oculist",
+  "project_id": "2407806a-57c9-4699-815a-067d482392d8"
+}

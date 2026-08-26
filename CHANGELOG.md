@@ -5,10 +5,51 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [1.5.0] — unreleased
+## [1.7.0] — 2026-08-25
 
-The accessibility and reliability release. Not yet published to the Chrome Web Store; new work
-keeps landing here until it ships.
+### Added
+
+* **Multi-term search lists.** The find bar now keeps a working list of search terms shown as
+  chips under the input, with one term active at a time. Each chip shows its own hit count.
+  Matches for the inactive terms stay visible on the page as dim, background-highlighted marks
+  so you can see where they are without switching to them. The working list carries over when
+  you move to the next page and only re-runs a search when you ask it to, not on every
+  navigation.
+* **Named saved lists.** A new list button on the find bar saves the current working list under
+  a name, and lets you load, rename, or delete saved lists later. Saved lists persist your
+  search terms and sync across your devices — see the updated `PRIVACY.md` for what that means.
+* **Lite Mode covers the new list features.** Inactive terms are counted without being
+  materialised on the page, and a total match cap keeps the count-only path cheap on large or
+  slow pages.
+* **Magnifier.** An optional overlay (off by default, next to Match Labels in Custom Vision
+  Settings) that renders the currently active match's own text enlarged in a card beside it,
+  with the "N of M" counter shown small underneath — useful for telling which highlighted term
+  the beacon is on at a glance when several are lit up at once, or just for reading tiny text.
+  Sized relative to the match's own font, respects Motion Sensitivity like every other overlay,
+  and is aria-hidden since the word is already page content.
+
+### Fixed
+
+* **Find-in-page no longer matches Oculist's own overlay text.** The page scan previously
+  descended into Oculist's own find bar and chip row, so searching for a word that also appears
+  in the overlay's own UI — for example "of", which appears in the "1 of 3" match counter —
+  reported a phantom match that was not actually on the page. The overlay's own DOM is now
+  excluded from the scan.
+* **Oculist now respects your operating system's "reduce motion" setting.** Previously the
+  beacon animation honoured only the extension's own Motion Sensitivity setting, so a system
+  configured for reduced motion still got the full effect until you found and changed that
+  setting yourself. The OS preference is treated as a downgrade only — it turns the full effect
+  into the reduced one, and never overrides an explicit Reduced or Off choice upward. Toggling
+  the system setting takes effect on the next match, with no page reload.
+* **Scrolling away from a match no longer snaps you back.** The rescan that re-attaches
+  highlights after the page's own DOM changes (lazy-loaded images, infinite feeds) also
+  re-ran the scroll-into-view, yanking the viewport back to the active match while you were
+  reading elsewhere. The rescan now re-highlights without navigating; typing a search and the
+  prev/next/replay controls still scroll as before.
+
+## [1.5.0] — 2026-07-31
+
+The accessibility and reliability release. Published to the Chrome Web Store.
 
 ### Added
 

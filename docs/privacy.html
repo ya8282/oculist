@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oculist: Privacy Policy</title>
+<!-- A meta description renders ALONE in search results and link previews, with none
+     of the page's qualifying context around it, so it must not carry the unqualified
+     form of a claim the page itself qualifies: settings, including the hostnames you
+     disable Oculist on, do travel through Chrome Sync. Stick to the half that is true
+     without context. -->
+<meta name="description" content="Oculist contacts no server. The full privacy policy for the Oculist Chrome extension, including what it stores, what syncs through Chrome, and why it reads the page you are searching.">
+<!--
+  The hosted copy of PRIVACY.md.
+
+  KEEP IN SYNC WITH PRIVACY.md. That file is the repo-readable source of the same
+  text; this one is what Google's reviewer actually loads. If you change one, change
+  the other — the Chrome Web Store's Privacy tab points at the URL this file is
+  served from, and a policy that disagrees with the repo is worse than either
+  version alone.
+
+  Self-contained: no external CSS, fonts, scripts or images, so it renders
+  identically wherever it is dropped and works offline.
+-->
+<style>
+  :root {
+    --bg:#09090b; --panel:#18181b; --raise:#1f1f23;
+    --ink:#fafafa; --muted:#a1a1aa; --faint:#71717a;
+    --border:#27272a; --hair:#1f1f23; --accent:#f59e0b;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:48px 22px 80px; }
+
+  header { display:flex; align-items:center; gap:12px; margin-bottom:34px; }
+  header svg { display:block; flex:none; }
+  header .name { font-size:19px; font-weight:700; letter-spacing:-.015em; }
+  header a { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); }
+
+  h1 { font-size:30px; line-height:1.2; letter-spacing:-.022em; margin:0; font-weight:700; text-wrap:balance; }
+  .updated { font-family:var(--mono); font-size:12px; color:var(--faint); margin:10px 0 0; letter-spacing:.03em; }
+
+  .lede {
+    margin:26px 0 0; padding:16px 18px; background:var(--panel);
+    border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:4px;
+    font-size:17px; line-height:1.55;
+  }
+  .lede strong { font-weight:700; }
+  .lede .after { display:block; margin-top:8px; font-size:14.5px; color:var(--muted); }
+
+  h2 {
+    font-size:13px; font-family:var(--mono); letter-spacing:.11em; text-transform:uppercase;
+    color:var(--faint); font-weight:500; margin:44px 0 14px; padding-bottom:6px;
+    border-bottom:1px solid var(--border);
+  }
+  p { margin:0 0 15px; }
+  a { color:var(--accent); text-underline-offset:2px; }
+  a:hover { text-decoration-thickness:2px; }
+  strong { font-weight:650; }
+
+  ul { margin:0 0 15px; padding-left:0; list-style:none; }
+  ul li { position:relative; padding-left:20px; margin-bottom:10px; }
+  ul li::before {
+    content:""; position:absolute; left:4px; top:.62em;
+    width:5px; height:5px; border-radius:1px; background:var(--accent);
+  }
+
+  .tablewrap { overflow-x:auto; margin:0 0 15px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--hair); vertical-align:top; }
+  th {
+    font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--faint); font-weight:500; border-bottom:1px solid var(--border);
+  }
+  td:first-child { font-weight:600; }
+
+  code {
+    font-family:var(--mono); font-size:.875em; background:var(--raise);
+    border:1px solid var(--hair); padding:1px 5px; border-radius:3px;
+  }
+  pre {
+    background:var(--panel); border:1px solid var(--border); border-radius:4px;
+    padding:13px 15px; overflow-x:auto; margin:0 0 15px;
+    font-family:var(--mono); font-size:13px; line-height:1.5;
+  }
+  pre code { background:none; border:0; padding:0; font-size:inherit; }
+
+  footer {
+    margin-top:52px; padding-top:22px; border-top:1px solid var(--border);
+    font-size:14px; color:var(--muted);
+  }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <a href="./index.html">
+      <svg width="26" height="26" viewBox="0 0 128 128" fill="none" role="img" aria-label="Oculist">
+        <defs>
+          <radialGradient id="og" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fef08a"/>
+            <stop offset="60%" stop-color="#fbbf24"/>
+            <stop offset="100%" stop-color="#d97706"/>
+          </radialGradient>
+        </defs>
+        <circle cx="64" cy="64" r="62" fill="url(#og)"/>
+        <circle cx="64" cy="64" r="26" fill="none" stroke="#fff" stroke-width="11"/>
+      </svg>
+      <span class="name">Oculist</span>
+    </a>
+  </header>
+
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated 2026-08-25</p>
+
+  <p class="lede">
+    <strong>Oculist contacts no server, sends nothing to its developer or to any third
+    party, and has no analytics of any kind.</strong>
+    <span class="after">Your settings stay in your own browser's storage, synced between
+    your own signed-in Chrome profiles by Google and nowhere else. The text of the page you
+    search is read in the browser, matched, highlighted, and then forgotten. That is not a
+    summary of a longer policy. It is the whole policy. What follows is the detail that
+    makes it checkable.</span>
+  </p>
+
+  <h2>What the extension does</h2>
+  <p>
+    Oculist replaces Chrome's faint native find highlight with animated beacons. When you
+    press <code>⌘F</code> / <code>Ctrl+F</code> (or <code>⌘⇧F</code> / <code>Ctrl+Shift+F</code>),
+    it searches the text already rendered on the page in front of you, highlights every match
+    using Chrome's CSS Custom Highlight API, and draws an animated beacon on the current match
+    using the Web Animations API. The DOM nodes it adds are all its own: the find bar; the
+    beacon and overlay effects it draws over the current match; a <code>&lt;style&gt;</code>
+    element it appends to the page's <code>&lt;head&gt;</code>, holding the
+    <code>::highlight()</code> rules and <code>:root</code> custom properties the highlighting
+    needs; and, when a colorblind vision palette is active, one small marker dot per visible
+    non-active match, appended to the page's root element. It never modifies the page's own
+    content. Nothing is sent anywhere.
+  </p>
+
+  <h2>What it stores, and where</h2>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th scope="col">Data</th><th scope="col">Where it lives</th><th scope="col">Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Your settings: theme, highlight effect, beacon colours, Lite Mode, your vision
+            accessibility profile and its individual settings, and <strong>the hostnames you
+            have switched Oculist off on</strong></td>
+          <td><code>chrome.storage.sync</code>, under the key <code>oc-settings</code></td>
+          <td>So your settings survive a browser restart and follow you to other Chrome
+            profiles you are signed into. Because a per-site rule is stored as the hostname
+            it applies to, <strong>that list of hostnames travels through Chrome Sync along
+            with the rest of your settings</strong>, the same as any other synced setting
+            (see below)</td>
+        </tr>
+        <tr>
+          <td><strong>Saved search-term lists</strong>: a name and a set of search terms, for
+            each list you have chosen to save</td>
+          <td><code>chrome.storage.sync</code>, one key per list (<code>oc-list-&lt;id&gt;</code>)</td>
+          <td>A saved list is exactly what it sounds like: a named, persisted record of search
+            terms you asked Oculist to keep, so you can load them again later. Like your
+            settings, <strong>it syncs across your own signed-in Chrome profiles</strong></td>
+        </tr>
+        <tr>
+          <td>The working list of search terms for whatever you are currently searching: the
+            chips shown under the find input right now</td>
+          <td><code>chrome.storage.session</code></td>
+          <td>So the working list survives navigating to the next page without re-running the
+            search on its own. This is separate from a saved list: it is never synced, and it
+            is gone when the browser closes</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    That is the entire list. Oculist writes to no other storage area: it never touches
+    <code>chrome.storage.local</code>. It keeps no history of what pages you searched or what
+    was on them. It does keep a history of search <em>terms</em>, but only the ones you
+    explicitly ask it to keep: the working list above, gone when the browser closes, and any
+    saved lists, which persist by design and sync across your devices for as long as you keep
+    them.
+  </p>
+  <p>
+    <code>chrome.storage.sync</code> is Chrome's own sync, between your own signed-in Chrome
+    profiles. It does not pass through any server operated by this extension's author,
+    because there is no such server. It does mean the hostnames in your disabled-sites list
+    and the terms in any saved list are visible to Google's sync infrastructure the same way
+    every other synced setting is, and reach every Chrome profile where you have Oculist
+    installed and Chrome's extension sync turned on.
+  </p>
+
+  <h2>Page content</h2>
+  <p>
+    To highlight matches, Oculist reads the text of the page you are actively viewing when
+    you use the find feature. That reading happens entirely inside your browser, in the same
+    tab you are already looking at. Page text is never transmitted, never logged, and never
+    written to storage: it is matched, highlighted, and dropped when you close the overlay
+    or leave the page.
+  </p>
+
+  <h2>The github.com default</h2>
+  <p>
+    Oculist ships with <code>github.com</code> already in the disabled-sites list, because
+    GitHub's client-side navigation stops the finder working reliably there. This is only a
+    starting default, not a judgement about the site: you can switch Oculist back on for
+    github.com from the toolbar popup at any time, and that choice is kept across extension
+    updates. No other site is disabled out of the box.
+  </p>
+
+  <h2>What it does not do</h2>
+  <ul>
+    <li>
+      <strong>No network requests.</strong> There is no endpoint to send data to. The source
+      contains exactly one <code>fetch()</code>, and it loads one of the extension's own
+      bundled icon files from <code>chrome.runtime.getURL()</code> in order to draw the
+      greyed-out toolbar icon shown on a disabled site. Check it yourself:
+      <pre><code>grep -rE 'fetch\(|XMLHttpRequest|sendBeacon|WebSocket' extension/</code></pre>
+    </li>
+    <li><strong>No analytics, telemetry, or crash reporting.</strong> None, of any kind.</li>
+    <li><strong>No advertising, and no data sold or shared.</strong> There is nobody to share it with.</li>
+    <li><strong>No account, no login, no identifier.</strong> Oculist never learns who you are.</li>
+    <li><strong>No search history beyond what you ask it to keep.</strong> The working list in the find bar is used to match against the current page and is discarded when the browser session ends. A saved list is different: saving one is how you tell Oculist to keep those terms, and it does, synced across your devices, until you delete it.</li>
+    <li><strong>No remote code.</strong> Everything it runs is in the package you installed. It loads no scripts from anywhere.</li>
+  </ul>
+
+  <h2>Permissions, and why each exists</h2>
+  <ul>
+    <li><strong><code>storage</code></strong>: to save everything described above: settings, saved lists, and the current working list. Nothing else uses it.</li>
+    <li><strong><code>activeTab</code> and <code>scripting</code></strong>: to draw the find overlay and its beacons on the tab you are looking at when you invoke Oculist.</li>
+    <li><strong><code>&lt;all_urls&gt;</code> as the content script's match pattern</strong> (there is no separate <code>host_permissions</code> grant in <code>manifest.json</code>): find-in-page is only useful if it works on whatever page you happen to be reading, so the content script is declared for every site rather than a list of approved ones. Broad access is what the feature needs; it is not what the extension does with it. Oculist reads page text to highlight it and sends nothing anywhere, which is the point of the two sections above.</li>
+  </ul>
+
+  <h2>Deleting your data</h2>
+  <p>
+    Removing Oculist from <code>chrome://extensions</code> deletes everything it stored on
+    that device. Settings and saved lists live in <code>chrome.storage.sync</code>, so a copy
+    of them also lives in Google's sync infrastructure and on every other signed-in profile
+    where Oculist is installed, as described above; removing Oculist from each of those
+    profiles removes it from all of them, the same way removing any other synced extension's
+    data does. Beyond that, there is nothing else to delete: Oculist has no server and keeps
+    no copy of your data anywhere else.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    Questions or a problem: use the feedback form at
+    <a href="https://tally.so/r/Xx9GdL" target="_blank" rel="noopener noreferrer">tally.so/r/Xx9GdL</a>.
+  </p>
+
+  <footer>
+    Oculist is an independent tool. It is not affiliated with or endorsed by Google LLC.
+    “Chrome” is referenced only to describe the browser this extension runs in.
+  </footer>
+
+</div>
+</body>
+</html>
