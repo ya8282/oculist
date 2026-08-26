@@ -457,6 +457,8 @@
     closeTitle: 'Close  Esc',
     noMatch: 'no match',
     of: 'of',
+    matchSingular: 'match',
+    matchPlural: 'matches',
     
     // Preference Panel Strings
     prefTitle: 'OCULIST PREFERENCES',
@@ -2888,22 +2890,33 @@
       var chip = document.createElement('span');
       chip.className = 'oc-chip' + (noMotion ? ' oc-no-motion' : '');
 
+      // termRanges[i] is undefined until performListSearch() has scanned this term at
+      // least once — right after addChipTerm() pushes it before any scan, or a term
+      // skipped outright by the oculist-l6m.7 total-match cap (termsStarved). Both cases
+      // leave the visual slot blank, and the accessible name must not claim a count for
+      // either: "0 matches" is only correct once termRanges[i] is a real (possibly empty)
+      // array from an actual scan (oculist-l6m.19's undefined-vs-empty-array distinction).
+      var hasCount = !!termRanges[i];
+      var countValue = hasCount ? termRanges[i].length : 0;
+
       var termBtn = document.createElement('button');
       termBtn.type = 'button';
       termBtn.className = 'oc-chip-term' + (isActive ? ' active' : '');
       termBtn.textContent = term;
       termBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-      termBtn.setAttribute('aria-label', (isActive ? 'Active search term: ' : 'Search term: ') + term);
+      var termLabel = (isActive ? 'Active search term: ' : 'Search term: ') + term;
+      if (hasCount) {
+        termLabel += ', ' + countValue + ' ' + (countValue === 1 ? i18n.matchSingular : i18n.matchPlural);
+      }
+      termBtn.setAttribute('aria-label', termLabel);
       termBtn.addEventListener('click', function () { activateChip(i); });
 
+      // The visual count span stays aria-hidden — its value is already folded into
+      // termBtn's aria-label above, so a screen reader is never asked to read it twice.
       var chipCountEl = document.createElement('span');
       chipCountEl.className = 'oc-chip-count';
       chipCountEl.setAttribute('aria-hidden', 'true');
-      // termRanges[i] is undefined until performListSearch() has scanned this term at
-      // least once (e.g. right after addChipTerm() pushes it, before any scan) — leave
-      // the slot blank then. Once scanned, an array is always truthy even at length 0,
-      // so a genuine zero-match term still shows "0" rather than going blank again.
-      chipCountEl.textContent = termRanges[i] ? String(termRanges[i].length) : '';
+      chipCountEl.textContent = hasCount ? String(countValue) : '';
 
       var removeBtn = document.createElement('button');
       removeBtn.type = 'button';
