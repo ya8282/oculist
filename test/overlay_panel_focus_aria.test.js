@@ -202,7 +202,15 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // Every test starts from a closed overlay, so panel/focus state never leaks between
   // tests.
   beforeEach(async () => {
-    await page.keyboard.press('Escape').catch(() => {});
+    // A single Escape now only closes a dialog panel, if one is left open by the previous
+    // test (oculist-l6m.37) — settingsPanel behaves like listsPanel and no longer falls all
+    // the way through to the full overlay destroy on the first press. Press repeatedly
+    // (bounded) until the overlay itself is actually gone, so leftover panel state from one
+    // test never leaks into the next.
+    for (let attempts = 0; attempts < 3 && (await page.locator('#oc-wrap').count()) > 0; attempts++) {
+      await page.keyboard.press('Escape').catch(() => {});
+      await waitForOverlayClosed().catch(() => {});
+    }
     await waitForOverlayClosed();
     await page.keyboard.press('Control+f');
     await page.waitForSelector(INPUT, { timeout: 5000 });
@@ -273,6 +281,55 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
     // bead — must not be broken by the added focus/aria bookkeeping.
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
+  });
+
+  // oculist-l6m.37: settingsPanel carries the same role="dialog" as listsPanel
+  // (oculist-l6m.27), so it must behave identically to the listsPanel case immediately
+  // above for the same key — first Escape closes only the panel and returns focus to its
+  // trigger (gearBtn); a second Escape (with no panel open) closes the whole overlay.
+  test('Escape closes the settings panel and returns focus to gearBtn (overlay stays open)', async () => {
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await waitForActiveElement(SETTINGS_PANEL_CSS);
+
+    // First Escape: closes only the settings panel, must not tear down the whole overlay.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
+    await waitForActiveElement(GEAR_BTN_CSS);
+    await waitForAXExpanded(GEAR_BTN_CSS, false);
+  });
+
+  test('a second Escape (settings panel already closed) closes the whole overlay, matching the listsPanel case', async () => {
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await waitForActiveElement(SETTINGS_PANEL_CSS);
+
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+
+    // Second Escape: falls through to the full overlay destroy, matching the listsPanel
+    // behaviour above.
+    await page.keyboard.press('Escape');
+    await waitForOverlayClosed();
+  });
+
+  // Edge case named in oculist-l6m.37: Escape must close the settings panel even when focus
+  // has moved elsewhere in the overlay (e.g. the find input) without explicitly closing the
+  // panel first — mirrors closeListsMenu()'s Escape branch above, which also closes
+  // unconditionally on listsPanel presence rather than checking focus location first.
+  test('Escape closes the settings panel even when focus is outside it (e.g. the find input)', async () => {
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await waitForActiveElement(SETTINGS_PANEL_CSS);
+
+    await page.locator(INPUT).focus();
+    await waitForActiveElement('.oc-input');
+
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
+    await waitForActiveElement(GEAR_BTN_CSS);
   });
 
   // Mutual exclusion (oculist-l6m.9): opening one panel while the other is open closes the
