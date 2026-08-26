@@ -21,6 +21,12 @@ below the 1.5.0 heading is what landed across that span.
 * **Lite Mode covers the new list features.** Inactive terms are counted without being
   materialised on the page, and a total match cap keeps the count-only path cheap on large or
   slow pages.
+* **Magnifier.** An optional overlay (off by default, next to Match Labels in Custom Vision
+  Settings) that renders the currently active match's own text enlarged in a card beside it,
+  with the "N of M" counter shown small underneath — useful for telling which highlighted term
+  the beacon is on at a glance when several are lit up at once, or just for reading tiny text.
+  Sized relative to the match's own font, respects Motion Sensitivity like every other overlay,
+  and is aria-hidden since the word is already page content.
 
 ### Fixed
 
