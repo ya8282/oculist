@@ -90,6 +90,40 @@ describe('Settings change landing while the overlay is closed', () => {
     );
   }
 
+  // Arm a probe listener inside the content script's own isolated world *before* writing
+  // a foreign settings change: chrome.storage.onChanged fires every listener registered
+  // against that same document for the same event, in registration order — content.js's
+  // own listener was registered at page load, long before this probe, so observing OUR
+  // listener fire (and, before the fix under test, an uncaught error already having
+  // landed in pageErrors/consoleErrors by then) is a direct proxy for content.js's own
+  // listener having already run.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before) {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const now = await evalInContentScript('window.__ocSettingsEchoes');
+      if (now > before) return;
+      if (Date.now() > deadline) {
+        throw new Error('oc-settings change never echoed into the content script');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  }
+
   before(async () => {
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -153,10 +187,12 @@ describe('Settings change landing while the overlay is closed', () => {
     // the fix, content.js's onChanged listener calls applyWrapPosition() unconditionally
     // here and throws "Cannot read properties of undefined (reading 'style')" because
     // wrap is null.
+    const echoBefore = await armSettingsEcho();
     await setPosition('bl');
 
-    // Give the live onChanged listener time to run (and, before the fix, to throw).
-    await page.waitForTimeout(500);
+    // Wait for the write to actually echo into content.js's own onChanged listener,
+    // instead of guessing how long that takes.
+    await waitForSettingsEcho(echoBefore);
 
     assert.deepStrictEqual(
       pageErrors,

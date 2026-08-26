@@ -191,18 +191,74 @@ describe('Active-match magnifier overlay', () => {
   // Re-issues the search itself until the magnifier shows the expected word — covers the
   // same live-settings lag as redrawUntil(), but for a test's very first search right after
   // a setVisionSettings() call, before any element exists yet to redraw from.
+  //
+  // oculist-nw4: text alone is not a sufficient gate — drawActiveMatchMagnifier() removes
+  // and recreates the card on every animate() call, but untilTrue() re-issues search(term)
+  // (the SAME term, every retry) on a failed check, and highlightActiveRange()'s simple
+  // 50ms-path setTimeout is not tracked/cancellable the way the scroll-settle path's timer
+  // is — so an *earlier* call's still-in-flight deferred animate() can land *after* a later
+  // one and repaint the card with the right text (text alone can't tell old from new when
+  // the term never changes) at a stale rect. Cross-check the card's own rendered left
+  // position against drawActiveMatchMagnifier()'s own placement formula (content.js),
+  // applied to searchRanges[activeIndex]'s *live* rect (read via oculist-active-match's
+  // Highlight Range, the same range highlightActiveRange() set synchronously and animate()
+  // eventually measures) — so this gate only passes once the magnifier has actually
+  // redrawn at the right spot, not just with the right text. Mirrors the horizontal
+  // clamp-to-page-edge content.js itself applies (see the "flips below" test's near-left-
+  // edge 'titanium' fixture), not just an unclamped center, since a small target close to
+  // the page edge legitimately never gets a perfectly centered card.
   function searchUntilMagnifierWord(term, expected) {
     return untilTrue(
       () => search(term),
-      () =>
-        page.evaluate(
+      async () => {
+        const textOk = await page.evaluate(
           (args) => {
             const el = document.querySelector(args.sel);
             return !!(el && el.children[0] && el.children[0].textContent === args.expected);
           },
           { sel: MAGNIFIER, expected: expected }
-        )
+        );
+        if (!textOk) return false;
+
+        const rangeRect = await evalInContentScript(`
+          (function () {
+            var h = CSS.highlights.get('oculist-active-match');
+            var r = h ? Array.from(h)[0] : null;
+            if (!r) return null;
+            var b = r.getBoundingClientRect();
+            if (!b || (b.width === 0 && b.height === 0)) return null;
+            return { top: b.top, left: b.left, width: b.width, height: b.height };
+          })()
+        `);
+        if (!rangeRect) return false;
+
+        return page.evaluate(
+          (args) => {
+            const card = document.querySelector(args.sel);
+            if (!card) return false;
+            const c = card.getBoundingClientRect();
+            // Mirrors drawActiveMatchMagnifier()'s own cx computation and edge clamp.
+            const rawCxDoc = args.rangeRect.left + window.scrollX + args.rangeRect.width / 2 - c.width / 2;
+            const maxLeftDoc = Math.max(0, document.documentElement.scrollWidth - c.width - 10);
+            const expectedCxDoc = Math.min(Math.max(10, rawCxDoc), maxLeftDoc);
+            const expectedLeft = expectedCxDoc - window.scrollX;
+            return Math.abs(c.left - expectedLeft) < 6;
+          },
+          { sel: MAGNIFIER, rangeRect: rangeRect }
+        );
+      }
     );
+  }
+
+  // highlightActiveRange() never calls animate() synchronously — only from inside a
+  // setTimeout, either the 50ms in-viewport path or the up-to-600ms scroll-settle path
+  // (content.js:3269) — and animate() is the sole place that creates a '.oc-beacon'
+  // element (drawStaticActiveBorder(), gated on motion === 'off', same as this file's
+  // tests). Waiting for that beacon to actually appear is a direct, principled proxy for
+  // "the pending redraw fired", correct regardless of which of the two deferred paths was
+  // taken — unlike a fixed sleep sized for only the faster of the two.
+  async function waitForPendingRedraw() {
+    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
   }
 
   // Polls fn() until it returns a truthy value or the deadline passes, then resolves with
@@ -553,15 +609,14 @@ describe('Active-match magnifier overlay', () => {
       null,
       { timeout: 5000 }
     );
-    // highlightActiveRange() updates the count synchronously above but, when the match is
-    // already fully in view, defers its own animate() redraw by a bare setTimeout(..., 50)
-    // (see content.js). That deferred call reads `settings` at the moment it *fires*, not
-    // at schedule time — so without this margin, a settings write issued right after the
-    // count update can land before that pending timeout fires and get incidentally picked
-    // up by it, making this test pass even without repositionActiveOverlays() wired into
-    // the storage listener. Wait it out first so the settings write below is unambiguously
-    // what triggers the redraw under test.
-    await page.waitForTimeout(300);
+    // highlightActiveRange() updates the count synchronously above but defers its own
+    // animate() redraw by a setTimeout (see content.js). That deferred call reads
+    // `settings` at the moment it *fires*, not at schedule time — so without waiting it
+    // out, a settings write issued right after the count update could land before that
+    // pending timeout fires and get incidentally picked up by it, making this test pass
+    // even without repositionActiveOverlays() wired into the storage listener. Wait for
+    // the pending redraw's own observable effect instead of guessing its duration.
+    await waitForPendingRedraw();
     assert.strictEqual(await page.locator(MAGNIFIER).count(), 0, 'sanity: magnifier must not be showing yet');
 
     // Foreign settings write — same chrome.storage.sync.set path the popup takes — with
@@ -605,9 +660,9 @@ describe('Active-match magnifier overlay', () => {
       { timeout: 5000 }
     );
     // See the magnifier test above: wait out highlightActiveRange()'s own deferred
-    // animate() (setTimeout(..., 50)) before writing settings, so that pending redraw
-    // can't be mistaken for the one under test.
-    await page.waitForTimeout(300);
+    // animate() call before writing settings, so that pending redraw can't be mistaken
+    // for the one under test.
+    await waitForPendingRedraw();
     assert.strictEqual(await page.locator(LABEL).count(), 0, 'sanity: label must not be showing yet');
 
     await setVisionSettings({ textLabels: true });

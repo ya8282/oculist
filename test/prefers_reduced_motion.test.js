@@ -48,7 +48,6 @@ describe('prefers-reduced-motion downgrades the beacon effect', () => {
     page = await ctx.newPage();
     await page.goto(origin);
     await page.waitForLoadState('load');
-    await page.waitForTimeout(500);
   });
 
   after(async () => {
@@ -56,23 +55,55 @@ describe('prefers-reduced-motion downgrades the beacon effect', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  // No CDP session in this file, so there is no isolatedContextId to poll for injection
+  // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+  // otherwise silently swallow) until the input actually appears, instead of guessing a
+  // fixed delay.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
+
   // Both motion modes mount exactly one top-level .oc-beacon, so counting those tells
   // them apart from nothing. The difference is what lives inside it: the default Anime
   // Laser effect fills its container with ~23 animated parts, the reduced path draws a
   // single static glow box with no children. Count descendants instead.
   //
-  // animate() calls cancelBeacons() first, so replaying never accumulates parts.
+  // animate() calls cancelBeacons() first, so replaying never accumulates parts. Enter's
+  // effect only actually builds once highlightActiveRange()'s own deferred setTimeout
+  // fires (50ms in-viewport path, or up to 600ms for the scroll-settle path) — wait for
+  // the beacon container to actually exist (its descendants are built in the same
+  // synchronous effect.run() call, so no separate wait is needed for those) instead of
+  // guessing "built, not yet faded out" as a wall-clock number.
   const replayAndCount = async () => {
+    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(600); // effect built, not yet faded out
+    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
     return page.evaluate(() => document.querySelectorAll('.oc-beacon *').length);
   };
 
   test('flipping the OS preference downgrades the effect without a reload', async () => {
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder();
     await page.locator(INPUT).type('quarklet', { delay: 30 });
-    await page.waitForTimeout(400);
+    // Wait for the draft debounce to actually land (a real match count) before pressing
+    // Enter, instead of guessing its duration.
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap');
+        const count = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-count') : null;
+        return !!count && /of \d+/.test(count.textContent);
+      },
+      null,
+      { timeout: 5000 }
+    );
 
     const full = await replayAndCount();
     assert.ok(

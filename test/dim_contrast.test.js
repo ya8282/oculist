@@ -21,6 +21,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
@@ -97,7 +98,75 @@ function readDimState(css) {
 }
 
 describe('Dim treatment is gated on measured contrast, not vision profile name (oculist-l6m.17)', () => {
-  let server, ctx, page, extId, origin;
+  let server, ctx, page, extId, origin, client, isolatedContextId;
+
+  // Attaches a fresh CDP session to the CURRENT `page` and arms the isolated-world
+  // execution-context listener — must be called right after each `page = await
+  // ctx.newPage()` and before that page's own goto(), so the context-created event for
+  // its content script is never missed. Each new page gets its own isolated world, so
+  // this re-attaches per page rather than once for the whole file.
+  async function attachCdp() {
+    isolatedContextId = undefined;
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+  }
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
+
+  // Arm a probe listener inside the content script's own isolated world *before* changing
+  // a setting via the popup: chrome.storage.onChanged fires every listener registered
+  // against that same document for the same event, so observing OUR listener fire is a
+  // direct proxy for content.js's own oc-settings listener (registered first, at page
+  // load) having *also* already run — including its synchronous rescan — regardless of
+  // whether two profiles happen to render byte-identical CSS (which a text-diff wait
+  // cannot distinguish from "nothing happened yet").
+  async function armSettingsEcho() {
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before, opts) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
+      timeout: 5000,
+      message: 'oc-settings change never echoed into the content script',
+      ...opts,
+    });
+  }
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -153,20 +222,64 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  // chrome.storage.session's 'oc-worklist' is shared extension-wide, not per-tab/page —
+  // it carries over from whichever test last ran in this file, so a chip count-based
+  // "did a new chip get added" check is the wrong invariant here: a term that already
+  // exists from a previous test's carry-over just gets re-activated (activateChip()),
+  // never growing the chip count, but activateChip() still calls performListSearch()
+  // synchronously either way. Poll the real, common effect of both paths instead: the
+  // in-memory oculist-match registry (never carried over across a fresh page load) ending
+  // up with exactly this term's own matches.
+  async function addTermAndWait(term) {
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    await waitForContentScriptValue(
+      evalInContentScript,
+      `(function () {
+        var h = CSS.highlights.get('oculist-match');
+        return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
+      })()`,
+      (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === term),
+      { timeout: 5000, message: `performListSearch() never rebuilt oculist-match with "${term}"'s own matches` }
+    );
+  }
+
   async function openFinderOn(url) {
     if (page) await page.close().catch(() => {});
     page = await ctx.newPage();
+    await attachCdp();
     await page.goto(url);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.locator(INPUT).fill('cat');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag instead of guessing
+    // how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
+    await addTermAndWait('cat');
   }
 
   async function currentCss() {
     return page.evaluate(() => document.getElementById('oc-global-highlight-styles').textContent);
+  }
+
+  // The isolated world existing (isolatedContextId set) only proves the content script's
+  // realm has been created, not that its synchronous top-level init has reached the
+  // keydown-listener registration yet — under load there can still be a gap. Retry
+  // Control+f (a keypress a not-yet-attached listener would otherwise silently swallow)
+  // until the input actually appears, instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
   }
 
   // oculist-32d: like openFinderOn, but adds a SECOND term and explicitly activates the
@@ -176,18 +289,28 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
   async function openFinderWithDimTermOn(url) {
     if (page) await page.close().catch(() => {});
     page = await ctx.newPage();
+    await attachCdp();
     await page.goto(url);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.locator(INPUT).fill('cat');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
-    await page.locator(INPUT).fill('dog');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
+    await addTermAndWait('cat');
+    await addTermAndWait('dog');
+    // Clicking a chip — even the already-active one — unconditionally calls
+    // activateChip() -> performListSearch(), so the registry-content check below is
+    // reliable regardless of whichever chip happened to be active already.
     await page.locator(CHIP_TERM).nth(0).click(); // activate 'cat', leaving 'dog' dim
-    await page.waitForTimeout(250);
+    await waitForContentScriptValue(
+      evalInContentScript,
+      `(function () {
+        var h = CSS.highlights.get('oculist-match');
+        return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
+      })()`,
+      (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === 'cat'),
+      { timeout: 5000, message: 'clicking the "cat" chip never rebuilt oculist-match with its own matches' }
+    );
   }
 
   // Reads the RENDERED colour the dim underline actually paints text-decoration-color:
@@ -204,21 +327,49 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     return [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])];
   }
 
-  // Mirrors the proven-reliable pattern from dim_highlight.test.js's own profile-switch
-  // test: a fixed settle window rather than a content diff, because two different built-in
+  // Was: a fixed settle window rather than a content diff, because two different built-in
   // profiles can legitimately render byte-identical CSS (e.g. 'none' and 'low-vision' share
   // colorPalette: 'default', so their matchColor/activeColor — and therefore the whole
   // injected stylesheet — are identical), which would make a "wait until the text changes"
-  // check hang for exactly the pairing this test most needs to exercise.
+  // check hang for exactly the pairing this test most needs to exercise. Now arms the same
+  // onChanged-echo probe dim_highlight.test.js's setLiteMode() uses: it waits for
+  // content.js's own oc-settings listener to have actually run, which is agnostic to
+  // whether the visible CSS text changed.
   async function setVisionProfile(profileKey) {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
+
+    // chrome.storage.onChanged never fires for a write whose value is unchanged from
+    // what's already stored — a genuine case here, not just a defensive check: this file
+    // resets to 'none' at the end of every test, so the *first* profile a later test's
+    // own loop selects can legitimately already be 'none' (PRESETS lists 'none' first).
+    // Arming the echo probe for a no-op write would hang forever, so skip it entirely
+    // when the popup's own current selection already matches.
+    if ((await popup.locator('#vision-profile').inputValue()) === profileKey) {
+      await popup.close();
+      await page.bringToFront();
+      return;
+    }
+
+    const before = await armSettingsEcho();
     await popup.selectOption('#vision-profile', profileKey);
-    await popup.waitForTimeout(300);
+    // saveSettings() is async (awaits chrome.storage.sync.set) — wait for the write to
+    // actually land before tearing the popup page down, instead of guessing how long it
+    // takes.
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync.get('oc-settings').then((d) => {
+          const s = d['oc-settings'];
+          const wanted = expected === 'none' ? null : expected;
+          return !!s && s.visionProfile === wanted;
+        }),
+      profileKey,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
+    await waitForSettingsEcho(before);
   }
 
   async function setCustomMatchColor(hex) {
@@ -229,19 +380,40 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     // to interact with anything inside.
     await popup.evaluate(() => { document.getElementById('configure-drawer').open = true; });
     await popup.waitForSelector('#color-palette', { state: 'visible' });
+    // Both selects' change handlers update the popup's own DOM (unlocking/revealing the
+    // next control) synchronously, in the same task as the event, before their own
+    // saveSettings() await — so by the time selectOption() resolves, the next target is
+    // already actionable; no separate settle wait is needed between them.
     await popup.selectOption('#vision-profile', 'custom');
-    await popup.waitForTimeout(150);
     await popup.selectOption('#color-palette', 'custom');
-    await popup.waitForTimeout(150);
+
+    // Not armed with the onChanged-echo probe like setVisionProfile(): consecutive calls
+    // here can legitimately request the *same* hex twice across different tests (e.g.
+    // '#ffffff' on both the "alpha wash survives" and "prefers-contrast: more" tests,
+    // which differ only by prefers-contrast emulation) — chrome.storage.onChanged never
+    // fires for a write whose value is unchanged from what's already stored, which would
+    // make an echo-wait hang forever on exactly that legitimate repeat. Every call site
+    // already does its own page.waitForFunction() diff on the injected stylesheet right
+    // after calling this, which is non-vacuous here because the *stylesheet rule always
+    // exists* (injectHighlightStyles() writes the oculist-dim-match rule unconditionally)
+    // and each call site's expected treatment genuinely differs from that page's prior
+    // state.
     await popup.evaluate((value) => {
       const el = document.getElementById('custom-match-color');
       el.value = value;
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }, hex);
-    await popup.waitForTimeout(300);
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync.get('oc-settings').then((d) => {
+          const s = d['oc-settings'];
+          return !!(s && s.visionSettings && s.visionSettings.customColors && s.visionSettings.customColors.matchColor === expected);
+        }),
+      hex,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
   }
 
   test('every built-in vision profile either clears 3:1 contrast or falls back to the underline treatment (measured, white page background)', async () => {
@@ -344,14 +516,15 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
   test('prefers-contrast: more forces the underline treatment even when the wash would otherwise clear 3:1', async () => {
     if (page) await page.close().catch(() => {});
     page = await ctx.newPage();
+    await attachCdp();
     await page.emulateMedia({ contrast: 'more' });
     await page.goto(origin + 'dark');
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.locator(INPUT).fill('cat');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
+    await addTermAndWait('cat');
 
     // Same colour/background combination that stayed a wash in the previous test — the
     // only difference here is prefers-contrast: more.
@@ -380,24 +553,44 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     test('the underline colour adapts PER ELEMENT: pixel-identical to that element\'s own text colour hardcoded in, on both a light-text and a dark-text container sharing one global rule', async () => {
       if (page) await page.close().catch(() => {});
       page = await ctx.newPage();
+      await attachCdp();
       await page.goto(origin + 'adaptive');
-      await page.waitForTimeout(300);
-      await page.keyboard.press('Control+f');
-      await page.waitForSelector(INPUT, { timeout: 5000 });
-      await page.locator(INPUT).fill('dog');
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(200);
-      await page.locator(INPUT).fill('cat');
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(200);
-      await page.locator(CHIP_TERM).nth(0).click(); // activate 'dog', leaving 'cat' dim in both paragraphs
-      await page.waitForTimeout(250);
-      // Activating a chip fires a transient ~3s attention "beacon" glow (a Web Animation) at
-      // the newly-active match. It self-removes when the animation finishes, but until then
-      // its radial glow paints over both paragraphs and is by itself enough to make two
-      // otherwise-identical screenshots differ. Wait for it to fully leave the DOM so the
-      // only thing that can make two screenshots of the same element differ is the
-      // stylesheet edits this test makes on purpose.
+      await waitForCondition(() => isolatedContextId, Boolean, {
+        timeout: 5000,
+        message: 'never observed the content script isolated execution context',
+      });
+      await openFinder();
+      await addTermAndWait('dog');
+      await addTermAndWait('cat');
+      // Which of 'dog'/'cat' actually sits at chip index 0 depends on chrome.storage
+      // .session carry-over from whichever earlier test in this file ran first (it is
+      // shared extension-wide, not per-page) — read the chip's own text rather than
+      // assume it, and this test's assertions below don't care which specific term ends
+      // up dim, only that one of them genuinely does.
+      const chip0Term = await page.locator(CHIP_TERM).nth(0).textContent();
+      await page.locator(CHIP_TERM).nth(0).click(); // activate chip 0, leaving the other dim in both paragraphs
+      await waitForContentScriptValue(
+        evalInContentScript,
+        `(function () {
+          var h = CSS.highlights.get('oculist-match');
+          return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
+        })()`,
+        (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === chip0Term),
+        { timeout: 5000, message: 'clicking chip 0 never rebuilt oculist-match with its own matches' }
+      );
+      // Committing a term via Enter (addTermAndWait() above) fires a transient ~3s
+      // attention "beacon" glow (a Web Animation) at the newly-active match — but only
+      // once highlightActiveRange()'s own deferred setTimeout (50ms in-viewport path, or
+      // up to 600ms for the scroll-settle path) actually fires; it is never drawn
+      // synchronously. Wait for the beacon to actually appear first — otherwise "wait for
+      // absence" can pass vacuously before the deferred call has even run, letting the
+      // glow appear later and paint over a screenshot taken after this check "passed".
+      await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+      // It self-removes when the animation finishes, but until then its radial glow
+      // paints over both paragraphs and is by itself enough to make two otherwise-
+      // identical screenshots differ. Wait for it to fully leave the DOM so the only
+      // thing that can make two screenshots of the same element differ is the stylesheet
+      // edits this test makes on purpose.
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
 
       const originalCss = await currentCss();
@@ -502,8 +695,10 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       const PIXEL_PROVEN = ['color-blind-tritanopia', 'none'];
 
       await openFinderWithDimTermOn(origin + 'contrast-light');
-      // Same transient attention-beacon concern as the adaptivity test above: wait for it to
-      // fully leave the DOM before any screenshot is taken.
+      // Same transient attention-beacon concern as the adaptivity test above: wait for it
+      // to actually appear (the deferred animate() call that draws it can still be
+      // in-flight here) and then fully leave the DOM before any screenshot is taken.
+      await page.waitForSelector('.oc-beacon', { timeout: 5000 });
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
 
       const p = page.locator('p');

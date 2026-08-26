@@ -23,8 +23,10 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 const FILLER = 'filler words to fill the page and push it past the no-matches notice threshold. ';
 
@@ -81,18 +83,41 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
     });
 
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag the CDP listener
+    // above sets, instead of guessing how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -114,22 +139,68 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
+    // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
+    // resolves asynchronously after open — poll for the chip row to actually reflect the
+    // now-empty list, rather than guessing how long that round trip takes.
+    await waitForChipCount(0);
   });
 
   async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    // Enter's chip-add path (addChipTerm() -> performListSearch()) runs synchronously and
+    // ends with renderChipRow() as its very last statement, so the chip row reflecting the
+    // new term is a genuine proxy for "the whole scan (counts, highlight registries)
+    // finished", not just "the chip node exists".
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
   }
 
+  function waitForChipCount(expected, opts) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
+  }
+
+  // Clicking a chip re-runs performListSearch() synchronously and ends by re-rendering the
+  // chip row with the clicked chip's own '.active' class — waiting on that class is a
+  // proxy for the whole re-scan (registries included) having landed.
+  async function clickChip(index) {
+    await page.locator(CHIP_TERM).nth(index).click();
+    await page.waitForFunction(
+      (i) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+        return !!chips[i] && chips[i].classList.contains('active');
+      },
+      index,
+      { timeout: 5000 }
+    );
+  }
+
+  // The 150ms/400ms input debounce ends in performDraftSearch(term)/restoreActiveChip()
+  // (content.js) — either way it always leaves the oculist-match registry's *content* in a
+  // new, checkable state, so callers wait for their own specific expected outcome
+  // afterward rather than this helper guessing the debounce duration itself.
   async function typeDraft(term) {
     await page.locator(INPUT).fill(term);
-    await page.waitForTimeout(400); // clears the 150ms/400ms debounce
   }
 
   function chipTerms() {
@@ -155,6 +226,36 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
     `);
   }
 
+  // Arm a probe listener inside the content script's own isolated world *before* changing
+  // a setting via the popup: chrome.storage.onChanged fires every listener registered
+  // against that same document for the same event, so observing OUR listener fire is a
+  // direct proxy for content.js's own oc-settings listener (registered first, at page
+  // load) having *also* already run — including its synchronous rescan — not just
+  // "chrome.storage.sync.set() resolved", which is all a wait from the popup's own
+  // separate context could prove.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before, opts) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
+      timeout: 5000,
+      message: 'oc-settings change never echoed into the content script',
+      ...opts,
+    });
+  }
+
   // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), so
   // content.js's chrome.storage.onChanged listener is exercised exactly as production
   // toggling is.
@@ -163,13 +264,37 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
     const checked = await popup.isChecked('#toggle-lite-mode');
+    if (checked === enabled) {
+      await popup.close();
+      await page.bringToFront();
+      return;
+    }
+
+    const before = await armSettingsEcho();
+
     // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
     // <label> (the actionable, visible element) instead of the input.
-    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
-    await popup.waitForTimeout(300);
+    await popup.click('label[for="toggle-lite-mode"]');
+
+    // saveSettings() is async (awaits chrome.storage.sync.set) and toggleLiteMode's
+    // 'change' listener is not awaited by Playwright's click() — wait for the write to
+    // actually land before tearing the popup page down, instead of guessing how long it
+    // takes.
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
+      enabled,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
+
+    // ...then wait for that same write to echo into content.js's own onChanged listener
+    // (and, downstream of it, performListSearch()'s synchronous rescan) instead of a fixed
+    // settle window.
+    await waitForSettingsEcho(before);
   }
 
   // Regression pin, driven through real UI: three chips under Lite Mode (so the two
@@ -196,15 +321,14 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
 
       // Re-activate zenithquokka: it becomes the real-Ranges slot, brindlefalcon and
       // quarklet become Lite Mode placeholders.
-      await page.locator(CHIP_TERM).first().click();
-      await page.waitForTimeout(250);
+      await clickChip(0);
       assert.strictEqual(await activeChipTerm(), 'zenithquokka');
       assert.strictEqual(await highlightCount('oculist-match'), 3, 'sanity check: zenithquokka must have 3 real matches while active');
 
       // Remove zenithquokka (the active chip, index 0) via its own remove control — a
       // real click, not a direct removeChipAt() call.
       await page.locator(CHIP_REMOVE).first().click();
-      await page.waitForTimeout(150);
+      await waitForChipCount(2);
 
       assert.deepStrictEqual(await chipTerms(), ['brindlefalcon', 'quarklet'], 'only the removed chip should be gone');
       assert.strictEqual(await activeChipTerm(), 'brindlefalcon', 'removing the active first chip should activate the new leftmost chip');
@@ -215,16 +339,33 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
 
       // Type a draft (parking brindlefalcon as the inactive chip, owning nothing) then
       // clear it, which calls restoreActiveChip() to hand ownership back to brindlefalcon.
+      // oculist-at7: wait on the exact condition the assertion below checks (the
+      // 150ms/400ms debounce firing performDraftSearch('quarklet')) instead of guessing
+      // its duration — this is the flaky assertion the bead names.
       await typeDraft('quarklet');
-      let matchTexts = await evalInContentScript(`
+      const matchTextsExpr = `
         (function () {
           var h = CSS.highlights.get('oculist-match');
           return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
         })()
-      `);
+      `;
+      let matchTexts = await waitForContentScriptValue(
+        evalInContentScript,
+        matchTextsExpr,
+        (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === 'quarklet'),
+        { timeout: 5000, message: 'the "quarklet" draft debounce never populated oculist-match' }
+      );
       assert.ok(matchTexts.length > 0 && matchTexts.every((t) => t === 'quarklet'), 'the draft must own oculist-match while it is non-empty');
 
+      // Clearing the draft debounces into restoreActiveChip() instead — wait for
+      // brindlefalcon's real 2 ranges to actually be lit again before reading the count.
       await typeDraft('');
+      await waitForContentScriptValue(
+        evalInContentScript,
+        "(function(){var h=CSS.highlights.get('oculist-match'); return h?Array.from(h).length:0;})()",
+        (v) => v === 2,
+        { timeout: 5000, message: 'restoreActiveChip() never re-lit brindlefalcon\'s 2 real ranges after the draft cleared' }
+      );
 
       const count = (await page.locator(COUNT).textContent()).trim();
       const litCount = await highlightCount('oculist-match');
@@ -251,14 +392,33 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
       assert.strictEqual((await page.locator(COUNT).textContent()).trim().length > 0, true);
 
       await typeDraft('quarklet');
+      await waitForContentScriptValue(
+        evalInContentScript,
+        "(function(){var h=CSS.highlights.get('oculist-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()",
+        (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === 'quarklet'),
+        { timeout: 5000, message: 'the "quarklet" draft debounce never populated oculist-match' }
+      );
+
+      // Clearing the draft debounces into restoreActiveChip() — 'nonexistentxyzterm' has
+      // genuinely zero real matches, so waiting for oculist-match to actually reach 0 here
+      // is a real, non-vacuous condition (it was just populated with 1 "quarklet" range
+      // above).
       await typeDraft('');
+      await waitForContentScriptValue(
+        evalInContentScript,
+        "(function(){var h=CSS.highlights.get('oculist-match'); return h?Array.from(h).length:0;})()",
+        (v) => v === 0,
+        { timeout: 5000, message: 'restoreActiveChip() never cleared oculist-match back to zero for the genuinely zero-match term' }
+      );
 
       assert.strictEqual(await activeChipTerm(), 'nonexistentxyzterm');
       const count = (await page.locator(COUNT).textContent()).trim();
       assert.strictEqual(/^0 of \d+$/.test(count), false, 'a genuine zero-match term must never render as "0 of N", got "' + count + '"');
       assert.strictEqual(await highlightCount('oculist-match'), 0, 'no real matches exist for this term');
 
-      // Sanity: the state is stable a moment later, not still settling.
+      // Sanity: the state is still stable a moment later, not merely caught mid-settle by
+      // the poll above — a genuinely different kind of check (absence of *further* change
+      // over time) that a condition poll cannot express, so this one is deliberately kept.
       await page.waitForTimeout(300);
       assert.strictEqual(await highlightCount('oculist-match'), 0);
     } finally {
