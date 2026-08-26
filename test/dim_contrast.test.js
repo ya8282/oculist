@@ -24,6 +24,7 @@ const { chromium } = require('playwright');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
+const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 
 // Sourced directly from popup.js's own PRESETS object (not hand-copied), so this test
 // tracks whatever built-in profiles actually exist rather than a list that can drift out of
@@ -105,6 +106,28 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
         // A near-black page background: the one case where a 35%-alpha wash can still
         // clear a 3:1 non-text contrast minimum (see the "alpha wash survives" test below).
         res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#191919;font:16px/1.6 system-ui,sans-serif;padding:40px;}</style><p>cat cats dog</p>');
+      } else if (req.url === '/contrast-light') {
+        // A properly accessible light theme: dark text explicitly set on a white background
+        // (not relying on UA defaults), so this fixture's own text-vs-background contrast is
+        // itself >= 3:1 — the premise oculist-32d's currentColor fix depends on.
+        res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#ffffff;color:#111111;font:16px/1.6 system-ui,sans-serif;padding:40px;}</style><p>cat cats dog</p>');
+      } else if (req.url === '/contrast-dark') {
+        // A properly accessible dark theme: light text explicitly set on a near-black
+        // background. Distinct from '/dark' above, which sets only a background colour and
+        // relies on the UA default (black) text colour — useless for proving currentColor
+        // inherits an accessible page, since that fixture's own text isn't accessible.
+        res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#0a0a0a;color:#f5f5f5;font:16px/1.6 system-ui,sans-serif;padding:40px;}</style><p>cat cats dog</p>');
+      } else if (req.url === '/adaptive') {
+        // Two containers with independently-set, opposite text/background colours on the
+        // same page: proves text-decoration-color: currentColor resolves PER ELEMENT inside
+        // a single global ::highlight() rule, not once for the whole page.
+        res.end(
+          '<!doctype html><meta charset="utf-8">' +
+          '<style>body{margin:0;background:#ffffff;font:16px/1.6 system-ui,sans-serif;}' +
+          '#p-light{color:#111111;background:#ffffff;padding:40px;margin:0;}' +
+          '#p-dark{color:#eeeeee;background:#111111;padding:40px;margin:0;}</style>' +
+          '<p id="p-light">cat dog</p><p id="p-dark">cat dog</p>'
+        );
       } else {
         res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0;font:16px/1.6 system-ui,sans-serif;padding:40px;}</style><p>cat cats dog</p>');
       }
@@ -144,6 +167,41 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
 
   async function currentCss() {
     return page.evaluate(() => document.getElementById('oc-global-highlight-styles').textContent);
+  }
+
+  // oculist-32d: like openFinderOn, but adds a SECOND term and explicitly activates the
+  // first one via its chip, so the second term lands in oculist-dim-match instead of
+  // oculist-match — needed to have an actual dim-highlighted range to read a rendered
+  // colour off of.
+  async function openFinderWithDimTermOn(url) {
+    if (page) await page.close().catch(() => {});
+    page = await ctx.newPage();
+    await page.goto(url);
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.locator(INPUT).fill('cat');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    await page.locator(INPUT).fill('dog');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    await page.locator(CHIP_TERM).nth(0).click(); // activate 'cat', leaving 'dog' dim
+    await page.waitForTimeout(250);
+  }
+
+  // Reads the RENDERED colour the dim underline actually paints text-decoration-color:
+  // currentColor with, for the paragraph the dim match lives in. Read straight off
+  // getComputedStyle rather than assumed from the fixture's own CSS literal, so this
+  // measures what the browser actually resolved, not what the test expects it to resolve to.
+  async function readDimRenderedColor(selector) {
+    return page.evaluate((sel) => getComputedStyle(document.querySelector(sel)).color, selector || 'p');
+  }
+
+  function rgbStringToArray(str) {
+    const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(str);
+    assert.ok(m, 'could not parse computed color string: ' + str);
+    return [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])];
   }
 
   // Mirrors the proven-reliable pattern from dim_highlight.test.js's own profile-switch
@@ -313,5 +371,242 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     );
 
     await setVisionProfile('none');
+  });
+
+  // oculist-32d: the underline branch is now painted in currentColor rather than matchColor.
+  // The tests above only ever asserted which BRANCH got selected; these prove the branch, as
+  // RENDERED, is actually visible — which is what the bead's done-criteria demands.
+  describe('oculist-32d: the dim underline is painted in currentColor, so it renders at the page\'s own contrast', () => {
+    test('the underline colour adapts PER ELEMENT: pixel-identical to that element\'s own text colour hardcoded in, on both a light-text and a dark-text container sharing one global rule', async () => {
+      if (page) await page.close().catch(() => {});
+      page = await ctx.newPage();
+      await page.goto(origin + 'adaptive');
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Control+f');
+      await page.waitForSelector(INPUT, { timeout: 5000 });
+      await page.locator(INPUT).fill('dog');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(200);
+      await page.locator(INPUT).fill('cat');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(200);
+      await page.locator(CHIP_TERM).nth(0).click(); // activate 'dog', leaving 'cat' dim in both paragraphs
+      await page.waitForTimeout(250);
+      // Activating a chip fires a transient ~3s attention "beacon" glow (a Web Animation) at
+      // the newly-active match. It self-removes when the animation finishes, but until then
+      // its radial glow paints over both paragraphs and is by itself enough to make two
+      // otherwise-identical screenshots differ. Wait for it to fully leave the DOM so the
+      // only thing that can make two screenshots of the same element differ is the
+      // stylesheet edits this test makes on purpose.
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+
+      const originalCss = await currentCss();
+      assert.match(
+        originalCss,
+        /oculist-dim-match[^}]*text-decoration-color:\s*currentColor/,
+        'sanity check: expected the underline branch painted in currentColor on this fixture'
+      );
+
+      // #oc-wrap (the finder overlay, roughly [x=800, y=0, w=480, h=76]) overlaps
+      // #p-light's screenshot region here; it is static for the duration of this test and
+      // captured identically in every buffer compared below, so it cannot cause a false
+      // pass or fail today — but a future animation in the finder bar's top-right corner
+      // would flake this test with a confusing failure. #p-dark does not overlap it.
+      const pLight = page.locator('#p-light');
+      const pDark = page.locator('#p-dark');
+
+      const lightColor = await readDimRenderedColor('#p-light');
+      const darkColor = await readDimRenderedColor('#p-dark');
+      assert.notStrictEqual(lightColor, darkColor, 'sanity check: the two containers must have genuinely different text colours for this test to prove anything');
+
+      async function setDimUnderlineColor(colorCss) {
+        await page.evaluate(
+          ({ base, color }) => {
+            document.getElementById('oc-global-highlight-styles').textContent = base.replace(
+              /(oculist-dim-match[^}]*text-decoration-color:\s*)currentColor/,
+              '$1' + color
+            );
+          },
+          { base: originalCss, color: colorCss }
+        );
+      }
+      async function restoreDimUnderline() {
+        await page.evaluate((base) => {
+          document.getElementById('oc-global-highlight-styles').textContent = base;
+        }, originalCss);
+      }
+
+      // Baseline: both elements rendered with the real currentColor rule.
+      const bufLightCurrent = await pLight.screenshot();
+      const bufDarkCurrent = await pDark.screenshot();
+
+      // Hardcode the SAME global rule to each element's own computed colour, one at a time,
+      // and re-screenshot just that element — proving currentColor already rendered exactly
+      // what a fixed, per-element-correct colour would have.
+      await setDimUnderlineColor(lightColor);
+      const bufLightHardcoded = await pLight.screenshot();
+      await restoreDimUnderline();
+
+      await setDimUnderlineColor(darkColor);
+      const bufDarkHardcoded = await pDark.screenshot();
+      await restoreDimUnderline();
+
+      assert.ok(
+        bufLightCurrent.equals(bufLightHardcoded),
+        'light-on-white paragraph: currentColor underline must render pixel-identical to the same rule hardcoded to that element\'s own computed colour'
+      );
+      assert.ok(
+        bufDarkCurrent.equals(bufDarkHardcoded),
+        'dark-container paragraph: currentColor underline must render pixel-identical to the same rule hardcoded to that element\'s own computed colour'
+      );
+
+      // Control: an obviously wrong colour must NOT be pixel-identical — proves the
+      // screenshot comparison is actually sensitive to the underline's colour, not a
+      // trivially-always-equal comparison (e.g. because the underline is too thin/antialiased
+      // to move any pixels).
+      await setDimUnderlineColor('red');
+      const bufLightRed = await pLight.screenshot();
+      await restoreDimUnderline();
+      assert.ok(!bufLightCurrent.equals(bufLightRed), 'control: a red underline must render differently from the currentColor baseline on the light paragraph');
+
+      await setDimUnderlineColor('red');
+      const bufDarkRed = await pDark.screenshot();
+      await restoreDimUnderline();
+      assert.ok(!bufDarkCurrent.equals(bufDarkRed), 'control: a red underline must render differently from the currentColor baseline on the dark-container paragraph');
+    });
+
+    // The previous test proves currentColor adapts per element for whatever profile happens
+    // to be active, but only ever exercised the default profile — leaving tritanopia's own
+    // RENDERED case resting on an argument (the emitted underline CSS is a single
+    // non-parameterised string literal at content.js's dimHighlightCss, so every profile
+    // shares the exact same code path) rather than a measurement. This test closes that gap
+    // by parameterising the pixel-identity proof over every built-in profile, sourced from
+    // loadBuiltInProfiles() so the set can't drift.
+    //
+    // The full screenshot-based proof (currentColor render, hardcoded-to-computed-colour
+    // render, red control) costs ~3.3s per profile; running all six would add ~20s to this
+    // file for marginal signal given the single-code-path argument above. Pixel-prove
+    // 'color-blind-tritanopia' — this bead's headline regression, whose #ffcbd1 measured
+    // ~1.43:1 at full opacity before the fix — plus 'none' as an ordinary baseline profile,
+    // and confirm every OTHER built-in profile via the currentColor CSS-literal check, which
+    // is fast (no screenshots) and still reads the exact string the browser resolves
+    // currentColor from.
+    test('the underline is pixel-proven as RENDERED for tritanopia and an ordinary profile, and confirmed via the currentColor literal for every other built-in profile (oculist-32d)', async () => {
+      const profiles = loadBuiltInProfiles();
+      assert.ok(profiles.length >= 5, 'sanity check: expected the "none" preset plus every named built-in profile');
+      assert.ok(
+        profiles.includes('color-blind-tritanopia'),
+        'tritanopia preset missing from PRESETS — cannot pixel-prove this bead\'s headline regression'
+      );
+
+      const PIXEL_PROVEN = ['color-blind-tritanopia', 'none'];
+
+      await openFinderWithDimTermOn(origin + 'contrast-light');
+      // Same transient attention-beacon concern as the adaptivity test above: wait for it to
+      // fully leave the DOM before any screenshot is taken.
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+
+      const p = page.locator('p');
+
+      for (const profileKey of profiles) {
+        await setVisionProfile(profileKey);
+        const css = await currentCss();
+        assert.match(
+          css,
+          /oculist-dim-match[^}]*text-decoration-color:\s*currentColor/,
+          profileKey + ': underline must be painted in currentColor, not matchColor'
+        );
+
+        if (!PIXEL_PROVEN.includes(profileKey)) continue;
+
+        const originalCss = css;
+        const renderedColor = await readDimRenderedColor('p');
+
+        async function setDimUnderlineColor(colorCss) {
+          await page.evaluate(
+            ({ base, color }) => {
+              document.getElementById('oc-global-highlight-styles').textContent = base.replace(
+                /(oculist-dim-match[^}]*text-decoration-color:\s*)currentColor/,
+                '$1' + color
+              );
+            },
+            { base: originalCss, color: colorCss }
+          );
+        }
+        async function restoreDimUnderline() {
+          await page.evaluate((base) => {
+            document.getElementById('oc-global-highlight-styles').textContent = base;
+          }, originalCss);
+        }
+
+        const bufCurrent = await p.screenshot();
+
+        await setDimUnderlineColor(renderedColor);
+        const bufHardcoded = await p.screenshot();
+        await restoreDimUnderline();
+
+        assert.ok(
+          bufCurrent.equals(bufHardcoded),
+          profileKey + ': currentColor underline must render pixel-identical to the same rule hardcoded to this element\'s own computed colour'
+        );
+
+        // Control: an obviously wrong colour must NOT be pixel-identical to the baseline —
+        // proves the screenshot comparison actually moves pixels for this profile too.
+        await setDimUnderlineColor('red');
+        const bufRed = await p.screenshot();
+        await restoreDimUnderline();
+        assert.ok(
+          !bufCurrent.equals(bufRed),
+          profileKey + ': control — a red underline must render differently from the currentColor baseline'
+        );
+      }
+
+      await setVisionProfile('none');
+    });
+
+    test('every built-in profile\'s RENDERED dim underline measures at least 3:1 against the page background, on a light page and a dark page', async () => {
+      const profiles = loadBuiltInProfiles();
+      assert.ok(profiles.length >= 5, 'sanity check: expected the "none" preset plus every named built-in profile');
+
+      const pages = [
+        { url: origin + 'contrast-light', bgRgb: [255, 255, 255], label: 'light page' },
+        { url: origin + 'contrast-dark', bgRgb: [10, 10, 10], label: 'dark page' },
+      ];
+
+      for (const { url, bgRgb, label } of pages) {
+        await openFinderWithDimTermOn(url);
+        for (const profileKey of profiles) {
+          await setVisionProfile(profileKey);
+          const css = await currentCss();
+          const state = readDimState(css);
+
+          // The practical consequence of oculist-32d: every built-in profile's matchColor is
+          // pale (by design, so it reads as a highlight rather than solid text), so every one
+          // of them fails the wash's 3:1 gate on every background and always takes the
+          // underline branch. That is expected here, not a bug.
+          assert.strictEqual(
+            state.treatment,
+            'underline',
+            profileKey + ' on ' + label + ': every built-in profile is expected to fail the wash gate and take the underline branch'
+          );
+          assert.match(
+            css,
+            /oculist-dim-match[^}]*text-decoration-color:\s*currentColor/,
+            profileKey + ' on ' + label + ': underline must be painted in currentColor, not matchColor'
+          );
+
+          const colorStr = await readDimRenderedColor('p');
+          const rgb = rgbStringToArray(colorStr);
+          const ratio = contrastRatio(rgb, bgRgb);
+          assert.ok(
+            ratio >= 3,
+            profileKey + ' on ' + label + ': rendered dim underline colour ' + colorStr + ' measures ' + ratio.toFixed(3) +
+              ':1 against the page background [' + bgRgb.join(',') + '], below the WCAG 2.2 SC 1.4.11 3:1 minimum'
+          );
+        }
+      }
+
+      await setVisionProfile('none');
+    });
   });
 });
