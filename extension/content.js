@@ -542,7 +542,9 @@
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
     effectPointingArrows: 'Pointing Arrows',
-    effectDispersionBloom: 'Dispersion Bloom',
+    effectBloom: 'Bloom',
+    effectTrail: 'Trail',
+    effectLens: 'Lens',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -601,6 +603,22 @@
     ? 'plus-lighter'
     : 'screen';
 
+  // Last known cursor position (document.documentElement is not covered by page mousemove
+  // in every case, so this listens document-wide), used by animateTrail() to know where the
+  // user's hand actually is. Registered once here, at module scope, and — like
+  // colorSchemeQuery above — deliberately NOT removed in __ocDestroy(): this IIFE's setup
+  // runs once per page load, while __ocToggle() calls __ocDestroy() on every close and only
+  // re-runs buildUI() on reopen. Removing the listener would therefore kill cursor tracking
+  // permanently after the first close, leaving animateTrail() stuck on its find-bar
+  // fallback for the rest of the page's life. Passive, two assignments, no work in the
+  // handler; the position never leaves the page.
+  var lastMouseX = null, lastMouseY = null;
+  function handleMouseMove(e) {
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+  }
+  document.addEventListener('mousemove', handleMouseMove, { passive: true });
+
   function getActiveThemeName() {
     var themeName = settings.theme;
     if (themeName === 'system') {
@@ -630,7 +648,9 @@
     lightning: { label: i18n.effectLightning, run: animateLightning },
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
     arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
-    dispersion: { label: i18n.effectDispersionBloom, run: animateDispersion }
+    dispersion: { label: i18n.effectBloom, run: animateDispersion },
+    trail: { label: i18n.effectTrail, run: animateTrail },
+    lens: { label: i18n.effectLens, run: animateLens }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -1416,6 +1436,307 @@
     setTimeout(function() {
       container.remove();
     }, getBeaconDuration(2900));
+  }
+
+  // A single arrowhead travels an L-shaped (one right-angle elbow) path from the user's
+  // last known cursor position to the match, via CSS motion path — offset-rotate:auto turns
+  // the glyph to face travel direction and pivots it at the elbow for free, which is the
+  // whole reason this uses offset-path instead of hand-rolled translate/rotate keyframes.
+  function animateTrail(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var endX = rect.left + rect.width / 2 + window.scrollX;
+    var endY = rect.top + rect.height / 2 + window.scrollY;
+
+    // Cursor position is tracked document-wide (see lastMouseX/lastMouseY, module scope),
+    // but find-in-page is keyboard-driven — a user who typed Ctrl+F and hit Enter without
+    // ever moving the mouse leaves those null. Fall back to the find bar itself (where the
+    // user's attention actually is), then viewport centre. Never draw from 0,0.
+    var startX, startY;
+    if (lastMouseX !== null && lastMouseY !== null) {
+      startX = lastMouseX + window.scrollX;
+      startY = lastMouseY + window.scrollY;
+    } else if (wrap) {
+      var wrapRect = wrap.getBoundingClientRect();
+      startX = wrapRect.left + wrapRect.width / 2 + window.scrollX;
+      startY = wrapRect.top + wrapRect.height / 2 + window.scrollY;
+    } else {
+      startX = window.innerWidth / 2 + window.scrollX;
+      startY = window.innerHeight / 2 + window.scrollY;
+    }
+
+    // Horizontal first, then vertical elbow: M startX startY L endX startY L endX endY,
+    // expressed relative to the arrow's own mounted position (0 0 == startX,startY).
+    var dx = endX - startX;
+    var dy = endY - startY;
+
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var scale = getBeaconScale();
+    var duration = getBeaconDuration(700);
+    var arrowSize = Math.max(20, 26 * scale);
+
+    // Trailing line (skipped in Lite Mode): a draw-on SVG path tracing the same L-shape,
+    // same idiom animateLightning uses (getTotalLength + stroke-dasharray/dashoffset).
+    if (!settings.performanceMode) {
+      var lineLeft = Math.min(startX, endX);
+      var lineTop = Math.min(startY, endY);
+      var lineWidth = Math.max(Math.abs(dx), 1);
+      var lineHeight = Math.max(Math.abs(dy), 1);
+
+      var lineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      lineSvg.setAttribute('class', 'oc-beacon');
+      lineSvg.style.cssText = [
+        'position:absolute',
+        'left:' + lineLeft + 'px', 'top:' + lineTop + 'px',
+        'width:' + lineWidth + 'px', 'height:' + lineHeight + 'px',
+        'overflow:visible', 'pointer-events:none',
+        'z-index:2147483641'
+      ].join(';');
+
+      var relStartX = startX - lineLeft;
+      var relStartY = startY - lineTop;
+      var relEndX = endX - lineLeft;
+      var relEndY = endY - lineTop;
+
+      var linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      linePath.setAttribute('d', 'M ' + relStartX + ' ' + relStartY + ' L ' + relEndX + ' ' + relStartY + ' L ' + relEndX + ' ' + relEndY);
+      linePath.setAttribute('stroke', color);
+      linePath.setAttribute('stroke-width', String(2 * scale));
+      linePath.setAttribute('fill', 'none');
+      linePath.setAttribute('stroke-linecap', 'round');
+      linePath.setAttribute('stroke-linejoin', 'round');
+      linePath.style.opacity = '0.7';
+      lineSvg.appendChild(linePath);
+      document.documentElement.appendChild(lineSvg);
+
+      var lineLength = Math.abs(dx) + Math.abs(dy) || 1;
+      try {
+        lineLength = linePath.getTotalLength() || lineLength;
+      } catch (e) {}
+      linePath.setAttribute('stroke-dasharray', lineLength);
+      linePath.setAttribute('stroke-dashoffset', lineLength);
+
+      var lineAnim = linePath.animate([
+        { strokeDashoffset: lineLength },
+        { strokeDashoffset: '0' }
+      ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+
+      lineAnim.finished.then(function () {
+        lineSvg.remove();
+      }).catch(function () {
+        lineSvg.remove();
+      });
+    }
+
+    // Arrowhead — mounted at the start point, offset-path expressed relative to it.
+    var arrow = document.createElement('div');
+    arrow.className = 'oc-beacon';
+    arrow.textContent = '▶';
+    arrow.style.cssText = [
+      'position:absolute',
+      'left:' + startX + 'px', 'top:' + startY + 'px',
+      'width:' + arrowSize + 'px', 'height:' + arrowSize + 'px',
+      'line-height:' + arrowSize + 'px',
+      'font-size:' + arrowSize + 'px',
+      'font-weight:bold',
+      'color:' + color,
+      'text-align:center',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'offset-path:path("M 0 0 L ' + dx + ' 0 L ' + dx + ' ' + dy + '")',
+      'offset-rotate:auto'
+    ].join(';');
+    document.documentElement.appendChild(arrow);
+
+    var anim = arrow.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+
+    anim.finished.then(function () {
+      arrow.remove();
+    }).catch(function () {
+      arrow.remove();
+    });
+  }
+
+  // ponytail: DOM clone, so styling that depends on ancestor selectors (.parent > .child,
+  // :nth-child, inherited context) is lost and the lens can look subtly wrong on complex
+  // layouts. Pixel-accurate upgrade is chrome.tabs.captureVisibleTab (activeTab is already
+  // granted) cropped into the lens, at the cost of an async background round-trip and
+  // having to hide Oculist's own overlays before capture so they don't appear inside the
+  // lens.
+  //
+  // Two nested elements, not one clip-path'd transform: a clip-path on a transformed
+  // element scales along with the transform, so a circular mask applied to the same node
+  // being scale()'d stops being circular. The outer 'oc-beacon' div is the untransformed
+  // circular mask (overflow:hidden + border-radius:50%); the inner clone is the only thing
+  // that gets scale()'d, positioned so the match's own centre stays pinned at the lens
+  // centre while everything around it magnifies outward from that point.
+  function animateLens(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+    if (searchRanges.length === 0 || activeIndex < 0 || activeIndex >= searchRanges.length) return;
+
+    var range = searchRanges[activeIndex];
+    if (!range) return;
+
+    var startNode;
+    try {
+      startNode = range.startContainer;
+    } catch (e) {
+      return;
+    }
+    var matchParent = (startNode && startNode.nodeType === 3) ? startNode.parentElement : startNode;
+    if (!matchParent) return;
+
+    // Walk up from the match's own inline parent to the nearest block-level ancestor
+    // (display !== 'inline') — magnifying just a single inline wrapper usually shows too
+    // little surrounding context to be useful. Capped: reaching body/html, or a candidate
+    // tall enough to be slow to clone and pointless to magnify (~1200px), falls back to the
+    // match's immediate parent element instead of climbing further.
+    var sourceEl = matchParent;
+    var candidate = matchParent;
+    var guard = 0;
+    while (candidate && candidate !== document.body && candidate !== document.documentElement && guard < 20) {
+      guard++;
+      var display;
+      try {
+        display = window.getComputedStyle(candidate).display;
+      } catch (e) {
+        break;
+      }
+      if (display && display !== 'inline') {
+        var candRect;
+        try {
+          candRect = candidate.getBoundingClientRect();
+        } catch (e) {
+          break;
+        }
+        if (candRect.height <= 1200) {
+          sourceEl = candidate;
+        }
+        break;
+      }
+      candidate = candidate.parentElement;
+    }
+
+    // Never clone <body>/<html> itself — this also covers the case the walk above never
+    // gets a chance to run at all: if the match's own parent element already *is* <body>
+    // (text sitting directly in body, common on simple pages), the while loop's guard
+    // condition is false on entry, sourceEl stays at its initial value (matchParent ===
+    // body) and the height cap below would otherwise never see it. If body/html is the
+    // only candidate, degrade gracefully — decline to draw rather than clone the document.
+    if (!sourceEl || sourceEl === document.body || sourceEl === document.documentElement) return;
+
+    // Apply the ~1200px height cap unconditionally to whatever sourceEl was actually
+    // resolved to, not just to candidates found mid-walk — a huge clone is a real
+    // performance and visual problem regardless of which code path produced sourceEl.
+    var sourceElRect;
+    try {
+      sourceElRect = sourceEl.getBoundingClientRect();
+    } catch (e) {
+      return;
+    }
+    if (sourceElRect.height > 1200) return;
+
+    try {
+      var scale = getBeaconScale();
+      var r = 80 * scale;
+      var Z = 2;
+      var color = getEffectiveColors().beacon || '#fbbf24';
+
+      var mx = rect.left + rect.width / 2 + window.scrollX;
+      var my = rect.top + rect.height / 2 + window.scrollY;
+
+      var srcRect = sourceEl.getBoundingClientRect();
+      var srcDocLeft = srcRect.left + window.scrollX;
+      var srcDocTop = srcRect.top + window.scrollY;
+
+      var clone = sourceEl.cloneNode(true);
+
+      // Strip every id (root included) — duplicate ids in the live document break the host
+      // page's own CSS/JS and any getElementById() it runs while the lens is up.
+      clone.removeAttribute('id');
+      var idNodes = clone.querySelectorAll('[id]');
+      for (var i = 0; i < idNodes.length; i++) {
+        idNodes[i].removeAttribute('id');
+      }
+
+      // Never let the clone re-run side effects the live DOM already paid for: a cloned
+      // <iframe> reloads (real network cost, re-fired ads/trackers), <video>/<audio> can
+      // double-play, and <canvas> just renders blank anyway.
+      var toStrip = clone.querySelectorAll('script, iframe, video, audio, object, embed, canvas');
+      for (var j = 0; j < toStrip.length; j++) {
+        toStrip[j].remove();
+      }
+
+      var lens = document.createElement('div');
+      lens.className = 'oc-beacon';
+      // The magnified copy is inert and invisible to assistive tech — the real text is
+      // already on the page.
+      lens.setAttribute('aria-hidden', 'true');
+      var lensCss = [
+        'position:absolute',
+        'left:' + (mx - r) + 'px',
+        'top:' + (my - r) + 'px',
+        'width:' + (r * 2) + 'px',
+        'height:' + (r * 2) + 'px',
+        // border-box, not the alignment of the magnified content inside it — an abspos
+        // child's left/top resolve against the padding box either way, border-box or not.
+        // What this actually buys: the lens's own outer diameter is exactly 2r including
+        // the rim. The cost is a ~3px offset between the match's pinned point and the true
+        // geometric centre of the circle (half the 3px non-performance-mode border width);
+        // not worth changing behaviour over.
+        'box-sizing:border-box',
+        'border-radius:50%',
+        'overflow:hidden',
+        'pointer-events:none',
+        'z-index:2147483642',
+        'opacity:0'
+      ];
+      if (settings.performanceMode) {
+        lensCss.push('border:2px solid ' + color);
+      } else {
+        lensCss.push('border:3px solid ' + color);
+        lensCss.push('box-shadow:0 0 ' + (16 * scale) + 'px rgba(0,0,0,0.5), 0 0 ' + (6 * scale) + 'px ' + color);
+      }
+      lens.style.cssText = lensCss.join(';');
+
+      // Pin the match centre at the lens centre: the clone is offset so the match's own
+      // point inside it lands exactly at (r, r); its width is pinned to the source's own
+      // width (not the lens's narrow width, which would force it to reflow); margin is
+      // zeroed so an inherited default (e.g. a <p>'s own margin) can't shift it off that
+      // pinned point; and transform-origin sits at that same point so scale(Z) grows
+      // outward from it instead of from the clone's own corner.
+      clone.style.position = 'absolute';
+      clone.style.margin = '0';
+      clone.style.left = ((srcDocLeft - mx) + r) + 'px';
+      clone.style.top = ((srcDocTop - my) + r) + 'px';
+      clone.style.width = srcRect.width + 'px';
+      clone.style.transformOrigin = (mx - srcDocLeft) + 'px ' + (my - srcDocTop) + 'px';
+      clone.style.transform = 'scale(' + Z + ')';
+      clone.style.pointerEvents = 'none';
+
+      lens.appendChild(clone);
+      document.documentElement.appendChild(lens);
+
+      // Single pass, in then out — no loop, no repeat, no strobe (WCAG 2.3.1).
+      var duration = getBeaconDuration(1400);
+      var anim = lens.animate([
+        { opacity: 0, offset: 0 },
+        { opacity: 1, offset: 0.2 },
+        { opacity: 1, offset: 0.75 },
+        { opacity: 0, offset: 1 }
+      ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+
+      anim.finished.then(function () {
+        lens.remove();
+      }).catch(function () {
+        lens.remove();
+      });
+    } catch (e) {
+      // Degrade silently — an exception mid-effect must never break the finder.
+    }
   }
 
   function animateLightning(rect) {
