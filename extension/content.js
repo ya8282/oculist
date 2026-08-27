@@ -2619,11 +2619,14 @@
     var newTermRanges = new Array(terms.length);
     // This is the only place the module-level termRanges[activeTermIndex] is ever given
     // real Ranges (Lite Mode's cheap placeholder below is for inactive terms only) — every
-    // writer of activeTermIndex must call performListSearch() synchronously after setting
-    // it. The implicit-lastTerm branch also lands real Ranges in newTermRanges here, but
-    // (per oculist-l6m.15, below) that array is deliberately never copied into the
-    // module-level termRanges, so this invariant still only ever concerns the real
-    // workListTerms/activeTermIndex pairing.
+    // writer of activeTermIndex must either call performListSearch() synchronously after
+    // setting it, or set termRanges to a state consistent with the index just written (the
+    // buildUI() mount-restore path takes this second form: it sets termRanges = [] itself
+    // rather than scanning, so every chip renders blank until the user picks one). The
+    // implicit-lastTerm branch also lands real Ranges in newTermRanges here, but (per
+    // oculist-l6m.15, below) that array is deliberately never copied into the module-level
+    // termRanges, so this invariant still only ever concerns the real workListTerms/
+    // activeTermIndex pairing.
     if (activeIdx >= 0 && activeIdx < terms.length) {
       newTermRanges[activeIdx] = findRanges(pageIndex, terms[activeIdx]);
       totalMatches += newTermRanges[activeIdx].length;
@@ -4661,6 +4664,10 @@
       if (!wrapRoot || !chipRow) return;
       workListTerms = list.terms;
       activeTermIndex = list.activeIndex;
+      // No scan has run against this term set yet, so termRanges must not carry over any
+      // stale entries from before this mount — see the "every writer of activeTermIndex"
+      // note in performListSearch() for the invariant this upholds without scanning.
+      termRanges = [];
       renderChipRow();
     });
   }

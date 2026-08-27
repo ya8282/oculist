@@ -28,6 +28,8 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
 
 const INPUT = '#oc-wrap >> .oc-input';
+const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 describe('Working-list session storage (oc-worklist)', () => {
   let server, ctx, page, client, isolatedContextId;
@@ -99,6 +101,100 @@ describe('Working-list session storage (oc-worklist)', () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // Closing (Escape) and reopening (Control+f) the overlay within the same page load
+  // reuses the same content-script instance and its window.__ocToggle — this is what
+  // actually re-runs buildUI()'s loadWorkList() mount-restore callback, unlike calling
+  // window.__ocLoadWorkList directly (which never touches workListTerms/termRanges/the
+  // chip DOM at all). keydownHandler is registered once in boot() and never torn down
+  // by __ocDestroy(), so a single Control+f press is reliable here — no retry loop needed
+  // the way the very first open (before any listener exists) requires elsewhere.
+  async function closeOverlay() {
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+  }
+
+  async function reopenOverlay() {
+    await page.keyboard.press('Control+f');
+    await page.waitForSelector(INPUT, { timeout: 5000 });
+  }
+
+  function waitForChipCount(expected) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000 }
+    );
+  }
+
+  // Monkeypatch window.getComputedStyle *inside the content script's own isolated world* —
+  // buildPageIndex() reads it on every call (content.js:2322), so a rise in this counter
+  // is consistent with a scan having run. It is not the ONLY caller: drawActiveMatchMagnifier
+  // (content.js:2043) and getPageBackgroundRgb() (content.js:4786, called synchronously
+  // right after buildUI() returns via injectHighlightStyles()) both call it too, for
+  // reasons unrelated to scanning. That is exactly why a raw before/after diff of this
+  // counter across "close the overlay, then reopen it" is not sufficient on its own to
+  // prove no scan ran — installRestoreProbe() below narrows the window to only the
+  // mount-restore callback's own synchronous execution, where the ambiguity does not
+  // matter. Idempotent so it is safe to call from more than one test.
+  function installGCSProbe() {
+    return evalInContentScript(`
+      (function () {
+        if (window.__ocGCSInstalled) return true;
+        window.__ocGCSInstalled = true;
+        window.__ocGCSCalls = 0;
+        var orig = window.getComputedStyle;
+        window.getComputedStyle = function () {
+          window.__ocGCSCalls++;
+          return orig.apply(window, arguments);
+        };
+        return true;
+      })()
+    `);
+  }
+
+  // Monkeypatch chrome.storage.session.get *inside the content script's own isolated
+  // world*, specifically for the 'oc-worklist' key — the only key loadWorkList() ever
+  // reads (content.js:112). Its callback wraps whatever callback buildUI() passed in
+  // (content.js:4658-4671: sets workListTerms/activeTermIndex/termRanges and calls
+  // renderChipRow(), all synchronously, no further await in between). Snapshotting
+  // window.__ocGCSCalls immediately before and immediately after that inner callback
+  // runs — both taken synchronously inside the same monkeypatched function, not
+  // round-tripped through Playwright/CDP in between — brackets exactly the mount-restore
+  // callback's own execution and nothing else: not the earlier synchronous
+  // injectHighlightStyles()/getPageBackgroundRgb() work (content.js:5675, which the real
+  // __ocToggle() runs right after buildUI() returns, well before this storage round trip
+  // resolves), and not the CDP/network latency of observing it from Node. A
+  // buildPageIndex() call injected into the mount-restore callback lands inside this
+  // window and diverges before !== after; this was verified by temporarily adding one to
+  // content.js and confirming the "triggers no scan" test below then fails. Depends on
+  // installGCSProbe() already being installed. Idempotent.
+  function installRestoreProbe() {
+    return evalInContentScript(`
+      (function () {
+        if (window.__ocRestoreProbeInstalled) return true;
+        window.__ocRestoreProbeInstalled = true;
+        window.__ocRestoreGCSBefore = null;
+        window.__ocRestoreGCSAfter = null;
+        var origGet = chrome.storage.session.get.bind(chrome.storage.session);
+        chrome.storage.session.get = function (key, cb) {
+          if (key === 'oc-worklist' && typeof cb === 'function') {
+            return origGet(key, function (data) {
+              window.__ocRestoreGCSBefore = window.__ocGCSCalls;
+              cb(data);
+              window.__ocRestoreGCSAfter = window.__ocGCSCalls;
+            });
+          }
+          return origGet(key, cb);
+        };
+        return true;
+      })()
+    `);
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -172,5 +268,162 @@ describe('Working-list session storage (oc-worklist)', () => {
       "new Promise((resolve) => chrome.storage.session.get('oc-worklist', (data) => resolve(data['oc-worklist'])))"
     );
     assert.deepStrictEqual(stored, saved);
+  });
+
+  // oculist-la4: buildUI()'s loadWorkList() mount-restore callback writes
+  // workListTerms/activeTermIndex straight from storage without a rescan. It now also
+  // sets termRanges = [] explicitly (content.js:4670) rather than relying on __ocDestroy()
+  // having already zeroed it, so the invariant holds locally rather than by action at a
+  // distance. The tests below pin: (1) the resulting chip render is blank-count/no-active
+  // as expected, not stale data, (2) no scan actually runs to produce that state, and (3)
+  // an out-of-range stored index ends up rendering no active chip and no throw. Note (3)
+  // deliberately makes no claim about WHICH layer produces that outcome — see the note
+  // above that test.
+  //
+  // What this suite CANNOT observe: whether termRanges = [] is a live fix or a no-op,
+  // because a genuinely non-empty termRanges is not reachable at this callback through any
+  // real product path this black-box test can drive. The only two ways into buildUI()'s
+  // mount-restore callback are (a) the very first open of a page, where termRanges is
+  // freshly initialised to [] (content.js:647) and nothing has run yet to populate it, or
+  // (b) a reopen after __ocDestroy() (content.js:742), which already resets termRanges to
+  // [] as part of teardown — so there is no reachable sequence of real user actions that
+  // leaves a stale non-empty termRanges sitting around for this callback to inherit. This
+  // is confirmed, not assumed: negative-controlling these tests against the pre-fix
+  // content.js (git stash the one-line change) leaves them green, because the reset is a
+  // provable no-op today. Constructing a positive case would require a test-only hook into
+  // production state, which is exactly what this bead's own instructions rule out — so
+  // this half of the invariant is pinned defensively, not proven to catch a live defect.
+  describe('mount-restore leaves termRanges consistent with activeTermIndex (oculist-la4)', () => {
+    async function setStoredWorkList(list) {
+      await evalInContentScript(
+        `new Promise((resolve, reject) => {
+          chrome.storage.session.set({ 'oc-worklist': ${JSON.stringify(list)} }, function () {
+            var deadline = Date.now() + 15000;
+            (function poll() {
+              chrome.storage.session.get('oc-worklist', function (data) {
+                var stored = data && data['oc-worklist'];
+                if (stored && stored.activeIndex === ${list.activeIndex} && stored.terms.length === ${list.terms.length}) {
+                  resolve(true);
+                  return;
+                }
+                if (Date.now() > deadline) { reject(new Error('storage write never landed')); return; }
+                setTimeout(poll, 30);
+              });
+            })();
+          });
+        })`
+      );
+    }
+
+    test('a restored working list renders blank chip counts and triggers no scan', async () => {
+      await closeOverlay();
+      await setStoredWorkList({ terms: ['restored-alpha', 'restored-beta'], activeIndex: 1 });
+      await installGCSProbe();
+      await installRestoreProbe();
+
+      await reopenOverlay();
+      await waitForChipCount(2);
+
+      // "No scan ran": window.__ocRestoreGCSBefore/After bracket only the mount-restore
+      // callback's own synchronous body (see installRestoreProbe() above) — not the
+      // earlier, unrelated getComputedStyle() traffic from opening the overlay at all, and
+      // not the latency of this Node-side wait. A real scan (buildPageIndex()) executing
+      // inside that callback would move the counter between the two snapshots; nothing
+      // else in this test touches the page or input to trigger a debounced scan either.
+      const restoreBefore = await evalInContentScript('window.__ocRestoreGCSBefore');
+      const restoreAfter = await evalInContentScript('window.__ocRestoreGCSAfter');
+      assert.strictEqual(
+        restoreAfter,
+        restoreBefore,
+        'the loadWorkList() mount-restore callback must not call buildPageIndex() / getComputedStyle()'
+      );
+
+      const chips = await page.evaluate(() => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        return Array.from(root.querySelectorAll('.oc-chip-term')).map((btn) => ({
+          text: btn.textContent,
+          active: btn.classList.contains('active'),
+          ariaLabel: btn.getAttribute('aria-label'),
+          count: btn.closest('.oc-chip').querySelector('.oc-chip-count').textContent,
+        }));
+      });
+
+      assert.deepStrictEqual(
+        chips.map((c) => c.text),
+        ['restored-alpha', 'restored-beta']
+      );
+      // activeIndex: 1 -> the second chip is active, the first is not.
+      assert.strictEqual(chips[0].active, false);
+      assert.strictEqual(chips[1].active, true);
+      // Blank counts, not stale/zero counts from any previous session — termRanges[i] must
+      // be undefined for every restored term, matching the un-scanned chip contract
+      // renderChipRow() already gives addChipTerm()'s freshly-pushed terms.
+      for (const chip of chips) {
+        assert.strictEqual(chip.count, '', `expected a blank count for "${chip.text}", got "${chip.count}"`);
+        assert.ok(
+          !/match/i.test(chip.ariaLabel),
+          `expected no match count in aria-label for "${chip.text}", got "${chip.ariaLabel}"`
+        );
+      }
+    });
+
+    // What this test pins, precisely: the END-TO-END outcome that a stored activeIndex of
+    // 99 against a 2-term list yields no active chip and no throw. That is worth having.
+    //
+    // What it does NOT pin, despite being the obvious thing to assume: normalizeWorkList()'s
+    // clamp (content.js:108). Verified by mutation — deleting that line leaves all five
+    // tests in this file green. The outcome is overdetermined: with the clamp, the index is
+    // coerced to -1 upstream; without it, activeTermIndex really is 99 at the callback and
+    // renderChipRow()'s `isActive = i === activeTermIndex` simply never matches. Both layers
+    // independently produce "no active chip", so no assertion here can tell them apart.
+    //
+    // Making it discriminate would need a value-level assertion on activeTermIndex itself,
+    // which is not reachable black-box without adding a production hook. Not worth one.
+    test('a stored activeIndex out of range for its terms renders no active chip and does not throw', async () => {
+      await closeOverlay();
+      await setStoredWorkList({ terms: ['x', 'y'], activeIndex: 99 });
+
+      await reopenOverlay();
+      await waitForChipCount(2);
+
+      const chips = await page.evaluate(() => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        return Array.from(root.querySelectorAll('.oc-chip-term')).map((btn) => ({
+          active: btn.classList.contains('active'),
+          ariaPressed: btn.getAttribute('aria-pressed'),
+          count: btn.closest('.oc-chip').querySelector('.oc-chip-count').textContent,
+        }));
+      });
+
+      assert.strictEqual(chips.length, 2, 'both chips must still render despite the out-of-range index');
+      for (const chip of chips) {
+        assert.strictEqual(chip.active, false);
+        assert.strictEqual(chip.ariaPressed, 'false');
+        assert.strictEqual(chip.count, '');
+      }
+    });
+
+    test('an empty stored working list is unaffected: chip row stays hidden on mount', async () => {
+      await closeOverlay();
+      await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
+
+      await reopenOverlay();
+      // No chips ever appear, so there is nothing to poll for — wait on the chip row's own
+      // hidden state settling instead, via the isolated-world termRanges/workListTerms
+      // pairing already exercised above (an empty list resolves synchronously fast, but
+      // still asynchronously after the storage.session.get round trip).
+      await page.waitForFunction(
+        () => {
+          const root = document.getElementById('oc-wrap');
+          const row = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-chip-row') : null;
+          return !!row && row.hidden === true;
+        },
+        null,
+        { timeout: 5000 }
+      );
+
+      const chipCount = await page.locator(CHIP_TERM).count();
+      assert.strictEqual(chipCount, 0);
+    });
   });
 });
