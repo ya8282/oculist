@@ -224,11 +224,19 @@ describe('Chip row and working-list state', () => {
   async function armDebounceFireCounter() {
     return evalInContentScript(`
       (function () {
-        if (!window.__ocDebounceFiresInstalled) {
+        // Re-checked by identity (not just gated behind __ocDebounceFiresInstalled) so
+        // this survives being installed for the first time while armDebounceBlocker() is
+        // already armed underneath it: disarmDebounceBlocker() restores window.setTimeout
+        // to whatever it captured at arm time, which — if that happened before this
+        // counter ever installed — would silently strip the counter's wrapper forever on
+        // a once-only install. Comparing window.setTimeout against the saved wrapper
+        // reference detects that and reinstalls, wrapping whatever setTimeout currently
+        // is, instead of relying on today's incidental test order to keep it safe.
+        if (!window.__ocDebounceFiresInstalled || window.setTimeout !== window.__ocDebounceFireCounterFn) {
           window.__ocDebounceFiresInstalled = true;
-          window.__ocDebounceFires = 0;
+          window.__ocDebounceFires = window.__ocDebounceFires || 0;
           var orig = window.setTimeout;
-          window.setTimeout = function (fn, delay) {
+          var counterFn = function (fn, delay) {
             if (delay === 150 || delay === 400) {
               var wrapped = function () {
                 window.__ocDebounceFires++;
@@ -239,6 +247,8 @@ describe('Chip row and working-list state', () => {
             }
             return orig.apply(window, arguments);
           };
+          window.__ocDebounceFireCounterFn = counterFn;
+          window.setTimeout = counterFn;
         }
         return window.__ocDebounceFires;
       })()
@@ -395,6 +405,137 @@ describe('Chip row and working-list state', () => {
     );
     assert.notStrictEqual(stored.activeIndex, -1, 'the persisted activeIndex must not be -1 while chips remain');
     assert.strictEqual(stored.activeIndex, 0);
+  });
+
+  // Deterministically proves the state right after removeChipAt() rather than racing the
+  // real 150ms/400ms debounce (a sub-debounce-window transient is inherently racy to catch
+  // via a screenshot/UI poll): swallows the setTimeout call the input's debounce handler
+  // makes (matched the same way armDebounceFireCounter() above matches it) so the callback
+  // that setTimeout schedules can never actually run while this is armed — the debounce it
+  // scheduled stays genuinely, unconditionally "pending" for as long as the test needs it
+  // to, with no dependency on how fast the test itself runs. Always paired with
+  // disarmDebounceBlocker() in a finally: this page (and its content-script world) is
+  // reused across the whole describe block, not reloaded per test, so a stuck patch would
+  // otherwise break every later debounce-dependent test in this file (e.g.
+  // emptyInputByBackspace(), which needs the real timer to fire).
+  async function armDebounceBlocker() {
+    return evalInContentScript(`
+      (function () {
+        if (window.__ocDebounceBlockerRestore) window.__ocDebounceBlockerRestore();
+        var orig = window.setTimeout;
+        window.__ocDebounceBlockerRestore = function () {
+          window.setTimeout = orig;
+          window.__ocDebounceBlockerRestore = null;
+        };
+        window.setTimeout = function (fn, delay) {
+          if (delay === 150 || delay === 400) {
+            // Swallowed: never scheduled, so it can never fire while armed. Returns a
+            // truthy fake id (real setTimeout never returns 0) so content.js's own
+            // \`if (debounceTimer)\` truthy checks behave exactly as they would for a
+            // real, still-pending timer.
+            window.__ocDebounceBlockerNextId = (window.__ocDebounceBlockerNextId || 0) + 1;
+            return window.__ocDebounceBlockerNextId;
+          }
+          return orig.apply(window, arguments);
+        };
+        return true;
+      })()
+    `);
+  }
+
+  async function disarmDebounceBlocker() {
+    return evalInContentScript(`
+      (function () {
+        if (window.__ocDebounceBlockerRestore) window.__ocDebounceBlockerRestore();
+        return true;
+      })()
+    `);
+  }
+
+  // oculist-bxm: removeChipAt()'s empty-worklist guard only synced lastTerm to the input
+  // when the input was itself empty. When the input instead held a non-empty draft with a
+  // debounce still in flight (e.g. the user removed the only chip via the X button while
+  // typing something else), lastTerm was left pointing at the just-removed chip's term, so
+  // performListSearch()'s implicit-lastTerm fallback re-scanned that removed term — briefly
+  // showing its stale count/highlights until the pending debounce fired ~150ms/400ms later
+  // and self-corrected. The fix syncs lastTerm to the current draft in that case too, so the
+  // implicit scan targets what the user is actually typing from the very first tick.
+  //
+  // Asserts on the count text and the real oculist-match registry — the actual observable
+  // symptom the bug report describes ("briefly shows the removed term's count and
+  // highlights") — rather than the internal lastTerm variable, which would need a
+  // dedicated test-only hook to reach. zenithquokka (3 matches) and brindlefalcon (2
+  // matches) are deliberately distinct so a stale-vs-fresh scan is unambiguous from the
+  // count/highlight numbers alone.
+  test('X-button removal of the only chip shows the draft\'s own count and highlights, not the removed chip\'s', async () => {
+    await addTerm('zenithquokka');
+    assert.deepStrictEqual(await chipTerms(), ['zenithquokka']);
+    assert.strictEqual(await highlightCount('oculist-match'), 3, 'sanity check: zenithquokka must have 3 real matches before removal');
+
+    await armDebounceBlocker();
+    try {
+      await page.locator(INPUT).fill('brindlefalcon');
+      assert.strictEqual(await page.locator(INPUT).inputValue(), 'brindlefalcon');
+
+      // A debounce was scheduled by the fill()'s 'input' event; the blocker above
+      // guarantees it is still pending (never fired) at the moment this click's
+      // synchronous removeChipAt() runs — so whatever the count/highlights show right
+      // after this click came from removeChipAt()'s own synchronous performListSearch()
+      // call, not from the draft's live debounced search catching up afterward.
+      await page.locator(CHIP_REMOVE).first().click();
+      await waitForChipCount(0);
+
+      const count = await page.locator(COUNT).textContent();
+      assert.match(
+        count,
+        /of 2$/,
+        `count must reflect the draft brindlefalcon's 2 matches, not the removed zenithquokka chip's 3, got "${count}"`
+      );
+      assert.strictEqual(
+        await highlightCount('oculist-match'),
+        2,
+        'oculist-match must hold exactly brindlefalcon\'s 2 ranges, not the removed zenithquokka chip\'s 3'
+      );
+    } finally {
+      await disarmDebounceBlocker();
+    }
+  });
+
+  // Companion to the test above: the existing empty-input path (removeChipAt() reached
+  // with the input already empty, e.g. after backspacing through the chip's own leftover
+  // text) must keep working exactly as before — lastTerm forced to '' and the pending
+  // debounce actually cancelled, not merely left to expire on its own.
+  test('X-button removal of the only chip with an empty input clears lastTerm and cancels the pending debounce', async () => {
+    await addTerm('zenithquokka');
+    assert.deepStrictEqual(await chipTerms(), ['zenithquokka']);
+
+    await armDebounceBlocker();
+    try {
+      await page.locator(INPUT).focus();
+      const value = await page.locator(INPUT).inputValue();
+      for (let i = 0; i < value.length; i++) {
+        await page.keyboard.press('Backspace');
+      }
+      assert.strictEqual(await page.locator(INPUT).inputValue(), '');
+
+      // The final Backspace's own 'input' event scheduled another debounce (delay 150);
+      // the blocker keeps it genuinely pending, unfired, when the X-button click below
+      // runs removeChipAt() synchronously.
+      await page.locator(CHIP_REMOVE).first().click();
+      await waitForChipCount(0);
+
+      // lastTerm cleared is observed via the count text: performListSearch()'s
+      // no-terms/no-lastTerm early return is the only path that leaves it truly blank
+      // (rather than an implicit re-scan of the just-removed term).
+      assert.strictEqual(await page.locator(COUNT).textContent(), '', 'count text must return to the true empty state');
+      assert.strictEqual(
+        await evalInContentScript('window.__ocGetDebounceTimer()'),
+        null,
+        'the pending debounce must be cancelled, not left to fire later against stale closures'
+      );
+    } finally {
+      await disarmDebounceBlocker();
+    }
   });
 
   // Single Enter at the cap: the same keystroke that trips a cap also runs findNext() ->

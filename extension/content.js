@@ -169,6 +169,17 @@
   window.__ocLoadWorkList = loadWorkList;
   window.__ocSaveWorkList = saveWorkList;
 
+  // Same test-reachability reasoning as the two above, for a plain closure variable
+  // rather than a function: debounceTimer (declared further down, in the "State"
+  // section) drives the input debounce. oculist-bxm's regression test reads it to assert
+  // that, on the empty-input path, the pending debounce is actually cancelled
+  // (debounceTimer === null) rather than merely inferred from timing — the only
+  // hook-free alternative is a negative "the debounce never fired" assertion, which
+  // would need a fixed sleep this suite forbids. The chip-removal-syncs-the-draft case
+  // is asserted on the DOM instead (count text and the oculist-match highlight
+  // registry), so it needs no matching lastTerm hook.
+  window.__ocGetDebounceTimer = function () { return debounceTimer; };
+
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
   //
   // Distinct from the working list above: a saved list is a named, user-curated term set
@@ -3571,12 +3582,27 @@
       // (buildPageIndex() is never called). Also cancels any pending debounce so it
       // can't independently re-fire restoreActiveChip() against now-stale closures
       // after we've already settled the empty state.
-      if (input && input.value === '') {
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
+      //
+      // When the input instead holds a non-empty draft, a debounce may still be in
+      // flight from the user's typing. Leaving lastTerm pointing at the just-removed
+      // chip's term would make the implicit-lastTerm fallback below re-scan that
+      // removed term for one tick until the debounce fires and corrects it
+      // (oculist-bxm). Syncing lastTerm to the draft here instead makes that same
+      // implicit scan search what the user is actually typing, so there is nothing
+      // stale to flash. The debounce itself is left alone — cancelling it would drop
+      // the user's in-flight draft search — and it stays idempotent: it re-sets
+      // lastTerm to this same value and re-runs the equivalent scan via
+      // performDraftSearch().
+      if (input) {
+        if (input.value === '') {
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
+          lastTerm = '';
+        } else {
+          lastTerm = input.value;
         }
-        lastTerm = '';
       }
     }
     performListSearch();
