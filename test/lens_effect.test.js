@@ -49,15 +49,27 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 <p id="reference-el">reference element for layout checks</p>
 directbodytext999`;
 
+// Same bare-text-node-directly-under-<body> shape as directbodytext999 above, but with no
+// tall filler — total body height stays comfortably under the 1200px source-height cap, so
+// this page isolates the body/html bail as the *only* guard that can stop the lens cloning
+// <body> (see the body/html bail test below, which would go red if the bail were removed
+// even though the height cap is inert here).
+const SHORT_PAGE = `<!doctype html><meta charset="utf-8">
+<style>
+  body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 20px; }
+</style>
+<p>short page filler</p>
+shortbodytext999`;
+
 const INPUT = '#oc-wrap >> .oc-input';
 
 describe('Lens: a circular magnifier over the real page content around the active match', () => {
-  let server, ctx, page, client, isolatedContextId, origin;
+  let server, ctx, page, client, isolatedContextId, origin, shortPage;
 
   before(async () => {
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(PAGE);
+      res.end(req.url === '/short' ? SHORT_PAGE : PAGE);
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${server.address().port}/`;
@@ -110,6 +122,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
   });
 
   after(async () => {
+    if (shortPage) await shortPage.close();
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
@@ -412,6 +425,48 @@ describe('Lens: a circular magnifier over the real page content around the activ
       assert.notStrictEqual(cloneTag, 'HTML', 'the lens must never clone <html> itself');
     } else {
       const beaconCount = await page.locator('.oc-beacon').count();
+      assert.strictEqual(beaconCount, 0, 'expected the lens to decline to draw rather than clone <body>');
+    }
+  });
+
+  // The tall-body test above shares the ~2000px-filler PAGE fixture, so the 1200px source
+  // height cap always trips before the body/html bail gets a chance to matter — that test
+  // alone cannot prove the bail exists. This test uses SHORT_PAGE, whose measured body
+  // height sits well under the cap, so the height cap is inert here and the bail is the
+  // only guard standing between the match and a clone of <body>.
+  test('body/html bail: match text directly under a short <body> still does not clone the whole body', async () => {
+    shortPage = await ctx.newPage();
+    await shortPage.goto(origin + 'short');
+
+    const bodyHeight = await shortPage.evaluate(() => document.body.getBoundingClientRect().height);
+    assert.ok(bodyHeight < 1200, `expected SHORT_PAGE's body height to be under the 1200px cap, measured ${bodyHeight}`);
+
+    await openFinder(shortPage);
+    await shortPage.locator(INPUT).type('shortbodytext999', { delay: 30 });
+    await waitForMatchCount(shortPage);
+
+    await shortPage.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+    await shortPage.keyboard.press('Enter');
+
+    // Same two acceptable outcomes as the tall-body test: decline to draw, or draw
+    // something bounded that is not <body>/<html> itself.
+    let lensMounted = true;
+    try {
+      await shortPage.waitForSelector('div.oc-beacon', { timeout: 1500 });
+    } catch (e) {
+      lensMounted = false;
+    }
+
+    if (lensMounted) {
+      const cloneTag = await shortPage.evaluate(() => {
+        const lens = document.querySelector('div.oc-beacon');
+        const clone = lens ? lens.firstElementChild : null;
+        return clone ? clone.tagName : null;
+      });
+      assert.notStrictEqual(cloneTag, 'BODY', 'the lens must never clone <body> itself');
+      assert.notStrictEqual(cloneTag, 'HTML', 'the lens must never clone <html> itself');
+    } else {
+      const beaconCount = await shortPage.locator('.oc-beacon').count();
       assert.strictEqual(beaconCount, 0, 'expected the lens to decline to draw rather than clone <body>');
     }
   });
