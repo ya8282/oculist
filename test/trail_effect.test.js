@@ -205,12 +205,12 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     await pg.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
-  // Pulls out the L-shaped path's start/elbow/end points from the div.oc-beacon arrow's
+  // Pulls out the L-shaped path's start/elbow/end points from the .oc-trail-arrow arrow's
   // inline offset-path, plus the geometry needed to compute the *expected* points, all in
   // one synchronous page.evaluate call so nothing can move between reads.
   async function readTrailGeometry(pg) {
     return pg.evaluate(() => {
-      const arrow = document.querySelector('div.oc-beacon');
+      const arrow = document.querySelector('.oc-trail-arrow');
       const targetRect = document.getElementById('target').getBoundingClientRect();
       return {
         left: arrow ? arrow.style.left : null,
@@ -260,7 +260,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
     await replay(page);
     const geom = await readTrailGeometry(page);
-    assert.ok(geom.left && geom.top, 'expected a mounted div.oc-beacon arrowhead');
+    assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
 
     const parsed = parseOffsetPathEnd(geom.offsetPath);
     assert.deepStrictEqual(parsed.m0, [0, 0], 'the path must start at the arrow\'s own local origin');
@@ -315,7 +315,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       await page2.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
 
       const geom = await page2.evaluate(() => {
-        const arrow = document.querySelector('div.oc-beacon');
+        const arrow = document.querySelector('.oc-trail-arrow');
         const wrapRect = document.getElementById('oc-wrap').getBoundingClientRect();
         return {
           left: arrow ? arrow.style.left : null,
@@ -329,7 +329,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
         };
       });
 
-      assert.ok(geom.left && geom.top, 'expected a mounted div.oc-beacon arrowhead');
+      assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
       const actualStartX = parseFloat(geom.left);
       const actualStartY = parseFloat(geom.top);
 
@@ -365,7 +365,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   test('Lite Mode drops the trailing line, keeping only the arrowhead', async () => {
     await replay(page);
     assert.strictEqual(await page.locator('svg.oc-beacon').count(), 1, 'full mode must render the trailing line');
-    assert.strictEqual(await page.locator('div.oc-beacon').count(), 1, 'full mode must render the arrowhead');
+    assert.strictEqual(await page.locator('.oc-trail-arrow').count(), 1, 'full mode must render the arrowhead');
 
     try {
       await setSettings({ performanceMode: true });
@@ -376,12 +376,140 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
         'Lite Mode must drop the trailing line entirely'
       );
       assert.strictEqual(
-        await page.locator('div.oc-beacon').count(),
+        await page.locator('.oc-trail-arrow').count(),
         1,
         'Lite Mode must still render the arrowhead alone'
       );
     } finally {
       await setSettings({ performanceMode: false });
     }
+  });
+
+  // The absorption flash (oculist-3ig): when the arrowhead reaches the match, it fades
+  // out into the match itself, which flashes once as if it absorbed the energy. It carries
+  // its own 'oc-trail-flash' class (alongside the shared 'oc-beacon' bookkeeping class), so
+  // tests identify it independently of its tag — same for the arrowhead's 'oc-trail-arrow'
+  // class above.
+  const FLASH = '.oc-trail-flash';
+
+  test('the absorption flash mounts over the match rect', async () => {
+    // Self-sufficient scroll: this test must not rely on scroll state left over from an
+    // earlier test (e.g. test 1's own scrollTo) — without it, running this test in
+    // isolation (or after a reorder) would let a missing window.scrollX/Y term in the
+    // flash's own positioning pass unnoticed. Scroll here, and condition-poll that it
+    // actually landed rather than assuming a synchronous, non-smooth scrollTo.
+    //
+    // Only scrollY is exercised: the fixture (a single narrow column, no wide content) has
+    // no horizontal overflow, so window.scrollTo(x, ...) with x > 0 is clamped back to 0 —
+    // widening the page just to exercise scrollX would be contorting the fixture for a
+    // dimension the flash's positioning math treats identically to Y.
+    const targetDocY = await page.evaluate(() => {
+      const r = document.getElementById('target').getBoundingClientRect();
+      return r.top + window.scrollY + r.height / 2;
+    });
+    const desiredScrollY = await page.evaluate(
+      (y) => Math.max(0, y - window.innerHeight / 2),
+      targetDocY
+    );
+    await page.evaluate((y) => window.scrollTo(0, y), desiredScrollY);
+    await waitForCondition(() => page.evaluate(() => window.scrollY), (y) => y > 0, {
+      timeout: POLL_TIMEOUT,
+      message: 'page never actually scrolled before the flash-geometry assertion',
+    });
+
+    await replay(page);
+    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+
+    const geom = await page.evaluate(() => {
+      const flash = document.querySelector('.oc-trail-flash');
+      const targetRect = document.getElementById('target').getBoundingClientRect();
+      return {
+        left: flash ? parseFloat(flash.style.left) : null,
+        top: flash ? parseFloat(flash.style.top) : null,
+        width: flash ? parseFloat(flash.style.width) : null,
+        height: flash ? parseFloat(flash.style.height) : null,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        targetLeft: targetRect.left,
+        targetTop: targetRect.top,
+        targetWidth: targetRect.width,
+        targetHeight: targetRect.height,
+      };
+    });
+
+    assert.ok(geom.left !== null, 'expected a mounted .oc-trail-flash flash element');
+    assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
+
+    const expectedLeft = geom.targetLeft + geom.scrollX;
+    const expectedTop = geom.targetTop + geom.scrollY;
+
+    // Expanded a few px past the raw match rect so the glow reads outside the text, not
+    // only under it — assert it covers the rect (allowing that expansion) rather than
+    // matching it exactly.
+    assert.ok(geom.left <= expectedLeft + 1, `flash left ${geom.left} must not start inside the match rect (${expectedLeft})`);
+    assert.ok(geom.top <= expectedTop + 1, `flash top ${geom.top} must not start inside the match rect (${expectedTop})`);
+    assert.ok(
+      geom.left + geom.width >= expectedLeft + geom.targetWidth - 1,
+      `flash must extend at least across the match's own width`
+    );
+    assert.ok(
+      geom.top + geom.height >= expectedTop + geom.targetHeight - 1,
+      `flash must extend at least across the match's own height`
+    );
+  });
+
+  test('the absorption flash cannot fire early: its delay equals the travel duration', async () => {
+    await replay(page);
+    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+
+    const timings = await page.evaluate(() => {
+      const arrow = document.querySelector('.oc-trail-arrow');
+      const flash = document.querySelector('.oc-trail-flash');
+      const arrowAnim = arrow.getAnimations()[0];
+      const flashAnim = flash.getAnimations()[0];
+      return {
+        travelDuration: arrowAnim.effect.getTiming().duration,
+        flashDelay: flashAnim.effect.getTiming().delay,
+      };
+    });
+
+    assert.strictEqual(
+      timings.flashDelay,
+      timings.travelDuration,
+      `flash delay (${timings.flashDelay}) must equal the travel duration (${timings.travelDuration}), or it could fire before the arrowhead arrives`
+    );
+  });
+
+  test('the absorption flash runs exactly one iteration (WCAG 2.3.1 guard)', async () => {
+    await replay(page);
+    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+
+    const iterations = await page.evaluate(() => {
+      const flash = document.querySelector('.oc-trail-flash');
+      return flash.getAnimations()[0].effect.getTiming().iterations;
+    });
+
+    assert.strictEqual(iterations, 1, 'the absorption flash must be a single pulse, never a loop or strobe');
+  });
+
+  test('Lite Mode still produces the absorption flash', async () => {
+    try {
+      await setSettings({ performanceMode: true });
+      await replay(page);
+      await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+      assert.strictEqual(
+        await page.locator(FLASH).count(),
+        1,
+        'Lite Mode must still render the absorption flash — it is the payoff of the effect'
+      );
+    } finally {
+      await setSettings({ performanceMode: false });
+    }
+  });
+
+  test('the absorption flash element is removed once its animation finishes (no leak)', async () => {
+    await replay(page);
+    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   });
 });

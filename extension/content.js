@@ -559,7 +559,6 @@
     effectPointingArrows: 'Pointing Arrows',
     effectBloom: 'Bloom',
     effectTrail: 'Trail',
-    effectLens: 'Lens',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -664,8 +663,7 @@
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
     arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
     dispersion: { label: i18n.effectBloom, run: animateDispersion },
-    trail: { label: i18n.effectTrail, run: animateTrail },
-    lens: { label: i18n.effectLens, run: animateLens }
+    trail: { label: i18n.effectTrail, run: animateTrail }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -1556,7 +1554,7 @@
 
     // Arrowhead — mounted at the start point, offset-path expressed relative to it.
     var arrow = document.createElement('div');
-    arrow.className = 'oc-beacon';
+    arrow.className = 'oc-beacon oc-trail-arrow';
     arrow.textContent = '▶';
     arrow.style.cssText = [
       'position:absolute',
@@ -1575,8 +1573,9 @@
     document.documentElement.appendChild(arrow);
 
     var anim = arrow.animate([
-      { offsetDistance: '0%' },
-      { offsetDistance: '100%' }
+      { offsetDistance: '0%', opacity: 1 },
+      { offsetDistance: '88%', opacity: 1, offset: 0.88 },
+      { offsetDistance: '100%', opacity: 0 }
     ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
 
     anim.finished.then(function () {
@@ -1584,185 +1583,52 @@
     }).catch(function () {
       arrow.remove();
     });
-  }
 
-  // ponytail: DOM clone, so styling that depends on ancestor selectors (.parent > .child,
-  // :nth-child, inherited context) is lost and the lens can look subtly wrong on complex
-  // layouts. Pixel-accurate upgrade is chrome.tabs.captureVisibleTab (activeTab is already
-  // granted) cropped into the lens, at the cost of an async background round-trip and
-  // having to hide Oculist's own overlays before capture so they don't appear inside the
-  // lens.
-  //
-  // Two nested elements, not one clip-path'd transform: a clip-path on a transformed
-  // element scales along with the transform, so a circular mask applied to the same node
-  // being scale()'d stops being circular. The outer 'oc-beacon' div is the untransformed
-  // circular mask (overflow:hidden + border-radius:50%); the inner clone is the only thing
-  // that gets scale()'d, positioned so the match's own centre stays pinned at the lens
-  // centre while everything around it magnifies outward from that point.
-  function animateLens(rect) {
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-    if (searchRanges.length === 0 || activeIndex < 0 || activeIndex >= searchRanges.length) return;
+    // Absorption flash — an energy-transfer payoff for the arrowhead's arrival, sized to
+    // the match rect itself (not the arrow) and expanded a few px so the glow reads
+    // outside the text rather than only under it. delay: duration ties its start to the
+    // travel animation's own end, so it can never fire early even if this task's timing
+    // constants change independently later.
+    var flashPad = 6;
+    var flashLeft = rect.left + window.scrollX - flashPad;
+    var flashTop = rect.top + window.scrollY - flashPad;
+    var flashWidth = rect.width + flashPad * 2;
+    var flashHeight = rect.height + flashPad * 2;
 
-    var range = searchRanges[activeIndex];
-    if (!range) return;
-
-    var startNode;
-    try {
-      startNode = range.startContainer;
-    } catch (e) {
-      return;
+    var flash = document.createElement('div');
+    flash.className = 'oc-beacon oc-trail-flash';
+    var flashCss = [
+      'position:absolute',
+      'left:' + flashLeft + 'px', 'top:' + flashTop + 'px',
+      'width:' + flashWidth + 'px', 'height:' + flashHeight + 'px',
+      'border-radius:4px',
+      'background:' + color,
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ];
+    if (settings.performanceMode) {
+      // Lite Mode: the flash itself stays (it's the payoff), but the blurred glow — the
+      // expensive part — is dropped for a flat fill, the same box-shadow degrade other
+      // beacon effects use to keep Lite Mode cheap.
+    } else {
+      flashCss.push('box-shadow:0 0 ' + (18 * scale) + 'px ' + color + ', 0 0 ' + (6 * scale) + 'px ' + color);
     }
-    var matchParent = (startNode && startNode.nodeType === 3) ? startNode.parentElement : startNode;
-    if (!matchParent) return;
+    flash.style.cssText = flashCss.join(';');
+    document.documentElement.appendChild(flash);
 
-    // Walk up from the match's own inline parent to the nearest block-level ancestor
-    // (display !== 'inline') — magnifying just a single inline wrapper usually shows too
-    // little surrounding context to be useful. Capped: reaching body/html, or a candidate
-    // tall enough to be slow to clone and pointless to magnify (~1200px), falls back to the
-    // match's immediate parent element instead of climbing further.
-    var sourceEl = matchParent;
-    var candidate = matchParent;
-    var guard = 0;
-    while (candidate && candidate !== document.body && candidate !== document.documentElement && guard < 20) {
-      guard++;
-      var display;
-      try {
-        display = window.getComputedStyle(candidate).display;
-      } catch (e) {
-        break;
-      }
-      if (display && display !== 'inline') {
-        var candRect;
-        try {
-          candRect = candidate.getBoundingClientRect();
-        } catch (e) {
-          break;
-        }
-        if (candRect.height <= 1200) {
-          sourceEl = candidate;
-        }
-        break;
-      }
-      candidate = candidate.parentElement;
-    }
+    var flashDuration = getBeaconDuration(450);
+    var flashAnim = flash.animate([
+      { opacity: 0, transform: 'scale(1)' },
+      { opacity: 1, transform: 'scale(1.15)', offset: 0.35 },
+      { opacity: 0, transform: 'scale(1)' }
+    ], { duration: flashDuration, delay: duration, easing: 'ease-out', iterations: 1 });
 
-    // Never clone <body>/<html> itself — this also covers the case the walk above never
-    // gets a chance to run at all: if the match's own parent element already *is* <body>
-    // (text sitting directly in body, common on simple pages), the while loop's guard
-    // condition is false on entry, sourceEl stays at its initial value (matchParent ===
-    // body) and the height cap below would otherwise never see it. If body/html is the
-    // only candidate, degrade gracefully — decline to draw rather than clone the document.
-    if (!sourceEl || sourceEl === document.body || sourceEl === document.documentElement) return;
-
-    // Apply the ~1200px height cap unconditionally to whatever sourceEl was actually
-    // resolved to, not just to candidates found mid-walk — a huge clone is a real
-    // performance and visual problem regardless of which code path produced sourceEl.
-    var sourceElRect;
-    try {
-      sourceElRect = sourceEl.getBoundingClientRect();
-    } catch (e) {
-      return;
-    }
-    if (sourceElRect.height > 1200) return;
-
-    try {
-      var scale = getBeaconScale();
-      var r = 80 * scale;
-      var Z = 2;
-      var color = getEffectiveColors().beacon || '#fbbf24';
-
-      var mx = rect.left + rect.width / 2 + window.scrollX;
-      var my = rect.top + rect.height / 2 + window.scrollY;
-
-      var srcRect = sourceEl.getBoundingClientRect();
-      var srcDocLeft = srcRect.left + window.scrollX;
-      var srcDocTop = srcRect.top + window.scrollY;
-
-      var clone = sourceEl.cloneNode(true);
-
-      // Strip every id (root included) — duplicate ids in the live document break the host
-      // page's own CSS/JS and any getElementById() it runs while the lens is up.
-      clone.removeAttribute('id');
-      var idNodes = clone.querySelectorAll('[id]');
-      for (var i = 0; i < idNodes.length; i++) {
-        idNodes[i].removeAttribute('id');
-      }
-
-      // Never let the clone re-run side effects the live DOM already paid for: a cloned
-      // <iframe> reloads (real network cost, re-fired ads/trackers), <video>/<audio> can
-      // double-play, and <canvas> just renders blank anyway.
-      var toStrip = clone.querySelectorAll('script, iframe, video, audio, object, embed, canvas');
-      for (var j = 0; j < toStrip.length; j++) {
-        toStrip[j].remove();
-      }
-
-      var lens = document.createElement('div');
-      lens.className = 'oc-beacon';
-      // The magnified copy is inert and invisible to assistive tech — the real text is
-      // already on the page.
-      lens.setAttribute('aria-hidden', 'true');
-      var lensCss = [
-        'position:absolute',
-        'left:' + (mx - r) + 'px',
-        'top:' + (my - r) + 'px',
-        'width:' + (r * 2) + 'px',
-        'height:' + (r * 2) + 'px',
-        // border-box, not the alignment of the magnified content inside it — an abspos
-        // child's left/top resolve against the padding box either way, border-box or not.
-        // What this actually buys: the lens's own outer diameter is exactly 2r including
-        // the rim. The cost is a ~3px offset between the match's pinned point and the true
-        // geometric centre of the circle (half the 3px non-performance-mode border width);
-        // not worth changing behaviour over.
-        'box-sizing:border-box',
-        'border-radius:50%',
-        'overflow:hidden',
-        'pointer-events:none',
-        'z-index:2147483642',
-        'opacity:0'
-      ];
-      if (settings.performanceMode) {
-        lensCss.push('border:2px solid ' + color);
-      } else {
-        lensCss.push('border:3px solid ' + color);
-        lensCss.push('box-shadow:0 0 ' + (16 * scale) + 'px rgba(0,0,0,0.5), 0 0 ' + (6 * scale) + 'px ' + color);
-      }
-      lens.style.cssText = lensCss.join(';');
-
-      // Pin the match centre at the lens centre: the clone is offset so the match's own
-      // point inside it lands exactly at (r, r); its width is pinned to the source's own
-      // width (not the lens's narrow width, which would force it to reflow); margin is
-      // zeroed so an inherited default (e.g. a <p>'s own margin) can't shift it off that
-      // pinned point; and transform-origin sits at that same point so scale(Z) grows
-      // outward from it instead of from the clone's own corner.
-      clone.style.position = 'absolute';
-      clone.style.margin = '0';
-      clone.style.left = ((srcDocLeft - mx) + r) + 'px';
-      clone.style.top = ((srcDocTop - my) + r) + 'px';
-      clone.style.width = srcRect.width + 'px';
-      clone.style.transformOrigin = (mx - srcDocLeft) + 'px ' + (my - srcDocTop) + 'px';
-      clone.style.transform = 'scale(' + Z + ')';
-      clone.style.pointerEvents = 'none';
-
-      lens.appendChild(clone);
-      document.documentElement.appendChild(lens);
-
-      // Single pass, in then out — no loop, no repeat, no strobe (WCAG 2.3.1).
-      var duration = getBeaconDuration(1400);
-      var anim = lens.animate([
-        { opacity: 0, offset: 0 },
-        { opacity: 1, offset: 0.2 },
-        { opacity: 1, offset: 0.75 },
-        { opacity: 0, offset: 1 }
-      ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
-
-      anim.finished.then(function () {
-        lens.remove();
-      }).catch(function () {
-        lens.remove();
-      });
-    } catch (e) {
-      // Degrade silently — an exception mid-effect must never break the finder.
-    }
+    flashAnim.finished.then(function () {
+      flash.remove();
+    }).catch(function () {
+      flash.remove();
+    });
   }
 
   function animateLightning(rect) {
