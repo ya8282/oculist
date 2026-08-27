@@ -23,7 +23,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -125,7 +125,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
 
     await page.goto(origin);
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
 
@@ -144,7 +144,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   });
 
@@ -167,7 +167,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -209,7 +209,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
 
   async function waitForSettingsEcho(before) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
     });
   }
@@ -264,7 +264,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
   async function replay() {
     await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
   async function ringColors() {

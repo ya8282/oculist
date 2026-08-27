@@ -20,6 +20,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -92,7 +93,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   after(async () => {
@@ -132,7 +133,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
   // own notice, unaffected by whatever the previous test displayed.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
     await clearSavedLists();
     await openFinder();
   });
@@ -297,7 +298,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.strictEqual(afterAttempt.length, 50);
     assert.ok(!afterAttempt.some((l) => l.name === 'Overflow List'));
 
-    await page.waitForSelector(NOTICE_TEXT, { timeout: 5000 });
+    await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
     assert.strictEqual((await page.locator(NOTICE_TEXT).textContent()).trim(), CAP_MESSAGE);
   });
 
@@ -310,7 +311,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
     const afterAttempt = await callListSavedLists();
     assert.strictEqual(afterAttempt.length, 0);
 
-    await page.waitForSelector(NOTICE_TEXT, { timeout: 5000 });
+    await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
     assert.strictEqual((await page.locator(NOTICE_TEXT).textContent()).trim(), WRITE_FAILURE_MESSAGE);
   });
 
