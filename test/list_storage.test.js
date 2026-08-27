@@ -175,6 +175,16 @@ describe('Saved list storage (oc-list-<id>)', () => {
     );
   }
 
+  // Two categories, per oculist-dzi:
+  //  - UNIDENTIFIABLE (no usable id, no usable name, or not an object at all):
+  //    'oc-list-junk-string', 'oc-list-junk-null', 'oc-list-junk-bad-id' (numeric id),
+  //    'oc-list-junk-no-id'. Can never be rendered meaningfully — stays out of
+  //    listSavedLists() and stays uncounted by readListIndex().
+  //  - IDENTIFIABLE-but-malformed-terms (usable id + name, but terms isn't an array):
+  //    'oc-list-junk-bad-terms' (terms: 'nope'), 'oc-list-junk-null-terms'
+  //    (terms: null), 'oc-list-junk-missing-terms' (terms field absent entirely). All
+  //    three surface from listSavedLists() as zero-term entries and still count toward
+  //    the cap in readListIndex() — they're visible in the panel, so the count is honest.
   function seedJunk() {
     const batch = {
       'oc-list-good': { id: 'good', name: 'Good List', terms: ['alpha', 'beta'] },
@@ -182,7 +192,24 @@ describe('Saved list storage (oc-list-<id>)', () => {
       'oc-list-junk-null': null,
       'oc-list-junk-bad-id': { id: 42, name: 'Numeric id', terms: [] },
       'oc-list-junk-no-id': { name: 'Missing id field', terms: [] },
-      'oc-list-junk-bad-terms': { id: 'jbt', name: 'Terms not array', terms: 'nope' }
+      'oc-list-junk-bad-terms': { id: 'jbt', name: 'Terms not array', terms: 'nope' },
+      'oc-list-junk-null-terms': { id: 'jnt', name: 'Terms null', terms: null },
+      'oc-list-junk-missing-terms': { id: 'jmt', name: 'Terms missing' }
+    };
+    return evalInContentScript(
+      `new Promise((resolve) => chrome.storage.sync.set(${JSON.stringify(batch)}, resolve))`
+    );
+  }
+
+  // Only the unidentifiable half of seedJunk() above — used by the cap-accounting test
+  // below, which needs junk present that must NOT count toward MAX_SAVED_LISTS, without
+  // any identifiable-but-malformed entries (which DO count) muddying the count.
+  function seedUnidentifiableJunk() {
+    const batch = {
+      'oc-list-junk-string': 'not-an-object',
+      'oc-list-junk-null': null,
+      'oc-list-junk-bad-id': { id: 42, name: 'Numeric id', terms: [] },
+      'oc-list-junk-no-id': { name: 'Missing id field', terms: [] }
     };
     return evalInContentScript(
       `new Promise((resolve) => chrome.storage.sync.set(${JSON.stringify(batch)}, resolve))`
@@ -287,12 +314,139 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.strictEqual((await page.locator(NOTICE_TEXT).textContent()).trim(), WRITE_FAILURE_MESSAGE);
   });
 
-  test('listSavedLists() skips junk under the prefix instead of throwing', async () => {
+  // oculist-dzi amended this test (previously "listSavedLists() skips junk under the
+  // prefix instead of throwing", asserting length === 1 with only 'good' surviving —
+  // that assertion documented the OLD behaviour of dropping every malformed entry
+  // wholesale, rather than the "does not throw" contract it was actually meant to pin.
+  // Malformed-but-identifiable entries (usable id + name, garbage terms) no longer get
+  // dropped: they now surface as zero-term lists, matching the same disabled/badged-0
+  // treatment a legitimately empty list already gets (oculist-l6m.35). Only entries
+  // that can never be rendered at all (not an object, no usable id, no usable name)
+  // are still skipped outright.
+  test('listSavedLists() skips unidentifiable junk under the prefix instead of throwing, and surfaces identifiable-but-malformed entries as zero-term lists', async () => {
     await seedJunk();
 
     const lists = await callListSavedLists();
+    // 4 survive: 'good' plus the three identifiable-but-malformed-terms entries.
+    // 'oc-list-junk-string', 'oc-list-junk-null', 'oc-list-junk-bad-id' (numeric id),
+    // and 'oc-list-junk-no-id' are all unidentifiable and stay excluded, unchanged.
+    assert.strictEqual(lists.length, 4);
+    assert.deepStrictEqual(
+      lists.find((l) => l.id === 'good'),
+      { id: 'good', name: 'Good List', terms: ['alpha', 'beta'] }
+    );
+    assert.deepStrictEqual(
+      lists.find((l) => l.id === 'jbt'),
+      { id: 'jbt', name: 'Terms not array', terms: [] }
+    );
+    assert.deepStrictEqual(
+      lists.find((l) => l.id === 'jnt'),
+      { id: 'jnt', name: 'Terms null', terms: [] }
+    );
+    assert.deepStrictEqual(
+      lists.find((l) => l.id === 'jmt'),
+      { id: 'jmt', name: 'Terms missing', terms: [] }
+    );
+  });
+
+  // The "does not consume a slot" half of oculist-dzi's done-criteria: unidentifiable
+  // junk under the prefix must not silently eat into the 50-list cap. Seed junk that
+  // readListIndex() cannot count (per the identifiable-entry guard above), then confirm
+  // the user can still save a full 50 real lists on top of it, and only the 51st real
+  // list hits the cap.
+  test('unidentifiable junk under the prefix does not count toward the 50-list cap', async () => {
+    await seedUnidentifiableJunk();
+    await seedLists(49);
+
+    // The 50th real list still succeeds — the junk above isn't counted, so this isn't
+    // actually the 51st slot from readListIndex()'s point of view.
+    const fiftieth = await callSaveList('Fiftieth List', ['x']);
+    assert.strictEqual(fiftieth.ok, true);
+
+    // The 51st real list now hits the real cap.
+    const overflow = await callSaveList('Overflow List', ['x']);
+    assert.strictEqual(overflow.ok, false);
+    assert.strictEqual(overflow.reason, 'cap');
+
+    // listSavedLists() itself never counted the junk either — confirms the two read
+    // paths (readListIndex's cap count and listSavedLists' render list) still agree
+    // with each other for what "identifiable" means, unchanged by this fix.
+    const lists = await callListSavedLists();
+    assert.strictEqual(lists.length, 50);
+  });
+
+  // Covers readListIndex()'s three guard clauses individually (the review follow-up
+  // after the initial oculist-dzi pass grouped them into a single junk-batch test
+  // above, which didn't exercise each clause on its own).
+  //
+  // 1. A usable id paired with a non-string name: identifiable-by-id but not by name,
+  // so it still doesn't count toward the cap or render — but per the review follow-up,
+  // readListIndex() now keeps its id in the collision-avoidance list regardless (the
+  // count/name gate and the ids-push are no longer tied together). That collision
+  // avoidance is generateListId()'s internal input, not observable from outside: none
+  // of the four window.__oc* hooks (listSavedLists/saveList/renameList/deleteList)
+  // exposes readListIndex() or its `ids` array directly, and ids are always generated
+  // via Date.now().toString(36) + Math.random()...slice(2,10) (content.js:223), so a
+  // real collision with a hand-authored id like 'x' can't be forced from a black-box
+  // test without adding a new test-only hook — which the reviewer asked not to do. Not
+  // asserted here for that reason; only the observable half (cap + panel exclusion) is.
+  test('an entry with a usable id but a non-string name does not count toward the 50-list cap, and stays out of the saved-lists panel', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-badname': { id: 'x', name: 42, terms: ['a'] }}," +
+      " resolve))"
+    );
+    await seedLists(49);
+
+    // The 50th real list still succeeds — the malformed-name entry above isn't counted.
+    const fiftieth = await callSaveList('Fiftieth List', ['y']);
+    assert.strictEqual(fiftieth.ok, true);
+
+    // The 51st real list now hits the real cap.
+    const overflow = await callSaveList('Overflow List', ['z']);
+    assert.strictEqual(overflow.ok, false);
+    assert.strictEqual(overflow.reason, 'cap');
+
+    // A non-string name isn't renderable either — stays out of the panel.
+    const lists = await callListSavedLists();
+    assert.strictEqual(lists.length, 50);
+    assert.ok(!lists.some((l) => l.id === 'x'));
+  });
+
+  // 2. An empty-string id is treated the same as no id at all — unidentifiable,
+  // excluded from the panel, and not counted toward the cap.
+  test('an entry with an empty-string id is treated as unidentifiable: excluded from the panel and not counted toward the cap', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-emptyid': { id: '', name: 'Empty Id', terms: ['a'] }}," +
+      " resolve))"
+    );
+    await seedLists(49);
+
+    const fiftieth = await callSaveList('Fiftieth List', ['y']);
+    assert.strictEqual(fiftieth.ok, true);
+
+    const overflow = await callSaveList('Overflow List', ['z']);
+    assert.strictEqual(overflow.ok, false);
+    assert.strictEqual(overflow.reason, 'cap');
+
+    const lists = await callListSavedLists();
+    assert.strictEqual(lists.length, 50);
+    assert.ok(!lists.some((l) => l.name === 'Empty Id'));
+  });
+
+  // 3. terms: {} — named in the comment above listSavedLists() as an example malformed
+  // shape sanitizeListTerms() reduces to zero terms, but nothing exercised it directly.
+  test('listSavedLists() treats a non-array object terms value ({}) the same as any other malformed terms — zero terms, no throw', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-objterms': { id: 'objterms', name: 'Object Terms', terms: {} }}," +
+      " resolve))"
+    );
+
+    const lists = await callListSavedLists();
     assert.strictEqual(lists.length, 1);
-    assert.deepStrictEqual(lists[0], { id: 'good', name: 'Good List', terms: ['alpha', 'beta'] });
+    assert.deepStrictEqual(lists[0], { id: 'objterms', name: 'Object Terms', terms: [] });
   });
 
   // oculist-l6m.26: a 0-term saved list is useless to create and dangerous to load —
