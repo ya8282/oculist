@@ -57,14 +57,39 @@ describe('Low Vision overlays survive a window resize', () => {
     await popup.goto(`chrome-extension://${sw.url().split('/')[2]}/popup.html`);
     await popup.waitForSelector('#vision-profile');
     await popup.selectOption('#vision-profile', 'low-vision');
-    await popup.waitForTimeout(300);
+    // Wait for the write to actually land before tearing the popup page down, instead of
+    // guessing how long the async chrome.storage.sync.set() call takes.
+    await popup.waitForFunction(
+      () =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
+      null,
+      { timeout: 5000 }
+    );
     await popup.close();
 
     page = await ctx.newPage();
     await page.goto(origin);
     await page.waitForLoadState('load');
-    await page.waitForTimeout(500);
   });
+
+  // No CDP session in this file, so there is no isolatedContextId to poll for injection
+  // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+  // otherwise silently swallow) until the input actually appears, instead of guessing a
+  // fixed delay.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   after(async () => {
     if (ctx) await ctx.close();
@@ -88,21 +113,53 @@ describe('Low Vision overlays survive a window resize', () => {
     }, LABEL);
 
   test('label tracks the match after the viewport narrows', async () => {
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder();
     await page.locator(INPUT).type('quarklet', { delay: 30 });
-    await page.waitForTimeout(400);
+    // Wait for the draft debounce to actually land (a real match count) before pressing
+    // Enter, instead of guessing its duration.
+    await page.waitForFunction(
+      () => {
+        const root = document.getElementById('oc-wrap');
+        const count = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-count') : null;
+        return !!count && /of \d+/.test(count.textContent);
+      },
+      null,
+      { timeout: 5000 }
+    );
     await page.keyboard.press('Enter');
+    // drawActiveMatchLabel() and the beacon effect are both drawn from the same
+    // synchronous animate() call (deferred by highlightActiveRange()'s own setTimeout) —
+    // by the time the label exists, that whole draw has already landed, so no separate
+    // wait is needed to "outlast" anything before reading its position.
     await page.waitForSelector(LABEL, { timeout: 5000 });
-    await page.waitForTimeout(1200); // outlast the beacon; the overlays persist
 
     const before = await offset();
     assert.ok(before, 'expected the Low Vision match label to be drawn');
     assert.ok(Math.abs(before.dx) < 6, `label should start centered on the match, dx=${before.dx}`);
 
     await page.setViewportSize({ width: 700, height: 800 });
-    // 100ms resize debounce in content.js, plus the 250ms label fade-in.
-    await page.waitForTimeout(900);
+    // Poll for the real post-resize state (the 100ms resize debounce, plus the label's
+    // own fade-in) rather than guessing "debounce + fade-in" as a wall-clock number.
+    await page.waitForFunction(
+      (args) => {
+        const target = document.getElementById('target');
+        return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) > 20;
+      },
+      { beforeLeft: before.matchLeft },
+      { timeout: 5000 }
+    );
+    await page.waitForFunction(
+      (labelSel) => {
+        const label = document.querySelector(labelSel);
+        const target = document.getElementById('target');
+        if (!label || !target) return false;
+        const l = label.getBoundingClientRect();
+        const t = target.getBoundingClientRect();
+        return Math.abs((l.left + l.width / 2) - (t.left + t.width / 2)) < 6;
+      },
+      LABEL,
+      { timeout: 5000 }
+    );
 
     const after = await offset();
     assert.ok(after, 'label should still exist after the resize');

@@ -64,14 +64,18 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     // eye-strain is the one profile getProfileConstraints() locks both the effects AND
     // colours sections for, so a spurious drop to 'custom' is directly observable via
     // either lock badge, not just the dropdown's own value.
+    //
+    // No wait after selectOption(): the 'change' listener's DOM updates (dropdown value,
+    // lock badges) run synchronously, before its own `await saveSettings()` — only the
+    // storage write itself is async, and only readStoredSettings() below needs that to
+    // have landed, so it waits for the write directly instead of every selectOption()
+    // guessing a settle window it doesn't need.
     await popup.selectOption('#vision-profile', 'eye-strain');
-    await popup.waitForTimeout(200);
     assert.strictEqual(await popup.locator('#vision-profile').inputValue(), 'eye-strain');
 
     // Magnifier is deliberately absent from every PRESETS entry (oculist-l6m.39) — toggling
     // it must not force the profile to 'custom' (oculist-l6m.40).
     await popup.selectOption('#magnifier', 'true');
-    await popup.waitForTimeout(200);
 
     assert.strictEqual(
       await popup.locator('#vision-profile').inputValue(),
@@ -89,7 +93,16 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     assert.strictEqual(locked.colors, true, 'the colours section must stay locked to the surviving Eye Strain profile');
 
     // Persisted storage must agree with the live dropdown, and the magnifier toggle itself
-    // must still have taken effect.
+    // must still have taken effect — wait for the async chrome.storage.sync.set() write to
+    // actually land before reading it back.
+    await popup.waitForFunction(
+      () =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionSettings && d['oc-settings'].visionSettings.magnifier === true)),
+      null,
+      { timeout: 5000 }
+    );
     const stored = await readStoredSettings(popup);
     assert.strictEqual(stored.visionProfile, 'eye-strain', 'persisted visionProfile must still be eye-strain');
     assert.strictEqual(stored.visionSettings.magnifier, true, 'the magnifier toggle itself must still take effect');
@@ -101,14 +114,12 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     const popup = await openPopup();
 
     await popup.selectOption('#vision-profile', 'low-vision');
-    await popup.waitForTimeout(200);
     assert.strictEqual(await popup.locator('#vision-profile').inputValue(), 'low-vision');
 
     // beaconSize is a key every PRESETS entry sets, so touching it directly is a genuine
     // divergence from the preset and must still drop the profile to 'custom', exactly as
     // it did before this fix — proving the fix did not make forcing-to-custom a dead path.
     await popup.selectOption('#beacon-size', 's');
-    await popup.waitForTimeout(200);
 
     assert.strictEqual(
       await popup.locator('#vision-profile').inputValue(),
@@ -116,6 +127,13 @@ describe('Vision profile survives ungoverned setting toggles', () => {
       'touching a preset-governed setting must still force the profile to custom'
     );
 
+    // Wait for the async chrome.storage.sync.set() write to actually land before reading
+    // it back.
+    await popup.waitForFunction(
+      () => chrome.storage.sync.get('oc-settings').then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'custom')),
+      null,
+      { timeout: 5000 }
+    );
     const stored = await readStoredSettings(popup);
     assert.strictEqual(stored.visionProfile, 'custom');
 

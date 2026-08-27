@@ -12,8 +12,10 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 const FILLER = 'filler words to fill the page and push it past the no-matches notice threshold. ';
 
@@ -79,18 +81,41 @@ describe('Chip row and working-list state', () => {
     });
 
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag instead of guessing
+    // how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -112,17 +137,55 @@ describe('Chip row and working-list state', () => {
   // leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
+    // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
+    // resolves asynchronously after open — poll for the chip row to actually reflect the
+    // now-empty list, rather than guessing how long that round trip takes.
+    await waitForChipCount(0);
   });
 
+  function waitForChipCount(expected, opts) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
+  }
+
   async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    // Enter's chip-add path (addChipTerm() -> performListSearch(), or the existing-chip
+    // re-activation path) runs synchronously and ends with renderChipRow() as its very
+    // last statement, so the chip row reflecting the expected shape is a genuine proxy for
+    // "the whole scan (counts, highlight registries) finished", not just "a chip exists".
+    // A cap hit (10-term or 100-char) is a third legitimate outcome: addChipTerm() rejects
+    // the term outright and calls showNotice() synchronously instead of touching the chip
+    // row at all — accept that too, so addTerm() stays usable for the cap tests' own
+    // deliberately-rejected term.
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+        const last = chips[chips.length - 1];
+        // Re-adding an already-present term activates it (via its chip's own .active
+        // class) instead of appending a new one, so the chip count can legitimately stay
+        // the same — accept either a grown row with this term last, or this term's
+        // existing chip becoming active.
+        if (chips.length === expected && last && last.textContent === term) return true;
+        if (chips.some((el) => el.textContent === term && el.classList.contains('active'))) return true;
+        return !!(root && root.shadowRoot && root.shadowRoot.querySelector('.oc-notice'));
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
   }
 
   function chipTerms() {
@@ -146,13 +209,61 @@ describe('Chip row and working-list state', () => {
   // requires the input's debounce to have already converged (searchRanges/highlights
   // already reflect the active chip) *before* the chip-removing Backspace, exactly like a
   // real user backspacing through the chip's own leftover text one key at a time.
+  //
+  // Rather than guess a duration, this waits on the exact event that must have happened
+  // for convergence to be real: the input debounce's own setTimeout callback actually
+  // firing. Monkeypatches window.setTimeout inside the content script's own isolated
+  // world (same technique list_menu.test.js's own mid-debounce test uses) to count calls
+  // scheduled at either debounce delay (150ms normal, 400ms under Lite Mode — matched so
+  // this could never go vacuously green if Lite Mode ever became the default) that have
+  // actually executed.
+  async function armDebounceFireCounter() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocDebounceFiresInstalled) {
+          window.__ocDebounceFiresInstalled = true;
+          window.__ocDebounceFires = 0;
+          var orig = window.setTimeout;
+          window.setTimeout = function (fn, delay) {
+            if (delay === 150 || delay === 400) {
+              var wrapped = function () {
+                window.__ocDebounceFires++;
+                return fn.apply(this, arguments);
+              };
+              var args = [wrapped, delay].concat(Array.prototype.slice.call(arguments, 2));
+              return orig.apply(window, args);
+            }
+            return orig.apply(window, arguments);
+          };
+        }
+        return window.__ocDebounceFires;
+      })()
+    `);
+  }
+
   async function emptyInputByBackspace() {
     await page.locator(INPUT).focus();
     const value = await page.locator(INPUT).inputValue();
+    if (value.length === 0) return;
+    const before = await armDebounceFireCounter();
     for (let i = 0; i < value.length; i++) {
       await page.keyboard.press('Backspace');
     }
-    await page.waitForTimeout(250);
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocDebounceFires', (v) => v > before, {
+      timeout: 5000,
+      message: 'the input debounce triggered by backspacing to empty never fired',
+    });
+  }
+
+  // The final Backspace on an already-empty, focused input removes the last chip via
+  // removeLastChip() -> removeChipAt() -> performListSearch(), all synchronous and ending
+  // in renderChipRow() — so the chip row shrinking by one is a genuine proxy for the whole
+  // removal (registries included) having landed.
+  async function backspaceRemoveLastChip() {
+    await emptyInputByBackspace();
+    const before = await page.locator(CHIP_TERM).count();
+    await page.keyboard.press('Backspace');
+    await waitForChipCount(before - 1);
   }
 
   // Reads the real oculist-match/oculist-dim-match CSS Custom Highlight registries via
@@ -200,9 +311,7 @@ describe('Chip row and working-list state', () => {
     await addTerm('two');
     assert.deepStrictEqual(await chipTerms(), ['one', 'two']);
 
-    await emptyInputByBackspace();
-    await page.keyboard.press('Backspace');
-    await page.waitForTimeout(150);
+    await backspaceRemoveLastChip();
 
     assert.deepStrictEqual(await chipTerms(), ['one']);
     assert.strictEqual(await activeChipTerm(), 'one', 'removing the active last chip should activate the previous one');
@@ -220,9 +329,7 @@ describe('Chip row and working-list state', () => {
     assert.strictEqual(await activeChipTerm(), 'zenithquokka');
     assert.strictEqual(await highlightCount('oculist-match'), 3, 'sanity check: zenithquokka must have 3 real matches before removal');
 
-    await emptyInputByBackspace();
-    await page.keyboard.press('Backspace');
-    await page.waitForTimeout(150);
+    await backspaceRemoveLastChip();
 
     assert.deepStrictEqual(await chipTerms(), [], 'the only chip must be gone');
     assert.strictEqual(await activeChipTerm(), null, 'no chip remains to be active');
@@ -246,9 +353,7 @@ describe('Chip row and working-list state', () => {
     assert.strictEqual(await activeChipTerm(), 'brindlefalcon');
     assert.strictEqual(await highlightCount('oculist-match'), 2, 'sanity check: brindlefalcon must have 2 real matches before removal');
 
-    await emptyInputByBackspace();
-    await page.keyboard.press('Backspace');
-    await page.waitForTimeout(150);
+    await backspaceRemoveLastChip();
 
     assert.deepStrictEqual(await chipTerms(), ['zenithquokka'], 'only the removed chip should be gone');
     assert.strictEqual(await activeChipTerm(), 'zenithquokka', 'the previous chip should become active');
@@ -274,7 +379,7 @@ describe('Chip row and working-list state', () => {
     await page.locator(CHIP_TERM).first().click();
     assert.strictEqual(await activeChipTerm(), 'one');
     await page.locator(CHIP_REMOVE).first().click();
-    await page.waitForTimeout(150);
+    await waitForChipCount(2);
 
     assert.deepStrictEqual(await chipTerms(), ['two', 'three']);
     const active = await activeChipTerm();
@@ -335,11 +440,14 @@ describe('Chip row and working-list state', () => {
     // page trips checkSiteOverride()'s zero-matches branch — PAGE's FILLER text pushes
     // body length well past its >500-char threshold — raising the 'site-override' notice.
     await page.locator(INPUT).fill('nonexistentxyzzyterm');
-    await page.waitForTimeout(250);
+    await page.waitForSelector(NOTICE_TEXT, { timeout: 5000 });
     assert.match(await page.locator(NOTICE_TEXT).textContent(), /No matches found/);
 
     await page.locator(NOTICE_CLOSE).click();
-    await page.waitForTimeout(100);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || !root.shadowRoot.querySelector('.oc-notice');
+    }, null, { timeout: 5000 });
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the site-override notice must actually dismiss');
 
     await emptyInputByBackspace();
@@ -383,10 +491,20 @@ describe('Chip row and working-list state', () => {
     );
 
     await page.locator(NOTICE_CLOSE).click();
-    await page.waitForTimeout(100);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || !root.shadowRoot.querySelector('.oc-notice');
+    }, null, { timeout: 5000 });
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the term-cap notice must actually dismiss');
 
-    await addTerm('quarklet');
+    // Not addTerm(): this Enter is expected to produce genuinely NO observable DOM change
+    // — the cap rejects it (chip row untouched) and showNotice() itself no-ops silently
+    // for an already-dismissed notice key (that's exactly what this test is proving), so
+    // there is nothing to poll for. addChipTerm() has no awaits/timers of its own — the
+    // whole keydown handler runs synchronously — so by the time press('Enter') resolves,
+    // that (non-)effect has already fully landed; no wait is needed either way.
+    await page.locator(INPUT).fill('quarklet');
+    await page.keyboard.press('Enter');
     assert.strictEqual((await chipTerms()).length, 10, 'still refused past the cap');
     assert.strictEqual(
       await page.locator(NOTICE).count(),
@@ -401,7 +519,7 @@ describe('Chip row and working-list state', () => {
     // upcoming Ctrl+F below just refocuses the existing bar instead of remounting it,
     // and loadWorkList() only ever runs from buildUI() on mount.
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
 
     // Seed chrome.storage.session directly (bypassing any in-page UI) with terms that do
     // not exist anywhere on the page — if a scan ran against them, both the count and a
@@ -411,9 +529,17 @@ describe('Chip row and working-list state', () => {
         "{ 'oc-worklist': { terms: ['gamma', 'delta'], activeIndex: 1 } }, resolve))"
     );
 
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(400); // let the async loadWorkList round trip land
+    await openFinder();
+    // loadWorkList() (chrome.storage.session.get) resolves asynchronously after open —
+    // poll for the chip row to actually reflect the restored list, rather than guessing
+    // how long that round trip takes.
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const chips = root && root.shadowRoot
+        ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent)
+        : [];
+      return JSON.stringify(chips) === JSON.stringify(['gamma', 'delta']);
+    }, null, { timeout: 5000 });
 
     assert.deepStrictEqual(await chipTerms(), ['gamma', 'delta']);
     assert.strictEqual(await activeChipTerm(), 'delta');

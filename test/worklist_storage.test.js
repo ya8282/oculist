@@ -67,10 +67,29 @@ describe('Working-list session storage (oc-worklist)', () => {
     });
 
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    await page.waitForTimeout(500);
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag instead of guessing
+    // how long injection takes.
+    {
+      const deadline = Date.now() + 5000;
+      while (!isolatedContextId) {
+        if (Date.now() > deadline) throw new Error('never observed the content script isolated execution context');
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+    }
     // Confirms the content script (and its window.__ocLoadWorkList/__ocSaveWorkList
-    // hooks) has actually mounted before any test tries to reach into its world.
-    await page.keyboard.press('Control+f');
+    // hooks) has actually mounted before any test tries to reach into its world. Retry
+    // Control+f itself (a keypress a not-yet-attached listener would otherwise silently
+    // swallow) until the input actually appears, instead of trusting a single press.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        break;
+      } catch (e) {
+        // keep retrying
+      }
+    }
     await page.waitForSelector(INPUT, { timeout: 5000 });
 
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
@@ -117,14 +136,29 @@ describe('Working-list session storage (oc-worklist)', () => {
     const result = await evalInContentScript(
       '(' +
         function () {
-          return new Promise((resolve) => {
+          return new Promise((resolve, reject) => {
             window.__ocSaveWorkList({ terms: ['alpha', 'beta'], activeIndex: 1 });
             // saveWorkList has no completion callback by design (its signature is
-            // saveWorkList(list)) — give the underlying chrome.storage.session.set a
-            // moment to land before reading it back.
-            setTimeout(() => {
-              window.__ocLoadWorkList((loaded) => resolve(loaded));
-            }, 300);
+            // saveWorkList(list)) — poll the underlying chrome.storage.session write
+            // directly until it actually lands, instead of guessing how long the async
+            // set() call takes, before reading it back through loadWorkList. A generous
+            // deadline: chrome.storage's IPC round trip to the extension/browser process
+            // can lag well past a same-process JS timer under heavy CPU contention.
+            var deadline = Date.now() + 15000;
+            (function poll() {
+              chrome.storage.session.get('oc-worklist', function (data) {
+                var stored = data && data['oc-worklist'];
+                if (stored && stored.terms && stored.terms.length === 2) {
+                  window.__ocLoadWorkList(function (loaded) { resolve(loaded); });
+                  return;
+                }
+                if (Date.now() > deadline) {
+                  reject(new Error('chrome.storage.session write from saveWorkList() never landed'));
+                  return;
+                }
+                setTimeout(poll, 30);
+              });
+            })();
           });
         }.toString() +
         ')()'

@@ -15,8 +15,10 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 // Known, hand-verified occurrence counts (substring match, same algorithm findRanges
 // uses): "cat" appears 7 times total (4 standalone + 3 as the prefix of "cats"), "cats"
@@ -80,18 +82,41 @@ describe('performListSearch() and per-term chip counts', () => {
     });
 
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag the CDP listener
+    // above sets, instead of guessing how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinderRetry();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinderRetry() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -113,17 +138,90 @@ describe('performListSearch() and per-term chip counts', () => {
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinderRetry();
+    // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
+    // resolves asynchronously after open — poll for the chip row to actually reflect the
+    // now-empty list, rather than guessing how long that round trip takes.
+    await waitForChipCount(0);
   });
 
   async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    // Enter's chip-add path (addChipTerm() -> performListSearch()) runs synchronously and
+    // ends with renderChipRow() as its very last statement, so the chip row reflecting the
+    // new term is a genuine proxy for "the whole scan (counts, highlight registries)
+    // finished", not just "the chip node exists".
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
+  }
+
+  function waitForChipCount(expected, opts) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
+  }
+
+  // Clicking a chip re-runs performListSearch() synchronously and ends by re-rendering the
+  // chip row with the clicked chip's own '.active' class — waiting on that class is a
+  // proxy for the whole re-scan (registries and every chip's count included) having landed.
+  async function clickChip(index) {
+    await page.locator(CHIP_TERM).nth(index).click();
+    await page.waitForFunction(
+      (i) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+        return !!chips[i] && chips[i].classList.contains('active');
+      },
+      index,
+      { timeout: 5000 }
+    );
+  }
+
+  // Arm a probe listener inside the content script's own isolated world *before* changing
+  // a setting via the popup: chrome.storage.onChanged fires every listener registered
+  // against that same document for the same event, so observing OUR listener fire is a
+  // direct proxy for content.js's own oc-settings listener (registered first, at page load)
+  // having *also* already run — including its synchronous rescan — not just
+  // "chrome.storage.sync.set() resolved", which is all a wait from the popup's own
+  // separate context could prove.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before, opts) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
+      timeout: 5000,
+      message: 'oc-settings change never echoed into the content script',
+      ...opts,
+    });
   }
 
   // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), the same path
@@ -134,13 +232,37 @@ describe('performListSearch() and per-term chip counts', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
     const checked = await popup.isChecked('#toggle-lite-mode');
+    if (checked === enabled) {
+      await popup.close();
+      await page.bringToFront();
+      return;
+    }
+
+    const before = await armSettingsEcho();
+
     // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
     // <label> (the actionable, visible element) instead of the input.
-    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
-    await popup.waitForTimeout(300);
+    await popup.click('label[for="toggle-lite-mode"]');
+
+    // saveSettings() is async (awaits chrome.storage.sync.set) and toggleLiteMode's
+    // 'change' listener is not awaited by Playwright's click() — wait for the write to
+    // actually land before tearing the popup page down, instead of guessing how long it
+    // takes.
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
+      enabled,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
+
+    // ...then wait for that same write to echo into content.js's own onChanged listener
+    // (and, downstream of it, performListSearch()'s synchronous rescan) instead of a fixed
+    // settle window.
+    await waitForSettingsEcho(before);
   }
 
   function chipTerms() {
@@ -167,8 +289,7 @@ describe('performListSearch() and per-term chip counts', () => {
 
     // Re-activating a chip via a click re-scans the whole list in one performListSearch()
     // call and keeps every chip's count correct, not just the one that was clicked.
-    await page.locator(CHIP_TERM).nth(0).click();
-    await page.waitForTimeout(250);
+    await clickChip(0);
 
     assert.deepStrictEqual(
       await chipCounts(),
@@ -183,8 +304,7 @@ describe('performListSearch() and per-term chip counts', () => {
 
     // Clicking a different chip re-scans the whole list again and keeps every count
     // correct, not just the newly active one.
-    await page.locator(CHIP_TERM).nth(2).click(); // 'dog'
-    await page.waitForTimeout(250);
+    await clickChip(2); // 'dog'
     assert.deepStrictEqual(await chipCounts(), ['7', '3', '1', '0']);
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '0 of 1');
   });
@@ -228,7 +348,7 @@ describe('performListSearch() and per-term chip counts', () => {
     assert.deepStrictEqual(await chipTerms(), ['solo']);
 
     await page.locator(CHIP_REMOVE).first().click();
-    await page.waitForTimeout(150);
+    await waitForChipCount(0);
 
     assert.deepStrictEqual(await chipTerms(), [], 'the chip must actually be gone');
 
@@ -277,8 +397,12 @@ describe('performListSearch() and per-term chip counts', () => {
     // and the 3-chip row are byte-for-byte identical for both measurements).
     const before1 = await evalInContentScript('window.__ocGCSCalls');
     await page.locator(INPUT).fill('no-such-term-zyxwvut');
-    await page.waitForTimeout(400); // clears the 150ms/400ms debounce
-    const after1 = await evalInContentScript('window.__ocGCSCalls');
+    // Wait on the exact counter this test measures instead of guessing the 150ms/400ms
+    // debounce window — the debounce firing is precisely what makes it move.
+    const after1 = await waitForContentScriptValue(evalInContentScript, 'window.__ocGCSCalls', (v) => v > before1, {
+      timeout: 5000,
+      message: 'draft-typing debounce never fired a buildPageIndex() call',
+    });
     const baselineCalls = after1 - before1;
     assert.ok(baselineCalls > 0, 'the baseline single-buildPageIndex call made no getComputedStyle calls at all — instrumentation is broken');
 
@@ -286,8 +410,10 @@ describe('performListSearch() and per-term chip counts', () => {
     // 3-term working list and the identical page/chip-row DOM used above.
     const before3 = await evalInContentScript('window.__ocGCSCalls');
     await page.locator(CHIP_TERM).nth(0).click();
-    await page.waitForTimeout(250);
-    const after3 = await evalInContentScript('window.__ocGCSCalls');
+    const after3 = await waitForContentScriptValue(evalInContentScript, 'window.__ocGCSCalls', (v) => v > before3, {
+      timeout: 5000,
+      message: 'chip-click performListSearch() never fired a buildPageIndex() call',
+    });
     const listCalls = after3 - before3;
 
     // If performListSearch() called buildPageIndex() once per term (a bug) instead of
@@ -321,8 +447,7 @@ describe('performListSearch() and per-term chip counts', () => {
       // Activating 'cat' re-scans the whole list; 'cat' is now the active term, so it
       // always gets an exact findRanges() scan (visibility-filtered) regardless of Lite
       // Mode — the stale inflated count must not survive activation.
-      await page.locator(CHIP_TERM).nth(0).click();
-      await page.waitForTimeout(250);
+      await clickChip(0);
 
       const countsAfterActivation = await chipCounts();
       assert.strictEqual(
@@ -385,7 +510,6 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
 
     page = await ctx.newPage();
     await page.goto(origin);
-    await page.waitForTimeout(300);
   });
 
   after(async () => {
@@ -398,27 +522,69 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
     const checked = await popup.isChecked('#toggle-lite-mode');
+    if (checked === enabled) {
+      await popup.close();
+      await page.bringToFront();
+      return;
+    }
     // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
     // <label> (the actionable, visible element) instead of the input.
-    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
-    await popup.waitForTimeout(300);
+    await popup.click('label[for="toggle-lite-mode"]');
+    // saveSettings() is async (awaits chrome.storage.sync.set) and toggleLiteMode's
+    // 'change' listener is not awaited by Playwright's click() — wait for the write to
+    // actually land before tearing the popup page down, instead of guessing how long it
+    // takes. (No CDP session in this describe to also confirm the content script's own
+    // onChanged echo, unlike the sibling describe above — but Lite Mode here is a fixture
+    // speed optimisation, not something any assertion below depends on for correctness:
+    // findRanges()/countMatchesOnly() share the same 999-per-term cap either way.)
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
+      enabled,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
   }
 
   async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
     await page.locator(INPUT).fill(term);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(400);
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
+  }
+
+  // The service worker/content script can still be mid-injection right after navigation,
+  // especially under heavy load — retry Control+f (a keypress a not-yet-attached listener
+  // would otherwise silently swallow) until the input actually appears, instead of
+  // guessing a fixed injection delay up front.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
   }
 
   test('exceeding the 2000-match total cap stops materialising further terms, fires the notice, and never starves the active term', async () => {
     await setLiteMode(true);
     try {
-      await page.keyboard.press('Control+f');
-      await page.waitForSelector(INPUT, { timeout: 5000 });
-      await page.waitForTimeout(150);
+      await openFinder();
 
       await addTerm('zzbravo');
       await addTerm('zzcharlie');

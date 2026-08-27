@@ -246,8 +246,10 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
     // The input still holds 'zebra' (Enter never clears it) and 'zebra' is already the
     // active chip, so this Enter commits nothing — it is exactly the "second Enter" that
     // used to fall through to findNext() -> performSearch().
+    // findNext() is entirely synchronous when searchRanges is empty (it sets countEl
+    // and returns early, with no deferred draw) — no wait is needed between the keypress
+    // and reading the result back.
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(150);
 
     assert.strictEqual(
       await registryPresent('oculist-dim-match'),
@@ -260,7 +262,6 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
     // Ctrl+G drives the exact same findNext() path as Enter's fall-through. Confirm it
     // too leaves the dim registry alone.
     await page.keyboard.press('Control+g');
-    await page.waitForTimeout(150);
 
     assert.strictEqual(await registryPresent('oculist-dim-match'), true);
     const dimAfterCtrlG = await rangeTexts('oculist-dim-match');
