@@ -2752,7 +2752,15 @@
       while (child) {
         if (child.nodeType === 3) {
           var parent = child.parentElement || (child.parentNode && child.parentNode.host);
-          if (parent && !SKIP_TAGS[parent.tagName] && !parent.classList.contains('oc-beacon')) {
+          // oculist-hf6: collapsed from an ad-hoc oc-beacon classList check into the
+          // shared helper, so this can't silently diverge if isOculistNode() gains a
+          // marker. Behaviourally identical: the helper matches more (oc-wrap,
+          // oc-global-highlight-styles, oc-viewport-marker), but none of it is reachable
+          // here — the element branch below already refuses to descend into any Oculist
+          // node, traversal roots at document.body while markers and the style tag mount
+          // outside it, and SKIP_TAGS already excludes STYLE. Dead defense, kept for the
+          // day descent-blocking changes.
+          if (parent && !SKIP_TAGS[parent.tagName] && !isOculistNode(parent)) {
             var nodeStyle = window.getComputedStyle(parent);
             if (nodeStyle && nodeStyle.display !== 'none' && nodeStyle.visibility !== 'hidden') {
               var content = child.textContent;
