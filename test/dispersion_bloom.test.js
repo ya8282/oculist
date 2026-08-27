@@ -343,7 +343,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     );
 
     // animateDispersion() schedules its own container removal via
-    // getBeaconDuration(2200) — poll for it to actually happen instead of guessing the
+    // getBeaconDuration(2900) — poll for it to actually happen instead of guessing the
     // exact duration.
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 8000 });
   });

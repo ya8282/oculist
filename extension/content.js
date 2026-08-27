@@ -981,12 +981,12 @@
     var leftArrow = document.createElement('div');
     leftArrow.className = 'oc-beacon';
     leftArrow.textContent = '▶';
-    var arrowSize = Math.max(20, 24 * scale);
+    var arrowSize = Math.max(30, 36 * scale);
     leftArrow.style.cssText = [
       'position:absolute',
-      'left:' + (x - 36 * scale) + 'px',
+      'left:' + (x - 51 * scale) + 'px',
       'top:' + (y + h/2 - arrowSize/2) + 'px',
-      'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+      'width:' + (45 * scale) + 'px', 'height:' + arrowSize + 'px',
       'line-height:' + arrowSize + 'px',
       'font-size:' + arrowSize + 'px',
       'font-weight:bold',
@@ -1005,7 +1005,7 @@
       'position:absolute',
       'left:' + (x + w + 6 * scale) + 'px',
       'top:' + (y + h/2 - arrowSize/2) + 'px',
-      'width:' + (30 * scale) + 'px', 'height:' + arrowSize + 'px',
+      'width:' + (45 * scale) + 'px', 'height:' + arrowSize + 'px',
       'line-height:' + arrowSize + 'px',
       'font-size:' + arrowSize + 'px',
       'font-weight:bold',
@@ -1339,7 +1339,7 @@
     // Palette-derived hue offsets standing in for a shader's RGB channel split — same
     // idiom animateFlame uses at hexToHsl/hslToHex above, just with a symmetric spread.
     var hueOffsets = [-22, 0, 22];
-    var endScales = [13, 15, 17.5];
+    var endScales = [18, 21, 24.5];
     var scale = getBeaconScale();
 
     var containerWidth = 300;
@@ -1403,8 +1403,8 @@
         { transform: 'scale(1)', opacity: 1, filter: 'blur(0px)', offset: 0.1 },
         { transform: 'scale(' + endScale + ')', opacity: 0, filter: 'blur(6px)' }
       ], {
-        duration: getBeaconDuration(1600),
-        delay: r * getBeaconDuration(80),
+        duration: getBeaconDuration(2100),
+        delay: r * getBeaconDuration(110),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
       });
@@ -1415,7 +1415,7 @@
 
     setTimeout(function() {
       container.remove();
-    }, getBeaconDuration(2200));
+    }, getBeaconDuration(2900));
   }
 
   function animateLightning(rect) {
