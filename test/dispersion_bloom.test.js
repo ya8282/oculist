@@ -274,6 +274,12 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     return raw.map(rgbStringToArr);
   }
 
+  async function ringHueOffsets() {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll('.oc-dispersion-ring')).map((el) => el.getAttribute('data-oc-hue-offset'))
+    );
+  }
+
   function rgbStringToArr(str) {
     const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(str);
     assert.ok(m, `not an rgb()/rgba() colour string: ${str}`);
@@ -363,14 +369,48 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     }
   });
 
-  test('Lite Mode drops the ring count from 3 to 1', async () => {
+  test('Lite Mode drops the ring count from 3 to 1, and the surviving ring sits on the base (0) hue', async () => {
+    // 'default' palette passes settings.beaconColor straight through unchanged
+    // (getEffectiveColors()) — read the real persisted value rather than hardcoding it.
+    const before = await getPersistedSettings();
+    const baseBeacon = before.beaconColor || '#fbbf24';
+    assert.strictEqual(
+      (before.visionSettings && before.visionSettings.colorPalette) || 'default',
+      'default',
+      'sanity check: this test must start from the default palette'
+    );
+
     await replay();
     assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 3, 'full mode must render all 3 rings');
+
+    // Full mode must still render exactly the three -22/0/+22 offsets (not a collapsed
+    // subset) so the Lite Mode fix below can't silently regress the non-Lite path.
+    const fullOffsets = (await ringHueOffsets()).map(Number).sort((a, b) => a - b);
+    assert.deepStrictEqual(
+      fullOffsets,
+      [-22, 0, 22],
+      `full mode must render all three hue offsets, got ${JSON.stringify(fullOffsets)}`
+    );
+    assertColorsMatch(await ringColors(), expectedRingHexes(baseBeacon));
 
     try {
       await setSettings({ performanceMode: true });
       await replay();
       assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 1, 'Lite Mode must drop the ring count to 1');
+
+      // The lone ring must carry the unshifted (0) hue offset — both the attribute and the
+      // actually-rendered colour, since the attribute alone could be right while the colour
+      // still used the wrong array index.
+      const liteOffsets = await ringHueOffsets();
+      assert.deepStrictEqual(
+        liteOffsets,
+        ['0'],
+        `Lite Mode's single ring must carry the unshifted (0) hue offset, not -22, got ${JSON.stringify(liteOffsets)}`
+      );
+
+      const [baseHue, baseSat, baseLight] = hexToHsl(baseBeacon);
+      const liteExpectedHex = hslToHex(baseHue + 0, baseSat, baseLight);
+      assertColorsMatch(await ringColors(), [liteExpectedHex]);
     } finally {
       await setSettings({ performanceMode: false });
     }
