@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -53,7 +53,7 @@ describe('Dim highlight registry for inactive terms', () => {
       viewport: { width: 1280, height: 800 },
     });
 
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
@@ -76,13 +76,13 @@ describe('Dim highlight registry for inactive terms', () => {
     // world existing at all — poll the execution-context-created flag the CDP listener
     // above sets, instead of guessing how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -105,7 +105,7 @@ describe('Dim highlight registry for inactive terms', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -128,7 +128,7 @@ describe('Dim highlight registry for inactive terms', () => {
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
@@ -141,7 +141,7 @@ describe('Dim highlight registry for inactive terms', () => {
         return chips.length === 0;
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   });
 
@@ -160,7 +160,7 @@ describe('Dim highlight registry for inactive terms', () => {
         return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -222,7 +222,7 @@ describe('Dim highlight registry for inactive terms', () => {
 
   async function waitForSettingsEcho(before, opts) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
       ...opts,
     });
@@ -258,7 +258,7 @@ describe('Dim highlight registry for inactive terms', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
       enabled,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -281,7 +281,7 @@ describe('Dim highlight registry for inactive terms', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -297,16 +297,16 @@ describe('Dim highlight registry for inactive terms', () => {
         return !!chips[i] && chips[i].classList.contains('active');
       },
       index,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
   function waitForRegistries(predicate, opts) {
-    return waitForCondition(registriesPresent, predicate, { timeout: 5000, ...opts });
+    return waitForCondition(registriesPresent, predicate, { timeout: POLL_TIMEOUT, ...opts });
   }
 
   function waitForDimTexts(predicate, opts) {
-    return waitForCondition(() => rangeTexts('oculist-dim-match'), predicate, { timeout: 5000, ...opts });
+    return waitForCondition(() => rangeTexts('oculist-dim-match'), predicate, { timeout: POLL_TIMEOUT, ...opts });
   }
 
   test('dim set holds exactly the inactive terms\' ranges and excludes the active term\'s', async () => {
@@ -383,7 +383,7 @@ describe('Dim highlight registry for inactive terms', () => {
       overlapExpr,
       (v) => v && v.activeText === 'cat' && v.overlapping === true,
       {
-        timeout: 5000,
+        timeout: POLL_TIMEOUT,
         message: 'two F3 presses never landed the active-match cursor on the overlapping "cat" occurrence',
       }
     );
@@ -415,7 +415,7 @@ describe('Dim highlight registry for inactive terms', () => {
     `);
 
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await openFinder();
     // loadWorkList() populated workListTerms with the restored ['cat', 'dog'] list above —
     // wait for that to actually reach the chip row before triggering the mutation below.
@@ -435,7 +435,7 @@ describe('Dim highlight registry for inactive terms', () => {
     // the exact race the bead reproduced: under load the rescan can overrun a fixed
     // wait entirely and read back zero highlights.
     const dimTexts = await waitForDimTexts((v) => Array.isArray(v) && v.length === 8, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'mutation-observer rescan never rebuilt oculist-dim-match with all 8 inactive-term matches',
     });
     assert.strictEqual(dimTexts.length, 8, 'every term is inactive, so all 7 "cat" + 1 "dog" matches must be dim');
@@ -506,7 +506,7 @@ describe('Dim highlight registry for inactive terms', () => {
       // genuinely happened.
       await page.locator(CHIP_TERM).nth(1).click();
       await waitForContentScriptValue(evalInContentScript, 'window.__ocCreateRangeCalls', (v) => v > before, {
-        timeout: 5000,
+        timeout: POLL_TIMEOUT,
         message: 're-clicking the already-active chip never triggered a fresh performListSearch() scan',
       });
       const after = await evalInContentScript('window.__ocCreateRangeCalls');
@@ -595,7 +595,7 @@ describe('Dim highlight registry for inactive terms', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -629,7 +629,7 @@ describe('Dim highlight registry for inactive terms', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'none')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await resetPopup.close();
   });

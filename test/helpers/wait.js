@@ -8,8 +8,15 @@
 //
 // This does not replace `assert` — it only waits for `predicate(value)` to become true (or
 // times out) and returns the last observed value so the caller can still assert on it.
+// Timeout budget knob: default 1 keeps the budget tight so a genuine regression still
+// surfaces quickly as a timeout. Set OCULIST_TEST_TIMEOUT_SCALE=3 (e.g. `npm test`) to buy
+// headroom on a contended box or in CI without changing a single assertion.
+const TIMEOUT_SCALE = Number(process.env.OCULIST_TEST_TIMEOUT_SCALE) || 1;
+const POLL_TIMEOUT = 5000 * TIMEOUT_SCALE;
+const LONG_TIMEOUT = 15000 * TIMEOUT_SCALE;
+
 async function waitForCondition(getValue, predicate, opts = {}) {
-  const { timeout = 5000, interval = 30, message } = opts;
+  const { timeout = POLL_TIMEOUT, interval = 30, message } = opts;
   const deadline = Date.now() + timeout;
   let last;
   for (;;) {
@@ -32,4 +39,4 @@ async function waitForContentScriptValue(evalInContentScript, expression, predic
   return waitForCondition(() => evalInContentScript(expression), predicate, opts);
 }
 
-module.exports = { waitForCondition, waitForContentScriptValue };
+module.exports = { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT };

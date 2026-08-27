@@ -19,7 +19,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -87,7 +87,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
 
     await page.goto(origin);
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
 
@@ -124,7 +124,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
         // keep retrying
       }
     }
-    await pg.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await pg.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   async function waitForMatchCount(pg) {
@@ -135,7 +135,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -172,7 +172,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
 
   async function waitForSettingsEcho(before) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
     });
   }
@@ -197,7 +197,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
   async function replay(pg) {
     await pg.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await pg.keyboard.press('Enter');
-    await pg.waitForSelector('div.oc-beacon', { timeout: 5000 });
+    await pg.waitForSelector('div.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
   // Condition-polls until no .oc-beacon is mounted, i.e. the page is genuinely at rest.
@@ -205,7 +205,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
   // right after a previous test's replay() can end up comparing "lens up" against "lens
   // up" rather than a real baseline. Call this before any before/during snapshot.
   async function waitForLensAtRest(pg) {
-    await pg.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+    await pg.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   }
 
   test('the lens mounts and its clone contains the match text', async () => {
@@ -378,7 +378,7 @@ describe('Lens: a circular magnifier over the real page content around the activ
       (await page.locator('.oc-beacon').count()) > 0,
       'sanity check: the lens must actually render before checking it is cleaned up'
     );
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   });
 
   // Last test in the file: switches the active search term away from 'quarklet' to a match

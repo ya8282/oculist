@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -84,13 +84,13 @@ describe('List menu popover (saved lists UI)', () => {
     // world existing at all — poll the execution-context-created flag the CDP listener
     // above sets, instead of guessing how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -113,7 +113,7 @@ describe('List menu popover (saved lists UI)', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -168,7 +168,7 @@ describe('List menu popover (saved lists UI)', () => {
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await clearSavedLists();
     await clearWorkList();
     await openFinder();
@@ -186,7 +186,7 @@ describe('List menu popover (saved lists UI)', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -205,7 +205,7 @@ describe('List menu popover (saved lists UI)', () => {
         return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -236,7 +236,7 @@ describe('List menu popover (saved lists UI)', () => {
 
   async function openListsMenu() {
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
   }
 
   function waitForListsPanelClosed(opts) {
@@ -246,7 +246,7 @@ describe('List menu popover (saved lists UI)', () => {
         return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
       },
       null,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -261,7 +261,7 @@ describe('List menu popover (saved lists UI)', () => {
         return JSON.stringify(names) === JSON.stringify(exp);
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -277,7 +277,7 @@ describe('List menu popover (saved lists UI)', () => {
         return items.some((el) => el.textContent === expectedName);
       },
       name,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -307,7 +307,7 @@ describe('List menu popover (saved lists UI)', () => {
         return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'popover should be closed');
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
@@ -329,7 +329,7 @@ describe('List menu popover (saved lists UI)', () => {
         return JSON.stringify(chips) === JSON.stringify(['zzzalpha', 'zzzbeta']);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // The saved two-term list replaced the three-term working list outright, with no
@@ -465,7 +465,7 @@ describe('List menu popover (saved lists UI)', () => {
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Original Name']);
 
     await page.locator(LIST_RENAME_BTN).click();
-    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: 5000 });
+    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: POLL_TIMEOUT });
     await page.locator(LIST_RENAME_INPUT).fill('Renamed List');
     await page.locator(LIST_RENAME_CONFIRM).click();
     await waitForListItemNames(['Renamed List']);
@@ -488,7 +488,7 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || root.shadowRoot.querySelectorAll('.oc-list-item-name').length === 0;
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0, 'the deleted list must no longer be listed');
     assert.strictEqual(
       (await page.locator(LIST_EMPTY).textContent()).trim(),
@@ -525,7 +525,7 @@ describe('List menu popover (saved lists UI)', () => {
 
     // The identical guard on the rename control.
     await page.locator(LIST_RENAME_BTN).click();
-    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: 5000 });
+    await page.waitForSelector(LIST_RENAME_INPUT, { timeout: POLL_TIMEOUT });
     await page.locator(LIST_RENAME_INPUT).fill('   ');
     assert.strictEqual(await page.locator(LIST_RENAME_CONFIRM).isDisabled(), true);
     // The rename never went through — the list still shows its original saved name once
@@ -577,7 +577,7 @@ describe('List menu popover (saved lists UI)', () => {
       const root = document.getElementById('oc-wrap');
       const btn = root && root.shadowRoot.querySelector('.oc-list-save-btn');
       return !!btn && btn.disabled === true;
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 1, 'the popover must still be open after a main-bar chip removal');
 
     // Re-add a term, still without closing the popover, so the save round trip below has
@@ -596,7 +596,7 @@ describe('List menu popover (saved lists UI)', () => {
       const root = document.getElementById('oc-wrap');
       const el = root && root.shadowRoot.querySelector('.oc-list-item-name');
       return !!el && el.textContent === 'Populated List';
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
 
     // Saving a populated list still works end to end: it appears in the popover and the
     // write genuinely reached chrome.storage.sync with the working list's real terms.
@@ -614,7 +614,7 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || !root.shadowRoot.querySelector('#oc-lists-panel');
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
   });
 
   // oculist-l6m.26: a list saved by a version of the extension before this fix (or
@@ -635,7 +635,7 @@ describe('List menu popover (saved lists UI)', () => {
     );
 
     await openListsMenu();
-    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: POLL_TIMEOUT });
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Empty Legacy List']);
     assert.strictEqual(
       await page.locator(LIST_ITEM_NAME).isDisabled(),
@@ -666,7 +666,7 @@ describe('List menu popover (saved lists UI)', () => {
     );
 
     await openListsMenu();
-    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: POLL_TIMEOUT });
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Whitespace Only List']);
     assert.strictEqual(
       await page.locator(LIST_ITEM_COUNT).textContent(),
@@ -691,7 +691,7 @@ describe('List menu popover (saved lists UI)', () => {
     );
 
     await openListsMenu();
-    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).isDisabled(), true);
 
     // A disabled <button> suppresses its own click event natively; force:true performs a
@@ -724,7 +724,7 @@ describe('List menu popover (saved lists UI)', () => {
     );
 
     await openListsMenu();
-    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LIST_ITEM_COUNT).textContent(), '2 terms');
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).isDisabled(), false);
 
@@ -734,7 +734,7 @@ describe('List menu popover (saved lists UI)', () => {
       if (!root) return false;
       const chips = Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent);
       return JSON.stringify(chips) === JSON.stringify(['cat', 'dog']);
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
 
     assert.deepStrictEqual(await chipTerms(), ['cat', 'dog']);
 
@@ -758,7 +758,7 @@ describe('List menu popover (saved lists UI)', () => {
     );
 
     await openListsMenu();
-    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: POLL_TIMEOUT });
     assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Malformed Terms List']);
     assert.strictEqual(await page.locator(LIST_ITEM_COUNT).textContent(), '0 terms');
     assert.strictEqual(
@@ -771,7 +771,7 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || root.shadowRoot.querySelectorAll('.oc-list-item-name').length === 0;
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0, 'the deleted malformed list must no longer be listed');
     assert.strictEqual(
       (await page.locator(LIST_EMPTY).textContent()).trim(),
@@ -786,14 +786,14 @@ describe('List menu popover (saved lists UI)', () => {
 
   test('opening the list popover closes an open settings panel and the reverse; Escape closes only the popover', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(SETTINGS_PANEL).count(), 0, 'opening the list popover must close settings');
 
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(LISTS_PANEL).count(), 0, 'opening settings must close the list popover');
 
     // Close settings, reopen the list popover, and confirm the first Escape closes only it.
@@ -801,9 +801,9 @@ describe('List menu popover (saved lists UI)', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || !root.shadowRoot.querySelector('#oc-settings-panel');
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
 
     await page.keyboard.press('Escape');
     await waitForListsPanelClosed();
@@ -811,7 +811,7 @@ describe('List menu popover (saved lists UI)', () => {
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open');
 
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 0, 'the second Escape should close the whole overlay as before');
   });
 });

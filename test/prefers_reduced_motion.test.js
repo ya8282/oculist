@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -69,7 +70,7 @@ describe('prefers-reduced-motion downgrades the beacon effect', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   // Both motion modes mount exactly one top-level .oc-beacon, so counting those tells
@@ -86,7 +87,7 @@ describe('prefers-reduced-motion downgrades the beacon effect', () => {
   const replayAndCount = async () => {
     await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
     return page.evaluate(() => document.querySelectorAll('.oc-beacon *').length);
   };
 
@@ -102,7 +103,7 @@ describe('prefers-reduced-motion downgrades the beacon effect', () => {
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const full = await replayAndCount();

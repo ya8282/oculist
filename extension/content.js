@@ -3360,6 +3360,7 @@
     if (!wrapRoot || dismissedNotices.has(noticeKey) || noticeEl) return;
     noticeEl = document.createElement('div');
     noticeEl.className = 'oc-notice';
+    noticeEl.setAttribute('data-oc-notice', noticeKey);
 
     var textEl = document.createElement('span');
     textEl.className = 'oc-notice-text';

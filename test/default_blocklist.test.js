@@ -9,6 +9,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const BODY = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -43,7 +44,7 @@ describe('Default site blocklist', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   };
 
   before(async () => {
@@ -57,7 +58,7 @@ describe('Default site blocklist', () => {
     });
     // An empty user-data dir means this counts as a fresh install, so onInstalled fires
     // and seeds the blocklist. Wait for that to land before asserting anything.
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     await sw.evaluate(
       () =>
         new Promise((resolve) => {

@@ -22,6 +22,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -62,7 +63,7 @@ describe('Chip term accessible name includes the hit count', () => {
   }
 
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   async function waitForWorkListLoad() {
@@ -101,7 +102,7 @@ describe('Chip term accessible name includes the hit count', () => {
     await page.goto(origin);
     await waitForContentScriptReady();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
@@ -135,7 +136,7 @@ describe('Chip term accessible name includes the hit count', () => {
     await waitForOverlayClosed();
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await waitForWorkListLoad();
   });
 
@@ -156,7 +157,7 @@ describe('Chip term accessible name includes the hit count', () => {
         return el && el.getAttribute('aria-label') === args.expected;
       },
       { term: term, expected: expected },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -198,7 +199,7 @@ describe('Chip term accessible name includes the hit count', () => {
     );
 
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await waitForChipAriaLabel('unscanned-term', 'Active search term: unscanned-term');
 
     const labels = await chipAriaLabels();

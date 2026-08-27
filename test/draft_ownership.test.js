@@ -22,7 +22,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -64,7 +64,7 @@ describe('Draft input vs. active chip ownership', () => {
       viewport: { width: 1280, height: 800 },
     });
 
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
@@ -86,13 +86,13 @@ describe('Draft input vs. active chip ownership', () => {
     // world existing at all — poll the execution-context-created flag instead of guessing
     // how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -115,7 +115,7 @@ describe('Draft input vs. active chip ownership', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -138,7 +138,7 @@ describe('Draft input vs. active chip ownership', () => {
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
@@ -155,7 +155,7 @@ describe('Draft input vs. active chip ownership', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -176,7 +176,7 @@ describe('Draft input vs. active chip ownership', () => {
         return chips.some((el) => el.textContent === term && el.classList.contains('active'));
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -233,7 +233,7 @@ describe('Draft input vs. active chip ownership', () => {
       evalInContentScript,
       `(function(){var h=CSS.highlights.get('oculist-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()`,
       (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === term),
-      { timeout: 5000, message: `debounce never populated oculist-match with "${term}"'s own matches` }
+      { timeout: POLL_TIMEOUT, message: `debounce never populated oculist-match with "${term}"'s own matches` }
     );
   }
 
@@ -272,7 +272,7 @@ describe('Draft input vs. active chip ownership', () => {
 
   async function waitForMutationRescan(before) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocMutationRescanFires', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'the mutation-observer rescan (350ms debounce) never fired',
     });
   }
@@ -299,7 +299,7 @@ describe('Draft input vs. active chip ownership', () => {
 
   async function waitForSettingsEcho(before, opts) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
       ...opts,
     });
@@ -330,7 +330,7 @@ describe('Draft input vs. active chip ownership', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
       enabled,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -409,7 +409,7 @@ describe('Draft input vs. active chip ownership', () => {
       const root = document.getElementById('oc-wrap');
       const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
       return chips.some((el) => el.textContent === 'cat' && el.classList.contains('active'));
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
 
     assert.deepStrictEqual(await chipTerms(), ['cat', 'dog'], 're-committing an existing term must not create a second chip');
     assert.strictEqual(await activeChipTerm(), 'cat', 'the existing chip must become active rather than being duplicated');
@@ -429,7 +429,7 @@ describe('Draft input vs. active chip ownership', () => {
   // that make -1-with-a-non-empty-list a state performListSearch() has to handle cleanly.
   test('a restored list with no active chip never raises a false "no matches" notice', async () => {
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
 
     await evalInContentScript(
       "new Promise((resolve) => chrome.storage.session.set(" +
@@ -453,7 +453,7 @@ describe('Draft input vs. active chip ownership', () => {
       evalInContentScript,
       `(function(){var h=CSS.highlights.get('oculist-dim-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()`,
       (v) => Array.isArray(v) && v.length === 5,
-      { timeout: 5000, message: 'mutation-observer rescan never rebuilt oculist-dim-match with both terms\' matches' }
+      { timeout: POLL_TIMEOUT, message: 'mutation-observer rescan never rebuilt oculist-dim-match with both terms\' matches' }
     );
 
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'no chip being active must not be reported as "no matches found"');
@@ -498,7 +498,7 @@ describe('Draft input vs. active chip ownership', () => {
       const root = document.getElementById('oc-wrap');
       const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
       return chips.length === 1 && chips[0].textContent === 'dog';
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
 
     assert.deepStrictEqual(await chipTerms(), ['dog']);
     assert.deepStrictEqual(

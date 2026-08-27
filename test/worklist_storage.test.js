@@ -23,6 +23,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -92,7 +93,7 @@ describe('Working-list session storage (oc-worklist)', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
 
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
   });
@@ -111,12 +112,12 @@ describe('Working-list session storage (oc-worklist)', () => {
   // the way the very first open (before any listener exists) requires elsewhere.
   async function closeOverlay() {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   }
 
   async function reopenOverlay() {
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
   }
 
   function waitForChipCount(expected) {
@@ -127,7 +128,7 @@ describe('Working-list session storage (oc-worklist)', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -419,7 +420,7 @@ describe('Working-list session storage (oc-worklist)', () => {
           return !!row && row.hidden === true;
         },
         null,
-        { timeout: 5000 }
+        { timeout: POLL_TIMEOUT }
       );
 
       const chipCount = await page.locator(CHIP_TERM).count();

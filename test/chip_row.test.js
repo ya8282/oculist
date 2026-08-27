@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -85,13 +85,13 @@ describe('Chip row and working-list state', () => {
     // world existing at all — poll the execution-context-created flag instead of guessing
     // how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -114,7 +114,7 @@ describe('Chip row and working-list state', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -137,7 +137,7 @@ describe('Chip row and working-list state', () => {
   // leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
@@ -154,7 +154,7 @@ describe('Chip row and working-list state', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -169,7 +169,9 @@ describe('Chip row and working-list state', () => {
     // A cap hit (10-term or 100-char) is a third legitimate outcome: addChipTerm() rejects
     // the term outright and calls showNotice() synchronously instead of touching the chip
     // row at all — accept that too, so addTerm() stays usable for the cap tests' own
-    // deliberately-rejected term.
+    // deliberately-rejected term. Scoped to the two cap notice keys ('term-cap' for the
+    // 10-term cap, 'term-length' for the 100-char cap) so a stray notice left over from an
+    // earlier step (e.g. site-override, list-write-failed) can't satisfy this poll.
     await page.waitForFunction(
       ({ expected, term }) => {
         const root = document.getElementById('oc-wrap');
@@ -181,10 +183,12 @@ describe('Chip row and working-list state', () => {
         // existing chip becoming active.
         if (chips.length === expected && last && last.textContent === term) return true;
         if (chips.some((el) => el.textContent === term && el.classList.contains('active'))) return true;
-        return !!(root && root.shadowRoot && root.shadowRoot.querySelector('.oc-notice'));
+        return !!(root && root.shadowRoot && root.shadowRoot.querySelector(
+          '.oc-notice[data-oc-notice="term-cap"], .oc-notice[data-oc-notice="term-length"]'
+        ));
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -250,7 +254,7 @@ describe('Chip row and working-list state', () => {
       await page.keyboard.press('Backspace');
     }
     await waitForContentScriptValue(evalInContentScript, 'window.__ocDebounceFires', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'the input debounce triggered by backspacing to empty never fired',
     });
   }
@@ -440,14 +444,14 @@ describe('Chip row and working-list state', () => {
     // page trips checkSiteOverride()'s zero-matches branch — PAGE's FILLER text pushes
     // body length well past its >500-char threshold — raising the 'site-override' notice.
     await page.locator(INPUT).fill('nonexistentxyzzyterm');
-    await page.waitForSelector(NOTICE_TEXT, { timeout: 5000 });
+    await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
     assert.match(await page.locator(NOTICE_TEXT).textContent(), /No matches found/);
 
     await page.locator(NOTICE_CLOSE).click();
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || !root.shadowRoot.querySelector('.oc-notice');
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the site-override notice must actually dismiss');
 
     await emptyInputByBackspace();
@@ -462,7 +466,7 @@ describe('Chip row and working-list state', () => {
     await addTerm('quarklet');
     assert.strictEqual((await chipTerms()).length, 10, 'the 11th term must still be refused');
 
-    await page.waitForSelector(NOTICE, { timeout: 5000 }).catch(() => {});
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT }).catch(() => {});
     assert.strictEqual(
       await page.locator(NOTICE).count(),
       1,
@@ -494,7 +498,7 @@ describe('Chip row and working-list state', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || !root.shadowRoot.querySelector('.oc-notice');
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'the term-cap notice must actually dismiss');
 
     // Not addTerm(): this Enter is expected to produce genuinely NO observable DOM change
@@ -519,7 +523,7 @@ describe('Chip row and working-list state', () => {
     // upcoming Ctrl+F below just refocuses the existing bar instead of remounting it,
     // and loadWorkList() only ever runs from buildUI() on mount.
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
 
     // Seed chrome.storage.session directly (bypassing any in-page UI) with terms that do
     // not exist anywhere on the page — if a scan ran against them, both the count and a
@@ -539,7 +543,7 @@ describe('Chip row and working-list state', () => {
         ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent)
         : [];
       return JSON.stringify(chips) === JSON.stringify(['gamma', 'delta']);
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
 
     assert.deepStrictEqual(await chipTerms(), ['gamma', 'delta']);
     assert.strictEqual(await activeChipTerm(), 'delta');
