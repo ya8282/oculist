@@ -450,6 +450,52 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.deepStrictEqual(lists[0], { id: 'objterms', name: 'Object Terms', terms: [] });
   });
 
+  // oculist-qc8: renameList() must change only the name — it must never be the operation
+  // that discards a malformed terms value. Preserving (rather than replacing with []) is
+  // safe because every consumer of a stored list entry normalises on read
+  // (listSavedLists()'s unconditional sanitizeListTerms() call), so a non-array terms
+  // value sitting in storage can never reach code that assumes an array.
+  test('renameList() preserves a malformed terms value byte-identical in storage, changing only the name', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set({" +
+      "'oc-list-badstring': { id: 'badstring', name: 'Bad String', terms: 'oops' }," +
+      "'oc-list-badnull': { id: 'badnull', name: 'Bad Null', terms: null }," +
+      "'oc-list-badobj': { id: 'badobj', name: 'Bad Object', terms: { not: 'an array' } }" +
+      "}, resolve))"
+    );
+
+    const renamedString = await callRenameList('badstring', 'Renamed Bad String');
+    assert.strictEqual(renamedString.ok, true);
+    assert.strictEqual(renamedString.list.name, 'Renamed Bad String');
+    assert.strictEqual(renamedString.list.terms, 'oops');
+    const rawString = await rawGet('oc-list-badstring');
+    assert.deepStrictEqual(rawString, { id: 'badstring', name: 'Renamed Bad String', terms: 'oops' });
+
+    const renamedNull = await callRenameList('badnull', 'Renamed Bad Null');
+    assert.strictEqual(renamedNull.ok, true);
+    assert.strictEqual(renamedNull.list.name, 'Renamed Bad Null');
+    assert.strictEqual(renamedNull.list.terms, null);
+    const rawNull = await rawGet('oc-list-badnull');
+    assert.deepStrictEqual(rawNull, { id: 'badnull', name: 'Renamed Bad Null', terms: null });
+
+    const renamedObj = await callRenameList('badobj', 'Renamed Bad Object');
+    assert.strictEqual(renamedObj.ok, true);
+    assert.strictEqual(renamedObj.list.name, 'Renamed Bad Object');
+    assert.deepStrictEqual(renamedObj.list.terms, { not: 'an array' });
+    const rawObj = await rawGet('oc-list-badobj');
+    assert.deepStrictEqual(rawObj, { id: 'badobj', name: 'Renamed Bad Object', terms: { not: 'an array' } });
+
+    // A well-formed terms array must still round-trip completely unchanged — the fix
+    // must not regress the normal path.
+    const saved = await callSaveList('Good List', ['alpha', 'beta']);
+    assert.strictEqual(saved.ok, true);
+    const renamedGood = await callRenameList(saved.list.id, 'Renamed Good List');
+    assert.strictEqual(renamedGood.ok, true);
+    assert.deepStrictEqual(renamedGood.list.terms, ['alpha', 'beta']);
+    const rawGood = await rawGet('oc-list-' + saved.list.id);
+    assert.deepStrictEqual(rawGood, { id: saved.list.id, name: 'Renamed Good List', terms: ['alpha', 'beta'] });
+  });
+
   // oculist-l6m.26: a 0-term saved list is useless to create and dangerous to load —
   // loadSavedList() has no confirmation, so loading one would silently wipe the working
   // list with no way back. The popover's own Save button is the primary guard (see
