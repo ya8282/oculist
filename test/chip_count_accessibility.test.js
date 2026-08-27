@@ -45,7 +45,7 @@ describe('Chip term accessible name includes the hit count', () => {
   // is attached, so polling for it (instead of a fixed sleep) is the real, final signal
   // that Ctrl+F will actually do something.
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {

@@ -9,9 +9,10 @@
 // This does not replace `assert` — it only waits for `predicate(value)` to become true (or
 // times out) and returns the last observed value so the caller can still assert on it.
 // Timeout budget knob: default 1 keeps the budget tight so a genuine regression still
-// surfaces quickly as a timeout. Set OCULIST_TEST_TIMEOUT_SCALE=3 (e.g. `npm test`) to buy
-// headroom on a contended box or in CI without changing a single assertion.
-const TIMEOUT_SCALE = Number(process.env.OCULIST_TEST_TIMEOUT_SCALE) || 1;
+// surfaces quickly as a timeout. Set OCULIST_TEST_TIMEOUT_SCALE=3 (e.g. `OCULIST_TEST_TIMEOUT_SCALE=3 npm test`)
+// to buy headroom on a contended box or in CI without changing a single assertion.
+const parsedScale = Number(process.env.OCULIST_TEST_TIMEOUT_SCALE);
+const TIMEOUT_SCALE = Number.isFinite(parsedScale) && parsedScale > 0 ? parsedScale : 1;
 const POLL_TIMEOUT = 5000 * TIMEOUT_SCALE;
 const LONG_TIMEOUT = 15000 * TIMEOUT_SCALE;
 

@@ -23,7 +23,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -351,7 +351,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     // animateDispersion() schedules its own container removal via
     // getBeaconDuration(2900) — poll for it to actually happen instead of guessing the
     // exact duration.
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 8000 });
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 8000 * TIMEOUT_SCALE });
   });
 
   test('reduced motion renders the reduced-motion beacon and never the dispersion rings', async () => {

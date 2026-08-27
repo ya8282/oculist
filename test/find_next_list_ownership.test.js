@@ -56,7 +56,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
   // ahead of that storage round trip under load and pressed Ctrl+F on a page with no
   // listener yet.
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {

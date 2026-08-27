@@ -51,7 +51,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // test.js: window.__ocToggle only exists once boot()'s async settings round trip has
   // resolved and the keydown listener is attached.
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {
@@ -169,7 +169,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // Polls the real computed AX tree (not a fixed sleep) until aria-expanded's computed
   // value for the given trigger matches what is expected, or times out.
   async function waitForAXExpanded(cssSelector, expected, timeoutMs) {
-    const deadline = Date.now() + (timeoutMs || 5000);
+    const deadline = Date.now() + (timeoutMs || POLL_TIMEOUT);
     let last;
     for (;;) {
       const ax = await getAXProperties(cssSelector);
@@ -196,7 +196,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
         return !!el && root.activeElement === el;
       },
       cssSelector,
-      { timeout: timeoutMs || 5000 }
+      { timeout: timeoutMs || POLL_TIMEOUT }
     );
   }
 

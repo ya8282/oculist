@@ -69,7 +69,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
     // The real precondition for Control+f doing anything is the content script's isolated
     // world existing at all — poll the execution-context-created flag instead of guessing
     // how long injection takes.
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     while (!isolatedContextId) {
       if (Date.now() > deadline) throw new Error('never observed the content script isolated execution context');
       await new Promise((resolve) => setTimeout(resolve, 30));

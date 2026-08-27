@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -86,23 +86,6 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
-
-  // Generic condition poller (mirrors test/helpers/wait.js's waitForCondition, duplicated
-  // here rather than imported so this file only needs the one local closure it needs).
-  async function waitForCondition(getValue, predicate, opts = {}) {
-    const { timeout = 5000, interval = 30, message } = opts;
-    const deadline = Date.now() + timeout;
-    let last;
-    for (;;) {
-      last = await getValue();
-      if (predicate(last)) return last;
-      if (Date.now() >= deadline) {
-        const detail = message ? `${message} ` : '';
-        throw new Error(`${detail}timed out after ${timeout}ms; last observed value: ${JSON.stringify(last)}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, interval));
-    }
-  }
 
   // isolatedContextId existing only proves the content script's realm has been created,
   // not that its synchronous top-level init has reached the keydown-listener registration
