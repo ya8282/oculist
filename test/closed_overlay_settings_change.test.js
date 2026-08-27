@@ -47,7 +47,7 @@ describe('Settings change landing while the overlay is closed', () => {
   }
 
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {
@@ -114,7 +114,7 @@ describe('Settings change landing while the overlay is closed', () => {
   }
 
   async function waitForSettingsEcho(before) {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       const now = await evalInContentScript('window.__ocSettingsEchoes');
       if (now > before) return;

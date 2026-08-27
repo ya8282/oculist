@@ -23,7 +23,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -74,7 +74,7 @@ describe('Working-list session storage (oc-worklist)', () => {
     // world existing at all — poll the execution-context-created flag instead of guessing
     // how long injection takes.
     {
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + POLL_TIMEOUT;
       while (!isolatedContextId) {
         if (Date.now() > deadline) throw new Error('never observed the content script isolated execution context');
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -232,7 +232,7 @@ describe('Working-list session storage (oc-worklist)', () => {
 
     const result = await evalInContentScript(
       '(' +
-        function () {
+        function (deadlineMs) {
           return new Promise((resolve, reject) => {
             window.__ocSaveWorkList({ terms: ['alpha', 'beta'], activeIndex: 1 });
             // saveWorkList has no completion callback by design (its signature is
@@ -241,7 +241,10 @@ describe('Working-list session storage (oc-worklist)', () => {
             // set() call takes, before reading it back through loadWorkList. A generous
             // deadline: chrome.storage's IPC round trip to the extension/browser process
             // can lag well past a same-process JS timer under heavy CPU contention.
-            var deadline = Date.now() + 15000;
+            // deadlineMs comes in as an argument (not read from process.env, which is
+            // unreachable from this in-page context) so OCULIST_TEST_TIMEOUT_SCALE still
+            // reaches this poller.
+            var deadline = Date.now() + deadlineMs;
             (function poll() {
               chrome.storage.session.get('oc-worklist', function (data) {
                 var stored = data && data['oc-worklist'];
@@ -258,7 +261,7 @@ describe('Working-list session storage (oc-worklist)', () => {
             })();
           });
         }.toString() +
-        ')()'
+        `)(${LONG_TIMEOUT})`
     );
 
     assert.deepStrictEqual(result, saved);
@@ -299,7 +302,7 @@ describe('Working-list session storage (oc-worklist)', () => {
       await evalInContentScript(
         `new Promise((resolve, reject) => {
           chrome.storage.session.set({ 'oc-worklist': ${JSON.stringify(list)} }, function () {
-            var deadline = Date.now() + 15000;
+            var deadline = Date.now() + ${LONG_TIMEOUT};
             (function poll() {
               chrome.storage.session.get('oc-worklist', function (data) {
                 var stored = data && data['oc-worklist'];

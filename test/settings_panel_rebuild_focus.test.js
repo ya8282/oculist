@@ -54,7 +54,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
   }
 
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {
@@ -87,7 +87,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
         return !!el && root.activeElement === el;
       },
       cssSelector,
-      { timeout: timeoutMs || 5000 }
+      { timeout: timeoutMs || POLL_TIMEOUT }
     );
   }
 

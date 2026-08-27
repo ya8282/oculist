@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -63,7 +63,7 @@ describe('Active-match magnifier overlay', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   async function waitForContentScriptReady() {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       if (isolatedContextId) {
         try {
@@ -160,7 +160,7 @@ describe('Active-match magnifier overlay', () => {
   // action (a redraw or a fresh search) and re-check a real, observable condition until it
   // holds, bounded by a deadline — not a fixed sleep.
   async function untilTrue(actionFn, checkFn, timeoutMs) {
-    const deadline = Date.now() + (timeoutMs || 5000);
+    const deadline = Date.now() + (timeoutMs || POLL_TIMEOUT);
     for (;;) {
       await actionFn();
       if (await checkFn()) return;
@@ -267,7 +267,7 @@ describe('Active-match magnifier overlay', () => {
   // the oculist-l6m.42 regression tests below so a fix-absent run fails on a clean
   // assert.strictEqual mismatch instead of a Playwright waitFor timeout error.
   async function pollUntil(fn, timeoutMs) {
-    const deadline = Date.now() + (timeoutMs || 4000);
+    const deadline = Date.now() + (timeoutMs || 4000 * TIMEOUT_SCALE);
     for (;;) {
       const result = await fn();
       if (result || Date.now() > deadline) return result;
@@ -623,7 +623,7 @@ describe('Active-match magnifier overlay', () => {
     // Foreign settings write — same chrome.storage.sync.set path the popup takes — with
     // the match still on screen and nothing else touching the page afterward.
     await setVisionSettings({ magnifier: true });
-    const appeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c > 0), 4000);
+    const appeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c > 0));
     assert.strictEqual(
       appeared,
       true,
@@ -635,7 +635,7 @@ describe('Active-match magnifier overlay', () => {
     // Reverse direction: the bead only names the ON case, but OFF must equally take
     // effect in place.
     await setVisionSettings({ magnifier: false });
-    const disappeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c === 0), 4000);
+    const disappeared = await pollUntil(() => page.locator(MAGNIFIER).count().then((c) => c === 0));
     assert.strictEqual(
       disappeared,
       true,
@@ -667,7 +667,7 @@ describe('Active-match magnifier overlay', () => {
     assert.strictEqual(await page.locator(LABEL).count(), 0, 'sanity: label must not be showing yet');
 
     await setVisionSettings({ textLabels: true });
-    const appeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c > 0), 4000);
+    const appeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c > 0));
     assert.strictEqual(
       appeared,
       true,
@@ -675,7 +675,7 @@ describe('Active-match magnifier overlay', () => {
     );
 
     await setVisionSettings({ textLabels: false });
-    const disappeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c === 0), 4000);
+    const disappeared = await pollUntil(() => page.locator(LABEL).count().then((c) => c === 0));
     assert.strictEqual(
       disappeared,
       true,

@@ -44,7 +44,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
         return !!el && root.activeElement === el;
       },
       cssSelector,
-      { timeout: timeoutMs || 5000 }
+      { timeout: timeoutMs || POLL_TIMEOUT }
     );
   }
 
