@@ -22,8 +22,10 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+const CLOSED = () => !document.getElementById('oc-wrap');
 
 // Filler pads document.body.innerText past 500 chars so the "text-heavy page" branch of
 // checkSiteOverride() is actually exercised by the last test below; it contains neither
@@ -80,18 +82,41 @@ describe('Draft input vs. active chip ownership', () => {
     });
 
     await page.goto(origin);
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    // The real precondition for Control+f doing anything is the content script's isolated
+    // world existing at all — poll the execution-context-created flag instead of guessing
+    // how long injection takes.
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: 5000,
+      message: 'never observed the content script isolated execution context',
+    });
+    await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(150);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
   });
+
+  // isolatedContextId existing only proves the content script's realm has been created,
+  // not that its synchronous top-level init has reached the keydown-listener registration
+  // yet — under load there can still be a gap. Retry Control+f (a keypress a not-yet-
+  // attached listener would otherwise silently swallow) until the input actually appears,
+  // instead of trusting a single press.
+  async function openFinder() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+  }
 
   function evalInContentScript(expression) {
     return client
@@ -113,22 +138,55 @@ describe('Draft input vs. active chip ownership', () => {
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
+    // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
+    // resolves asynchronously after open — poll for the chip row to actually reflect the
+    // now-empty list, rather than guessing how long that round trip takes.
+    await waitForChipCount(0);
   });
 
-  async function addTerm(term) {
-    await page.locator(INPUT).fill(term);
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+  function waitForChipCount(expected, opts) {
+    return page.waitForFunction(
+      (n) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+        return chips.length === n;
+      },
+      expected,
+      { timeout: 5000, ...opts }
+    );
   }
 
+  async function addTerm(term) {
+    const before = await page.locator(CHIP_TERM).count();
+    await page.locator(INPUT).fill(term);
+    await page.keyboard.press('Enter');
+    // Enter's chip-add path (addChipTerm() -> performListSearch(), or the existing-chip
+    // re-activation path) runs synchronously and ends with renderChipRow() as its very
+    // last statement, so the chip row reflecting the expected shape is a genuine proxy for
+    // "the whole scan (counts, highlight registries) finished".
+    await page.waitForFunction(
+      ({ expected, term }) => {
+        const root = document.getElementById('oc-wrap');
+        const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+        const last = chips[chips.length - 1];
+        if (chips.length === expected && last && last.textContent === term) return true;
+        return chips.some((el) => el.textContent === term && el.classList.contains('active'));
+      },
+      { expected: before + 1, term },
+      { timeout: 5000 }
+    );
+  }
+
+  // The 150ms/400ms input debounce ends in performDraftSearch(term)/restoreActiveChip()
+  // (content.js) — either way it always leaves the oculist-match registry's *content* in a
+  // new, checkable state, so callers wait for their own specific expected outcome
+  // afterward (they already read rangeTexts()/registryPresent() next) rather than this
+  // helper guessing the debounce duration itself.
   async function typeDraft(term) {
     await page.locator(INPUT).fill(term);
-    await page.waitForTimeout(400); // clears the 150ms/400ms debounce
   }
 
   function chipTerms() {
@@ -165,6 +223,88 @@ describe('Draft input vs. active chip ownership', () => {
     return page.evaluate(() => document.querySelectorAll('.oc-beacon').length);
   }
 
+  // Waits for oculist-match to hold exactly `term`'s own ranges — the debounce-triggered
+  // effect every typeDraft() caller below actually needs, instead of guessing the
+  // 150ms/400ms debounce's duration. Non-vacuous: false while a prior term (or nothing)
+  // still owns the registry, true once this term's own performDraftSearch()/
+  // restoreActiveChip() call has landed.
+  async function waitForMatchTexts(term) {
+    return waitForContentScriptValue(
+      evalInContentScript,
+      `(function(){var h=CSS.highlights.get('oculist-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()`,
+      (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === term),
+      { timeout: 5000, message: `debounce never populated oculist-match with "${term}"'s own matches` }
+    );
+  }
+
+  // The mutation-observer rescan's own DOM-visible effect (oculist-match's content) can be
+  // a no-op when the rescanned term is unchanged from before the mutation (as in the
+  // zero-chip-mutation test below, which rescans the same lastTerm both before and after)
+  // — waiting on that would be a vacuous poll. Monkeypatch window.setTimeout inside the
+  // content script's own isolated world (same technique chip_row.test.js's debounce
+  // counter and list_menu.test.js's mid-debounce test use) to count calls scheduled at the
+  // mutation observer's own 350ms delay (content.js's sole use of that exact delay) that
+  // have actually executed, so this polls the real event instead of either guessing a
+  // duration or a DOM diff that isn't guaranteed to move.
+  async function armMutationRescanCounter() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocMutationRescanFiresInstalled) {
+          window.__ocMutationRescanFiresInstalled = true;
+          window.__ocMutationRescanFires = 0;
+          var orig = window.setTimeout;
+          window.setTimeout = function (fn, delay) {
+            if (delay === 350) {
+              var wrapped = function () {
+                window.__ocMutationRescanFires++;
+                return fn.apply(this, arguments);
+              };
+              var args = [wrapped, delay].concat(Array.prototype.slice.call(arguments, 2));
+              return orig.apply(window, args);
+            }
+            return orig.apply(window, arguments);
+          };
+        }
+        return window.__ocMutationRescanFires;
+      })()
+    `);
+  }
+
+  async function waitForMutationRescan(before) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocMutationRescanFires', (v) => v > before, {
+      timeout: 5000,
+      message: 'the mutation-observer rescan (350ms debounce) never fired',
+    });
+  }
+
+  // Arm a probe listener inside the content script's own isolated world *before* changing
+  // a setting via the popup: chrome.storage.onChanged fires every listener registered
+  // against that same document for the same event, so observing OUR listener fire is a
+  // direct proxy for content.js's own oc-settings listener (registered first, at page
+  // load) having *also* already run — including its synchronous rescan.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before, opts) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
+      timeout: 5000,
+      message: 'oc-settings change never echoed into the content script',
+      ...opts,
+    });
+  }
+
   // Flips Lite Mode via the real popup UI (chrome.storage.sync round trip), so
   // content.js's chrome.storage.onChanged listener is exercised exactly as production
   // toggling is.
@@ -173,13 +313,28 @@ describe('Draft input vs. active chip ownership', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
     const checked = await popup.isChecked('#toggle-lite-mode');
+    if (checked === enabled) {
+      await popup.close();
+      await page.bringToFront();
+      return;
+    }
+
+    const before = await armSettingsEcho();
+
     // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
     // <label> (the actionable, visible element) instead of the input.
-    if (checked !== enabled) await popup.click('label[for="toggle-lite-mode"]');
-    await popup.waitForTimeout(300);
+    await popup.click('label[for="toggle-lite-mode"]');
+    await popup.waitForFunction(
+      (expected) =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
+      enabled,
+      { timeout: 5000 }
+    );
     await popup.close();
     await page.bringToFront();
-    await page.waitForTimeout(300);
+    await waitForSettingsEcho(before);
   }
 
   test('a single Enter after a draft leaves dim highlights and both chip counts on screen, no chip click', async () => {
@@ -209,6 +364,7 @@ describe('Draft input vs. active chip ownership', () => {
 
     // Type a new draft without committing it — 'cat' stays the active chip throughout.
     await typeDraft('dog');
+    await waitForMatchTexts('dog');
 
     let matchTexts = await rangeTexts('oculist-match');
     assert.ok(matchTexts.length > 0 && matchTexts.every((t) => t === 'dog'), 'the draft must own oculist-match while it is non-empty');
@@ -224,6 +380,7 @@ describe('Draft input vs. active chip ownership', () => {
 
     // Clear the draft.
     await typeDraft('');
+    await waitForMatchTexts('cat');
 
     matchTexts = await rangeTexts('oculist-match');
     assert.strictEqual(matchTexts.length, 3, '"cat" has 3 matches on the page');
@@ -248,7 +405,11 @@ describe('Draft input vs. active chip ownership', () => {
 
     await typeDraft('cat'); // draft text matches an already-committed (but inactive) chip
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+      return chips.some((el) => el.textContent === 'cat' && el.classList.contains('active'));
+    }, null, { timeout: 5000 });
 
     assert.deepStrictEqual(await chipTerms(), ['cat', 'dog'], 're-committing an existing term must not create a second chip');
     assert.strictEqual(await activeChipTerm(), 'cat', 'the existing chip must become active rather than being duplicated');
@@ -268,31 +429,36 @@ describe('Draft input vs. active chip ownership', () => {
   // that make -1-with-a-non-empty-list a state performListSearch() has to handle cleanly.
   test('a restored list with no active chip never raises a false "no matches" notice', async () => {
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
 
     await evalInContentScript(
       "new Promise((resolve) => chrome.storage.session.set(" +
         "{ 'oc-worklist': { terms: ['cat', 'dog'], activeIndex: -1 } }, resolve))"
     );
 
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await openFinder();
+    await waitForChipCount(2);
 
     // loadWorkList() on mount only populates workListTerms/activeTermIndex; a real DOM
     // mutation is what triggers the rescanAfterMutation() -> performListSearch() call
-    // that actually builds termRanges/the dim registry for the restored list.
+    // that actually builds termRanges/the dim registry for the restored list. Poll on the
+    // exact condition the assertion below checks (the 350ms mutation-observer debounce
+    // firing) instead of guessing "debounce + margin" as a wall-clock number.
     await page.evaluate(() => {
       const marker = document.createElement('span');
       marker.textContent = 'trigger-rescan';
       document.body.appendChild(marker);
     });
-    await page.waitForTimeout(600); // 350ms mutation-observer debounce + margin
+    const dimTexts = await waitForContentScriptValue(
+      evalInContentScript,
+      `(function(){var h=CSS.highlights.get('oculist-dim-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()`,
+      (v) => Array.isArray(v) && v.length === 5,
+      { timeout: 5000, message: 'mutation-observer rescan never rebuilt oculist-dim-match with both terms\' matches' }
+    );
 
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'no chip being active must not be reported as "no matches found"');
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '', 'the count slot must stay blank, not "no match"');
 
-    const dimTexts = await rangeTexts('oculist-dim-match');
     assert.strictEqual(dimTexts.length, 5, 'both terms\' real matches (3 "cat" + 2 "dog") must still be dim');
   });
 
@@ -306,24 +472,33 @@ describe('Draft input vs. active chip ownership', () => {
   test('committing a chip after a zero-chip mutation rescan shows the new term\'s count, not the stale one\'s', async () => {
     // Zero chips, but a lastTerm ('cat') is on record from an earlier draft search.
     await typeDraft('cat');
+    await waitForMatchTexts('cat');
     let matchTexts = await rangeTexts('oculist-match');
     assert.ok(matchTexts.length > 0 && matchTexts.every((t) => t === 'cat'), 'the draft search for "cat" must have run');
 
     // A DOM mutation while zero chips are committed fires rescanAfterMutation() ->
     // performListSearch(), which takes the zero-chip/implicit-lastTerm branch and fills
-    // termRanges from 'cat' — while workListTerms stays [].
+    // termRanges from 'cat' — while workListTerms stays []. oculist-match's own content
+    // does not visibly change here (it is rescanning the same 'cat' term it already held),
+    // so poll the debounce timer's own firing directly instead of a DOM effect that isn't
+    // guaranteed to move.
+    const mutationBefore = await armMutationRescanCounter();
     await page.evaluate(() => {
       const marker = document.createElement('span');
       marker.textContent = 'trigger-rescan';
       document.body.appendChild(marker);
     });
-    await page.waitForTimeout(600); // 350ms mutation-observer debounce + margin
+    await waitForMutationRescan(mutationBefore);
 
     // Type a DIFFERENT term as a draft — never touches termRanges (oculist-l6m.5's draft
     // path) — then commit it with Enter, which pushes the first real chip.
     await typeDraft('dog');
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(250);
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const chips = root && root.shadowRoot ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')) : [];
+      return chips.length === 1 && chips[0].textContent === 'dog';
+    }, null, { timeout: 5000 });
 
     assert.deepStrictEqual(await chipTerms(), ['dog']);
     assert.deepStrictEqual(
@@ -364,6 +539,7 @@ describe('Draft input vs. active chip ownership', () => {
 
       // performDraftSearch() call site: typing a draft without committing it.
       await typeDraft('bird');
+      await waitForMatchTexts('bird');
       assert.strictEqual(
         await registryPresent('oculist-dim-match'),
         false,
@@ -374,6 +550,7 @@ describe('Draft input vs. active chip ownership', () => {
 
       // restoreActiveChip() call site: clearing the draft hands ownership back to 'dog'.
       await typeDraft('');
+      await waitForMatchTexts('dog');
       assert.strictEqual(
         await registryPresent('oculist-dim-match'),
         false,

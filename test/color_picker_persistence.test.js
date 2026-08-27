@@ -45,11 +45,22 @@ describe('Settings panel survives its own storage writes', () => {
 
     page = await ctx.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    await page.waitForTimeout(500);
-    await page.keyboard.press('Control+f');
+    // No CDP session in this file, so there is no isolatedContextId to poll for injection
+    // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+    // otherwise silently swallow) until the input actually appears, instead of guessing a
+    // fixed delay.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        break;
+      } catch (e) {
+        // keep retrying
+      }
+    }
     await page.waitForSelector(INPUT, { timeout: 5000 });
     await page.locator(GEAR).click();
-    await page.waitForTimeout(400);
+    await page.waitForSelector('#oc-wrap >> .oc-color-input', { timeout: 5000 });
   });
 
   after(async () => {
@@ -120,7 +131,16 @@ describe('Settings panel survives its own storage writes', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
     await popup.selectOption('#vision-profile', 'low-vision');
-    await popup.waitForTimeout(300);
+    // Wait for the write to actually land before tearing the popup page down, instead of
+    // guessing how long the async chrome.storage.sync.set() call takes.
+    await popup.waitForFunction(
+      () =>
+        chrome.storage.sync
+          .get('oc-settings')
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
+      null,
+      { timeout: 5000 }
+    );
     await popup.close();
 
     await page.bringToFront();

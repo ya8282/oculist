@@ -26,8 +26,24 @@ describe('Default site blocklist', () => {
       route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: BODY })
     );
     await page.goto(url);
-    await page.waitForTimeout(600);
     return page;
+  };
+
+  // No CDP session in this file, so there is no isolatedContextId to poll for injection
+  // readiness — retry Control+f itself (a keypress a not-yet-attached listener would
+  // otherwise silently swallow) until the input actually appears, instead of guessing a
+  // fixed delay. Used by the tests that expect the finder to actually open.
+  const openFinder = async (page) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.keyboard.press('Control+f');
+      try {
+        await page.waitForSelector(INPUT, { timeout: 250 });
+        return;
+      } catch (e) {
+        // keep retrying
+      }
+    }
+    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
   };
 
   before(async () => {
@@ -61,8 +77,16 @@ describe('Default site blocklist', () => {
 
   test('github.com ships disabled, so Ctrl+F falls through to the browser', async () => {
     const page = await openPage('https://github.com/anthropics/claude-code');
-    await page.keyboard.press('Control+f');
-    await page.waitForTimeout(600);
+    // No positive signal to wait on here (the point is that nothing happens) — press
+    // Control+f repeatedly over a bounded window instead of a single guessed-duration
+    // attempt, so a content script that simply was not finished injecting yet (a false
+    // "blocked" reading) cannot be mistaken for the real disabled-site behaviour under
+    // test: if it were only "not ready", a later retry in this same loop would open it.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await page.keyboard.press('Control+f');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (await page.evaluate(() => !!document.getElementById('oc-wrap'))) break;
+    }
     assert.strictEqual(
       await page.evaluate(() => !!document.getElementById('oc-wrap')),
       false,
@@ -73,8 +97,7 @@ describe('Default site blocklist', () => {
 
   test('other sites are unaffected', async () => {
     const page = await openPage('https://example.com/');
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder(page);
     assert.strictEqual(await page.evaluate(() => !!document.getElementById('oc-wrap')), true);
     await page.close();
   });
@@ -94,8 +117,7 @@ describe('Default site blocklist', () => {
     );
 
     const page = await openPage('https://github.com/anthropics/claude-code');
-    await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await openFinder(page);
     assert.strictEqual(
       await page.evaluate(() => !!document.getElementById('oc-wrap')),
       true,
