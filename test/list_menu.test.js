@@ -744,6 +744,46 @@ describe('List menu popover (saved lists UI)', () => {
     assert.deepStrictEqual(raw[0], { id: 'mixed', name: 'Mixed List', terms: ['cat', '   ', 'dog'] });
   });
 
+  // oculist-dzi: unlike the whitespace-only case above (terms IS an array, just empty
+  // after sanitizing), this entry's terms field isn't an array at all — the shape
+  // Array.isArray(entry.terms) used to reject outright, dropping the whole entry and
+  // leaving it invisible yet still counted toward the 50-list cap. It must now render
+  // using the same disabled/badged-0 treatment, and — the actual point of making it
+  // visible — delete must still work on it and the removal must persist in storage.
+  test('an identifiable saved list with malformed (non-array) terms is visible, badged 0 terms, disabled, and genuinely deletable', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'oc-list-badterms': { id: 'badterms', name: 'Malformed Terms List', terms: 'nope' }}," +
+      " resolve))"
+    );
+
+    await openListsMenu();
+    await page.waitForSelector(LIST_ITEM_NAME, { timeout: 5000 });
+    assert.deepStrictEqual(await page.locator(LIST_ITEM_NAME).allTextContents(), ['Malformed Terms List']);
+    assert.strictEqual(await page.locator(LIST_ITEM_COUNT).textContent(), '0 terms');
+    assert.strictEqual(
+      await page.locator(LIST_ITEM_NAME).isDisabled(),
+      true,
+      'malformed terms must not be loadable any more than a legitimately empty list is'
+    );
+
+    await page.locator(LIST_DELETE_BTN).click();
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      return !root || root.shadowRoot.querySelectorAll('.oc-list-item-name').length === 0;
+    }, null, { timeout: 5000 });
+    assert.strictEqual(await page.locator(LIST_ITEM_NAME).count(), 0, 'the deleted malformed list must no longer be listed');
+    assert.strictEqual(
+      (await page.locator(LIST_EMPTY).textContent()).trim(),
+      'No saved lists yet.'
+    );
+
+    // The delete genuinely reached storage — the malformed key itself is gone, not
+    // just hidden by the popover's own re-render.
+    const rawAfterDelete = await rawSavedLists();
+    assert.strictEqual(rawAfterDelete.length, 0);
+  });
+
   test('opening the list popover closes an open settings panel and the reverse; Escape closes only the popover', async () => {
     await page.locator(GEAR_BTN).click();
     await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });

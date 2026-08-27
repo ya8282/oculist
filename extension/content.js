@@ -226,22 +226,23 @@
     return id;
   }
 
-  // Reads every oc-list-* key and returns the well-formed { id, name, terms } entries.
-  // Tolerates junk under the prefix (a malformed or partially-written value from a
-  // previous version, a failed write, or a future format this version doesn't understand)
-  // by skipping anything that isn't shaped like a list, rather than throwing.
+  // Reads every oc-list-* key and returns every IDENTIFIABLE entry — one with a usable
+  // id (a non-empty string) and a usable name (a string) — as { id, name, terms }, even
+  // if its terms are malformed. An entry that isn't even identifiable (not an object, no
+  // usable id, no usable name — e.g. a bare string value or a numeric id) can't be
+  // rendered meaningfully and is skipped entirely, same as before.
   //
-  // terms is run through sanitizeListTerms() here rather than a bare string filter
-  // (oculist-l6m.35): saveList() already stores sanitized terms, so this is a no-op for
-  // anything saved through the UI, but it's also the read path buildListItem() and
-  // loadSavedList() both build on, and all three need to agree on what "empty" means for
-  // a list that was hand-edited or corrupted in sync storage — a list whose only stored
-  // term is whitespace must count as 0 terms everywhere, not just where it's loaded. This
-  // is a read-time transform only; the stored value itself is never rewritten here.
-  // This only affects entries whose terms IS an array (e.g. ['   '] or ['cat', '   ',
-  // 'dog']) — the Array.isArray(entry.terms) shape check just below is unchanged, so an
-  // entry where terms itself isn't an array at all is still treated as junk and skipped
-  // entirely, same as an entry with a malformed id or name.
+  // terms is run through sanitizeListTerms() (oculist-l6m.35's read-time transform, kept
+  // unchanged for well-formed array terms) — and, per oculist-dzi, that call is now made
+  // unconditionally rather than gated behind an Array.isArray(entry.terms) check.
+  // sanitizeListTerms() already treats anything that isn't an array as zero terms, so an
+  // identifiable entry with malformed terms (terms: 'nope', terms: null, terms missing,
+  // terms: {}) comes back as { id, name, terms: [] } instead of being dropped — the same
+  // shape buildListItem() already renders as a disabled, badged-0-terms row for a
+  // legitimately empty list (oculist-l6m.35's empty-list gate), so a malformed-but-
+  // identifiable list becomes visible and deletable/renameable for free, without a new UI
+  // branch. This is a read-time transform only; the stored value itself is never
+  // rewritten here.
   function listSavedLists(callback) {
     try {
       chrome.storage.sync.get(null, function (data) {
@@ -256,7 +257,6 @@
           if (!entry || typeof entry !== 'object') return;
           if (typeof entry.id !== 'string' || entry.id === '') return;
           if (typeof entry.name !== 'string') return;
-          if (!Array.isArray(entry.terms)) return;
           out.push({
             id: entry.id,
             name: entry.name,
@@ -273,6 +273,19 @@
   // Reads every oc-list-* key once and hands the caller both the current count (for the
   // 50-list cap) and the id list (for generateListId's collision check) — shared by
   // saveList so it never has to make two separate chrome.storage.sync.get(null) calls.
+  //
+  // oculist-dzi: only IDENTIFIABLE entries (same object/id/name shape guard as
+  // listSavedLists() above — terms shape is irrelevant here) count toward the cap. An
+  // entry listSavedLists() will never be able to render (not an object, no usable id, no
+  // usable name) stops silently occupying one of the 50 slots. An identifiable entry
+  // with malformed terms still counts — it's now visible and deletable in the panel, so
+  // the count is honest and the user has a way to reclaim the slot themselves.
+  //
+  // ids collection is gated separately from count/name: any entry with a usable
+  // (non-empty string) id contributes to generateListId()'s collision check, even one
+  // whose name is malformed and so doesn't count toward the cap or render anywhere —
+  // an unrenderable entry's id can still collide with a freshly generated one, and
+  // there's no reason to give up that check just because the entry can't be displayed.
   function readListIndex(callback) {
     try {
       chrome.storage.sync.get(null, function (data) {
@@ -284,9 +297,12 @@
         var ids = [];
         Object.keys(data).forEach(function (key) {
           if (key.indexOf(LIST_KEY_PREFIX) !== 0) return;
-          count++;
           var entry = data[key];
-          if (entry && typeof entry.id === 'string') ids.push(entry.id);
+          if (!entry || typeof entry !== 'object') return;
+          if (typeof entry.id !== 'string' || entry.id === '') return;
+          ids.push(entry.id);
+          if (typeof entry.name !== 'string') return;
+          count++;
         });
         callback({ count: count, ids: ids });
       });
@@ -350,7 +366,10 @@
     }
   }
 
-  // Renaming preserves id and terms untouched; only name changes. Rejects an empty or
+  // Renaming preserves id unconditionally, and preserves a well-formed terms array
+  // unchanged; a malformed (non-array) terms value is replaced with [] on rename — the
+  // same normalisation the panel already shows via the 0-terms badge (oculist-dzi).
+  // Otherwise only name changes. Rejects an empty or
   // whitespace-only name the same way saveList() does — silently, no showNotice. A rename
   // targeting an id with no matching key (already deleted, e.g. from another device)
   // reports { ok: false, reason: 'not-found' } without writing anything or showing a
