@@ -20,6 +20,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -71,7 +72,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
   }
 
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   // Polls the real shadow root's activeElement (not a fixed sleep) until it is the single
@@ -156,7 +157,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     await page.goto(origin);
     await waitForContentScriptReady();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
@@ -181,12 +182,12 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     }
     await waitForOverlayClosed();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
   });
 
   test('changing the theme by keyboard rebuilds the panel in place but keeps focus on the equivalent control', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     // Move focus onto the "Light" theme toggle button via a real DOM focus() call (not a
     // click), then activate it with a real Enter keypress — the setting change itself goes
@@ -209,7 +210,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
         return !!btn && btn.classList.contains('active');
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // Base requirement: focus is still somewhere inside the panel, read from the shadow
@@ -229,7 +230,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
 
   test('a settings change rebuild triggered while focus is outside the panel does not steal focus into it', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     // Move focus to the find input — inside the shadow root, but outside the settings
     // panel. The settings panel stays mounted (only gearBtn/Escape close it), matching a
@@ -250,7 +251,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
         return !!btn && btn.classList.contains('active');
       },
       POSITION_BL_BTN_CSS,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // Focus must still be on the find input — the rebuild must not have pulled it into the
@@ -259,7 +260,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
   });
   test('a rebuild that disables the previously focused control (colours, via a visionProfile change) falls back to the panel container, not BODY', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     // Focus a colour picker control — still resolvable by data-oc-key after the rebuild
     // below, but about to become disabled, so it is not a valid restore target.
@@ -281,7 +282,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
         return !!input && input.disabled === true;
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const state = await page.evaluate((panelSel) => {

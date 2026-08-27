@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -52,7 +53,7 @@ describe('Low Vision overlays survive a window resize', () => {
 
     // Turn on Low Vision through the real popup, so the test exercises the same
     // storage path a user does rather than hand-writing settings.
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${sw.url().split('/')[2]}/popup.html`);
     await popup.waitForSelector('#vision-profile');
@@ -65,7 +66,7 @@ describe('Low Vision overlays survive a window resize', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
 
@@ -88,7 +89,7 @@ describe('Low Vision overlays survive a window resize', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   after(async () => {
@@ -124,14 +125,14 @@ describe('Low Vision overlays survive a window resize', () => {
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await page.keyboard.press('Enter');
     // drawActiveMatchLabel() and the beacon effect are both drawn from the same
     // synchronous animate() call (deferred by highlightActiveRange()'s own setTimeout) —
     // by the time the label exists, that whole draw has already landed, so no separate
     // wait is needed to "outlast" anything before reading its position.
-    await page.waitForSelector(LABEL, { timeout: 5000 });
+    await page.waitForSelector(LABEL, { timeout: POLL_TIMEOUT });
 
     const before = await offset();
     assert.ok(before, 'expected the Low Vision match label to be drawn');
@@ -146,7 +147,7 @@ describe('Low Vision overlays survive a window resize', () => {
         return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) > 20;
       },
       { beforeLeft: before.matchLeft },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await page.waitForFunction(
       (labelSel) => {
@@ -158,7 +159,7 @@ describe('Low Vision overlays survive a window resize', () => {
         return Math.abs((l.left + l.width / 2) - (t.left + t.width / 2)) < 6;
       },
       LABEL,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const after = await offset();

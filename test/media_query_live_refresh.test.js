@@ -24,6 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -73,7 +74,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
       viewport: { width: 1200, height: 800 },
       colorScheme: 'light',
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
   });
 
@@ -97,7 +98,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   async function readDialogCss() {
@@ -123,7 +124,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
     await openFinder();
 
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await page.locator(THEME_BTN('system')).click();
     await page.waitForFunction(
       () => {
@@ -133,7 +134,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
         return !!btn && btn.classList.contains('active');
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // Baseline: theme 'system' with the launch-time 'light' OS preference.
@@ -155,7 +156,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
         return !!styleEl && styleEl.textContent.indexOf(needle) !== -1;
       },
       DARK_HOVER_RGBA,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const flipped = await readDialogCss();
@@ -182,7 +183,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // Set a white custom match colour via the popup — same wiring dim_contrast.test.js's
@@ -214,7 +215,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
           );
         }),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -222,7 +223,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
     await page.waitForFunction(
       () => /oculist-dim-match[^}]*background-color:\s*rgba/.test(document.getElementById('oc-global-highlight-styles').textContent),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     const baseline = await currentGlobalCss();
     assert.match(
@@ -241,7 +242,7 @@ describe('OS-level media query flips refresh the injected CSS with no other user
     await page.waitForFunction(
       () => /oculist-dim-match[^}]*text-decoration-line/.test(document.getElementById('oc-global-highlight-styles').textContent),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     const flipped = await currentGlobalCss();
     assert.match(

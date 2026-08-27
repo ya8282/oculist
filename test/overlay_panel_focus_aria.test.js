@@ -24,6 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -68,7 +69,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   }
 
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   before(async () => {
@@ -104,7 +105,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
     await page.goto(origin);
     await waitForContentScriptReady();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
@@ -213,7 +214,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
     }
     await waitForOverlayClosed();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
   });
 
   test('gearBtn (Options): aria-haspopup is "dialog" and aria-expanded flips true/false with open/close', async () => {
@@ -244,35 +245,35 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
 
   test('opening Settings moves focus into the settings panel; closing it via its own button returns focus to gearBtn', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(SETTINGS_PANEL_CSS);
 
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
     await waitForActiveElement(GEAR_BTN_CSS);
     await waitForAXExpanded(GEAR_BTN_CSS, false);
   });
 
   test('opening the list popover moves focus into it; closing it via its own button returns focus to listsBtn', async () => {
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(LISTS_PANEL_CSS);
 
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
     await waitForActiveElement(LISTS_BTN_CSS);
     await waitForAXExpanded(LISTS_BTN_CSS, false);
   });
 
   test('Escape closes the list popover and returns focus to listsBtn; a second Escape closes the whole overlay', async () => {
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(LISTS_PANEL_CSS);
 
     // First Escape: closes only the popover (oculist-l6m.9 behaviour), and must return
     // focus to the trigger that opened it, not strand it on the now-detached panel.
     await page.keyboard.press('Escape');
-    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
     await waitForActiveElement(LISTS_BTN_CSS);
     await waitForAXExpanded(LISTS_BTN_CSS, false);
@@ -289,12 +290,12 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // trigger (gearBtn); a second Escape (with no panel open) closes the whole overlay.
   test('Escape closes the settings panel and returns focus to gearBtn (overlay stays open)', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(SETTINGS_PANEL_CSS);
 
     // First Escape: closes only the settings panel, must not tear down the whole overlay.
     await page.keyboard.press('Escape');
-    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
     await waitForActiveElement(GEAR_BTN_CSS);
     await waitForAXExpanded(GEAR_BTN_CSS, false);
@@ -302,11 +303,11 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
 
   test('a second Escape (settings panel already closed) closes the whole overlay, matching the listsPanel case', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(SETTINGS_PANEL_CSS);
 
     await page.keyboard.press('Escape');
-    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
 
     // Second Escape: falls through to the full overlay destroy, matching the listsPanel
     // behaviour above.
@@ -320,14 +321,14 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // unconditionally on listsPanel presence rather than checking focus location first.
   test('Escape closes the settings panel even when focus is outside it (e.g. the find input)', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(SETTINGS_PANEL_CSS);
 
     await page.locator(INPUT).focus();
     await waitForActiveElement('.oc-input');
 
     await page.keyboard.press('Escape');
-    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 1, 'the overlay itself must still be open after the first Escape');
     await waitForActiveElement(GEAR_BTN_CSS);
   });
@@ -348,7 +349,7 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
   // sidesteps that.
   test('Settings dialog: computed accessible name is the sentence-case string, not the CSS-uppercased visible header', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     const ax = await getAXProperties(SETTINGS_PANEL_CSS);
     assert.strictEqual(ax.role, 'dialog');
@@ -357,20 +358,20 @@ describe('Overlay panel triggers: live aria-haspopup/aria-expanded, and focus mo
 
   test('opening Settings while the list popover is open closes it without stranding focus, and vice versa', async () => {
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(LISTS_PANEL_CSS);
 
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: 5000 });
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(LISTS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(SETTINGS_PANEL_CSS);
     await waitForAXExpanded(LISTS_BTN_CSS, false);
     await waitForAXExpanded(GEAR_BTN_CSS, true);
 
     // And the reverse direction.
     await page.locator(LISTS_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: 5000 });
-    await page.waitForSelector(LISTS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { state: 'detached', timeout: POLL_TIMEOUT });
+    await page.waitForSelector(LISTS_PANEL, { timeout: POLL_TIMEOUT });
     await waitForActiveElement(LISTS_PANEL_CSS);
     await waitForAXExpanded(GEAR_BTN_CSS, false);
     await waitForAXExpanded(LISTS_BTN_CSS, true);

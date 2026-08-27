@@ -24,6 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -76,7 +77,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
   // handler itself only runs after the browser's own event dispatch — poll for the real
   // removal instead of sleeping a guessed dispatch delay.
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   // loadWorkList() on mount is an async chrome.storage.session.get() round trip whose
@@ -124,7 +125,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
     await page.goto(origin);
     await waitForContentScriptReady();
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
@@ -158,7 +159,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
     await waitForOverlayClosed();
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await waitForWorkListLoad();
   });
 
@@ -213,7 +214,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
       const root = document.getElementById('oc-wrap').shadowRoot;
       const el = root.querySelector('.oc-chip-term.active');
       return el && el.textContent === t;
-    }, term, { timeout: 5000 });
+    }, term, { timeout: POLL_TIMEOUT });
   }
 
   async function waitForCountText(expected) {
@@ -221,7 +222,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
       const root = document.getElementById('oc-wrap').shadowRoot;
       const el = root.querySelector('.oc-count');
       return el && el.textContent === t;
-    }, expected, { timeout: 5000 });
+    }, expected, { timeout: POLL_TIMEOUT });
   }
 
   async function addTerm(term) {
@@ -332,7 +333,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
         "{ 'oc-worklist': { terms: ['cat', 'dog'], activeIndex: 1 } }, resolve))"
     );
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await waitForActiveChip('dog');
 
     // Mount restore never scans (see loadWorkList()/buildUI()) — count starts blank and

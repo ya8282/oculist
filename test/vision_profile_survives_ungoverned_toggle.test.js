@@ -15,6 +15,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -30,7 +31,7 @@ describe('Vision profile survives ungoverned setting toggles', () => {
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 800 },
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
   });
 
@@ -101,7 +102,7 @@ describe('Vision profile survives ungoverned setting toggles', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionSettings && d['oc-settings'].visionSettings.magnifier === true)),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     const stored = await readStoredSettings(popup);
     assert.strictEqual(stored.visionProfile, 'eye-strain', 'persisted visionProfile must still be eye-strain');
@@ -132,7 +133,7 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     await popup.waitForFunction(
       () => chrome.storage.sync.get('oc-settings').then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'custom')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     const stored = await readStoredSettings(popup);
     assert.strictEqual(stored.visionProfile, 'custom');

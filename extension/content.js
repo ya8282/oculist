@@ -169,6 +169,17 @@
   window.__ocLoadWorkList = loadWorkList;
   window.__ocSaveWorkList = saveWorkList;
 
+  // Same test-reachability reasoning as the two above, for a plain closure variable
+  // rather than a function: debounceTimer (declared further down, in the "State"
+  // section) drives the input debounce. oculist-bxm's regression test reads it to assert
+  // that, on the empty-input path, the pending debounce is actually cancelled
+  // (debounceTimer === null) rather than merely inferred from timing — the only
+  // hook-free alternative is a negative "the debounce never fired" assertion, which
+  // would need a fixed sleep this suite forbids. The chip-removal-syncs-the-draft case
+  // is asserted on the DOM instead (count text and the oculist-match highlight
+  // registry), so it needs no matching lastTerm hook.
+  window.__ocGetDebounceTimer = function () { return debounceTimer; };
+
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
   //
   // Distinct from the working list above: a saved list is a named, user-curated term set
@@ -366,10 +377,14 @@
     }
   }
 
-  // Renaming preserves id unconditionally, and preserves a well-formed terms array
-  // unchanged; a malformed (non-array) terms value is replaced with [] on rename — the
-  // same normalisation the panel already shows via the 0-terms badge (oculist-dzi).
-  // Otherwise only name changes. Rejects an empty or
+  // Renaming preserves id unconditionally, and preserves terms verbatim — well-formed or
+  // not — untouched (oculist-qc8). A rename changes only the name; it must not be the
+  // operation that silently discards a malformed terms value, especially now that
+  // oculist-dzi made such entries visible and renameable. Every consumer of a stored list
+  // entry already normalises on read (normalizeWorkList()/loadWorkList() above,
+  // listSavedLists()'s unconditional sanitizeListTerms() call below), so a non-array terms
+  // value sitting in storage can never reach code that assumes an array. Otherwise only
+  // name changes. Rejects an empty or
   // whitespace-only name the same way saveList() does — silently, no showNotice. A rename
   // targeting an id with no matching key (already deleted, e.g. from another device)
   // reports { ok: false, reason: 'not-found' } without writing anything or showing a
@@ -392,7 +407,7 @@
         var updated = {
           id: id,
           name: trimmedName,
-          terms: Array.isArray(existing.terms) ? existing.terms : []
+          terms: existing.terms
         };
         var setObj = {};
         setObj[key] = updated;
@@ -1399,13 +1414,24 @@
     // scale per ring plus a small stagger IS the dispersion — the rings recombine bright at
     // the core and split into iridescent bands toward the fringe.
     var ringCount = settings.performanceMode ? 1 : 3;
-    for (var r = 0; r < ringCount; r++) {
-      var ringColor = hslToHex(_dh + hueOffsets[r], _ds, _dl);
-      var endScale = endScales[r];
+    // Centre the subset of offsets/scales on the ring count instead of indexing hueOffsets
+    // by r directly: with ringCount 1 that picks the unshifted (0-offset) hue rather than
+    // the -22 entry, and it caps the loop bound to the slice length so a future ringCount
+    // can't index past the array and emit undefined/NaN colours.
+    // Clamp at 0: ringCount > hueOffsets.length would otherwise centre to a negative
+    // start, and Array#slice with a negative index counts back from the end instead of
+    // clamping to 0, silently under-rendering rings instead of erroring. ringCount is only
+    // ever 1 or 3 today (both safe without the clamp) — this guards a future ringCount.
+    var ringStart = Math.max(0, Math.floor((hueOffsets.length - ringCount) / 2));
+    var ringHueOffsets = hueOffsets.slice(ringStart, ringStart + ringCount);
+    var ringEndScales = endScales.slice(ringStart, ringStart + ringCount);
+    for (var r = 0; r < ringHueOffsets.length; r++) {
+      var ringColor = hslToHex(_dh + ringHueOffsets[r], _ds, _dl);
+      var endScale = ringEndScales[r];
 
       var ring = document.createElement('div');
       ring.className = 'oc-dispersion-ring';
-      ring.setAttribute('data-oc-hue-offset', String(hueOffsets[r]));
+      ring.setAttribute('data-oc-hue-offset', String(ringHueOffsets[r]));
       ring.style.cssText = [
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
@@ -2745,7 +2771,15 @@
       while (child) {
         if (child.nodeType === 3) {
           var parent = child.parentElement || (child.parentNode && child.parentNode.host);
-          if (parent && !SKIP_TAGS[parent.tagName] && !parent.classList.contains('oc-beacon')) {
+          // oculist-hf6: collapsed from an ad-hoc oc-beacon classList check into the
+          // shared helper, so this can't silently diverge if isOculistNode() gains a
+          // marker. Behaviourally identical: the helper matches more (oc-wrap,
+          // oc-global-highlight-styles, oc-viewport-marker), but none of it is reachable
+          // here — the element branch below already refuses to descend into any Oculist
+          // node, traversal roots at document.body while markers and the style tag mount
+          // outside it, and SKIP_TAGS already excludes STYLE. Dead defense, kept for the
+          // day descent-blocking changes.
+          if (parent && !SKIP_TAGS[parent.tagName] && !isOculistNode(parent)) {
             var nodeStyle = window.getComputedStyle(parent);
             if (nodeStyle && nodeStyle.display !== 'none' && nodeStyle.visibility !== 'hidden') {
               var content = child.textContent;
@@ -3360,6 +3394,7 @@
     if (!wrapRoot || dismissedNotices.has(noticeKey) || noticeEl) return;
     noticeEl = document.createElement('div');
     noticeEl.className = 'oc-notice';
+    noticeEl.setAttribute('data-oc-notice', noticeKey);
 
     var textEl = document.createElement('span');
     textEl.className = 'oc-notice-text';
@@ -3551,12 +3586,27 @@
       // (buildPageIndex() is never called). Also cancels any pending debounce so it
       // can't independently re-fire restoreActiveChip() against now-stale closures
       // after we've already settled the empty state.
-      if (input && input.value === '') {
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
+      //
+      // When the input instead holds a non-empty draft, a debounce may still be in
+      // flight from the user's typing. Leaving lastTerm pointing at the just-removed
+      // chip's term would make the implicit-lastTerm fallback below re-scan that
+      // removed term for one tick until the debounce fires and corrects it
+      // (oculist-bxm). Syncing lastTerm to the draft here instead makes that same
+      // implicit scan search what the user is actually typing, so there is nothing
+      // stale to flash. The debounce itself is left alone — cancelling it would drop
+      // the user's in-flight draft search — and it stays idempotent: it re-sets
+      // lastTerm to this same value and re-runs the equivalent scan via
+      // performDraftSearch().
+      if (input) {
+        if (input.value === '') {
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
+          lastTerm = '';
+        } else {
+          lastTerm = input.value;
         }
-        lastTerm = '';
       }
     }
     performListSearch();
