@@ -366,10 +366,14 @@
     }
   }
 
-  // Renaming preserves id unconditionally, and preserves a well-formed terms array
-  // unchanged; a malformed (non-array) terms value is replaced with [] on rename — the
-  // same normalisation the panel already shows via the 0-terms badge (oculist-dzi).
-  // Otherwise only name changes. Rejects an empty or
+  // Renaming preserves id unconditionally, and preserves terms verbatim — well-formed or
+  // not — untouched (oculist-qc8). A rename changes only the name; it must not be the
+  // operation that silently discards a malformed terms value, especially now that
+  // oculist-dzi made such entries visible and renameable. Every consumer of a stored list
+  // entry already normalises on read (normalizeWorkList()/loadWorkList() above,
+  // listSavedLists()'s unconditional sanitizeListTerms() call below), so a non-array terms
+  // value sitting in storage can never reach code that assumes an array. Otherwise only
+  // name changes. Rejects an empty or
   // whitespace-only name the same way saveList() does — silently, no showNotice. A rename
   // targeting an id with no matching key (already deleted, e.g. from another device)
   // reports { ok: false, reason: 'not-found' } without writing anything or showing a
@@ -392,7 +396,7 @@
         var updated = {
           id: id,
           name: trimmedName,
-          terms: Array.isArray(existing.terms) ? existing.terms : []
+          terms: existing.terms
         };
         var setObj = {};
         setObj[key] = updated;
