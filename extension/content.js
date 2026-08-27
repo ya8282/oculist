@@ -1418,7 +1418,11 @@
     // by r directly: with ringCount 1 that picks the unshifted (0-offset) hue rather than
     // the -22 entry, and it caps the loop bound to the slice length so a future ringCount
     // can't index past the array and emit undefined/NaN colours.
-    var ringStart = Math.floor((hueOffsets.length - ringCount) / 2);
+    // Clamp at 0: ringCount > hueOffsets.length would otherwise centre to a negative
+    // start, and Array#slice with a negative index counts back from the end instead of
+    // clamping to 0, silently under-rendering rings instead of erroring. ringCount is only
+    // ever 1 or 3 today (both safe without the clamp) — this guards a future ringCount.
+    var ringStart = Math.max(0, Math.floor((hueOffsets.length - ringCount) / 2));
     var ringHueOffsets = hueOffsets.slice(ringStart, ringStart + ringCount);
     var ringEndScales = endScales.slice(ringStart, ringStart + ringCount);
     for (var r = 0; r < ringHueOffsets.length; r++) {
