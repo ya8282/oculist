@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -40,7 +41,7 @@ describe('Settings panel survives its own storage writes', () => {
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 800 },
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
@@ -58,9 +59,9 @@ describe('Settings panel survives its own storage writes', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await page.locator(GEAR).click();
-    await page.waitForSelector('#oc-wrap >> .oc-color-input', { timeout: 5000 });
+    await page.waitForSelector('#oc-wrap >> .oc-color-input', { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -139,7 +140,7 @@ describe('Settings panel survives its own storage writes', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
 
@@ -147,7 +148,7 @@ describe('Settings panel survives its own storage writes', () => {
     await page.waitForFunction(
       () => !!document.getElementById('oc-wrap').shadowRoot.querySelector('.oc-settings-profile-banner'),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const banner = await page.evaluate(

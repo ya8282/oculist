@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -66,7 +67,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
     await page.goto(origin);
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
 
@@ -117,7 +118,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
         // keep retrying
       }
     }
-    await pg.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await pg.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   // Wait for the draft debounce to actually land a real match count before any test fires
@@ -130,7 +131,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -172,7 +173,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
   async function waitForSettingsEcho(before) {
     return waitForCondition(() => evalInContentScript('window.__ocSettingsEchoes'), (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
     });
   }
@@ -201,7 +202,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   async function replay(pg) {
     await pg.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await pg.keyboard.press('Enter');
-    await pg.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await pg.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
   // Pulls out the L-shaped path's start/elbow/end points from the div.oc-beacon arrow's
@@ -311,7 +312,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
       await page2.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
       await page2.keyboard.press('Enter');
-      await page2.waitForSelector('.oc-beacon', { timeout: 5000 });
+      await page2.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
 
       const geom = await page2.evaluate(() => {
         const arrow = document.querySelector('div.oc-beacon');
@@ -358,7 +359,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       (await page.locator('.oc-beacon').count()) > 0,
       'sanity check: the beacon must actually render before checking it is cleaned up'
     );
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   });
 
   test('Lite Mode drops the trailing line, keeping only the arrowhead', async () => {

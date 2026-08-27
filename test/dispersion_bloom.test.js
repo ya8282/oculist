@@ -23,7 +23,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -125,7 +125,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
 
     await page.goto(origin);
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
 
@@ -144,7 +144,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   });
 
@@ -167,7 +167,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -209,7 +209,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
 
   async function waitForSettingsEcho(before) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
     });
   }
@@ -264,7 +264,7 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
   async function replay() {
     await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
   async function ringColors() {
@@ -272,6 +272,12 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
       Array.from(document.querySelectorAll('.oc-dispersion-ring')).map((el) => getComputedStyle(el).borderTopColor)
     );
     return raw.map(rgbStringToArr);
+  }
+
+  async function ringHueOffsets() {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll('.oc-dispersion-ring')).map((el) => el.getAttribute('data-oc-hue-offset'))
+    );
   }
 
   function rgbStringToArr(str) {
@@ -363,14 +369,48 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     }
   });
 
-  test('Lite Mode drops the ring count from 3 to 1', async () => {
+  test('Lite Mode drops the ring count from 3 to 1, and the surviving ring sits on the base (0) hue', async () => {
+    // 'default' palette passes settings.beaconColor straight through unchanged
+    // (getEffectiveColors()) — read the real persisted value rather than hardcoding it.
+    const before = await getPersistedSettings();
+    const baseBeacon = before.beaconColor || '#fbbf24';
+    assert.strictEqual(
+      (before.visionSettings && before.visionSettings.colorPalette) || 'default',
+      'default',
+      'sanity check: this test must start from the default palette'
+    );
+
     await replay();
     assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 3, 'full mode must render all 3 rings');
+
+    // Full mode must still render exactly the three -22/0/+22 offsets (not a collapsed
+    // subset) so the Lite Mode fix below can't silently regress the non-Lite path.
+    const fullOffsets = (await ringHueOffsets()).map(Number).sort((a, b) => a - b);
+    assert.deepStrictEqual(
+      fullOffsets,
+      [-22, 0, 22],
+      `full mode must render all three hue offsets, got ${JSON.stringify(fullOffsets)}`
+    );
+    assertColorsMatch(await ringColors(), expectedRingHexes(baseBeacon));
 
     try {
       await setSettings({ performanceMode: true });
       await replay();
       assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 1, 'Lite Mode must drop the ring count to 1');
+
+      // The lone ring must carry the unshifted (0) hue offset — both the attribute and the
+      // actually-rendered colour, since the attribute alone could be right while the colour
+      // still used the wrong array index.
+      const liteOffsets = await ringHueOffsets();
+      assert.deepStrictEqual(
+        liteOffsets,
+        ['0'],
+        `Lite Mode's single ring must carry the unshifted (0) hue offset, not -22, got ${JSON.stringify(liteOffsets)}`
+      );
+
+      const [baseHue, baseSat, baseLight] = hexToHsl(baseBeacon);
+      const liteExpectedHex = hslToHex(baseHue + 0, baseSat, baseLight);
+      assertColorsMatch(await ringColors(), [liteExpectedHex]);
     } finally {
       await setSettings({ performanceMode: false });
     }

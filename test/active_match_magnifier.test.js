@@ -21,6 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -80,7 +81,7 @@ describe('Active-match magnifier overlay', () => {
   }
 
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   function evalInContentScript(expression) {
@@ -123,7 +124,7 @@ describe('Active-match magnifier overlay', () => {
 
   async function openBar() {
     await page.keyboard.press('Control+f');
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
   }
 
   async function search(term) {
@@ -180,7 +181,7 @@ describe('Active-match magnifier overlay', () => {
         await page.waitForFunction(
           (sels) => !!(document.querySelector(sels.magnifier) || document.querySelector(sels.label)),
           { magnifier: MAGNIFIER, label: LABEL },
-          { timeout: 5000 }
+          { timeout: POLL_TIMEOUT }
         );
       },
       checkFn,
@@ -258,7 +259,7 @@ describe('Active-match magnifier overlay', () => {
   // "the pending redraw fired", correct regardless of which of the two deferred paths was
   // taken — unlike a fixed sleep sized for only the faster of the two.
   async function waitForPendingRedraw() {
-    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
 
   // Polls fn() until it returns a truthy value or the deadline passes, then resolves with
@@ -352,7 +353,7 @@ describe('Active-match magnifier overlay', () => {
     // remove the magnifier card — proving this is a real toggle, not a one-way absorption.
     await setVisionSettings({ magnifier: false });
     await redrawUntil(() => page.evaluate((sel) => !document.querySelector(sel), MAGNIFIER));
-    await page.waitForSelector(LABEL, { timeout: 5000 });
+    await page.waitForSelector(LABEL, { timeout: POLL_TIMEOUT });
     assert.strictEqual(
       await page.locator(LABEL).first().textContent(),
       'Match #1 of 1',
@@ -479,7 +480,7 @@ describe('Active-match magnifier overlay', () => {
         return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) > 20;
       },
       { targetId: 'quarklet-target', beforeLeft: before.targetLeft },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await page.waitForFunction(
       (sel) => {
@@ -492,7 +493,7 @@ describe('Active-match magnifier overlay', () => {
         return dx < 6;
       },
       MAGNIFIER,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const after = await offset();
@@ -510,7 +511,7 @@ describe('Active-match magnifier overlay', () => {
         return target && Math.abs(target.getBoundingClientRect().left - args.beforeLeft) < 5;
       },
       { targetId: 'quarklet-target', beforeLeft: before.targetLeft },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   });
 
@@ -563,7 +564,7 @@ describe('Active-match magnifier overlay', () => {
         return !!m && Number(m[1]) > 1;
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     // highlightActiveRange() updates the count synchronously but defers the actual overlay
@@ -578,7 +579,7 @@ describe('Active-match magnifier overlay', () => {
         return !el || !el.children[0] || el.children[0].textContent !== 'quarklet';
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const magnifierCount = await page.locator(MAGNIFIER).count();
@@ -607,7 +608,7 @@ describe('Active-match magnifier overlay', () => {
         return !!count && /of 1\b/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     // highlightActiveRange() updates the count synchronously above but defers its own
     // animate() redraw by a setTimeout (see content.js). That deferred call reads
@@ -657,7 +658,7 @@ describe('Active-match magnifier overlay', () => {
         return !!count && /of 1\b/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     // See the magnifier test above: wait out highlightActiveRange()'s own deferred
     // animate() call before writing settings, so that pending redraw can't be mistaken

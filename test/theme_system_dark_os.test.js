@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -67,7 +68,7 @@ describe('Theme hover colour follows the resolved theme, not the raw setting (oc
         return !!btn && btn.classList.contains('active');
       },
       `[data-oc-key="theme:${value}"]`,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -80,7 +81,7 @@ describe('Theme hover colour follows the resolved theme, not the raw setting (oc
         return !!styleEl && styleEl.textContent.indexOf(n) !== -1;
       },
       needle,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -120,9 +121,9 @@ describe('Theme hover colour follows the resolved theme, not the raw setting (oc
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 });
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {

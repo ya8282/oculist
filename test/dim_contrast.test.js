@@ -21,7 +21,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
@@ -143,7 +143,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
   // cannot distinguish from "nothing happened yet").
   async function armSettingsEcho() {
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     return evalInContentScript(`
@@ -162,7 +162,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
 
   async function waitForSettingsEcho(before, opts) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
       ...opts,
     });
@@ -212,7 +212,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 800 },
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
   });
 
@@ -240,7 +240,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
         return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
       })()`,
       (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === term),
-      { timeout: 5000, message: `performListSearch() never rebuilt oculist-match with "${term}"'s own matches` }
+      { timeout: POLL_TIMEOUT, message: `performListSearch() never rebuilt oculist-match with "${term}"'s own matches` }
     );
   }
 
@@ -253,7 +253,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     // world existing at all — poll the execution-context-created flag instead of guessing
     // how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
@@ -279,7 +279,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   // oculist-32d: like openFinderOn, but adds a SECOND term and explicitly activates the
@@ -292,7 +292,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await attachCdp();
     await page.goto(url);
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
@@ -309,7 +309,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
         return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
       })()`,
       (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === 'cat'),
-      { timeout: 5000, message: 'clicking the "cat" chip never rebuilt oculist-match with its own matches' }
+      { timeout: POLL_TIMEOUT, message: 'clicking the "cat" chip never rebuilt oculist-match with its own matches' }
     );
   }
 
@@ -365,7 +365,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
           return !!s && s.visionProfile === wanted;
         }),
       profileKey,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -410,7 +410,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
           return !!(s && s.visionSettings && s.visionSettings.customColors && s.visionSettings.customColors.matchColor === expected);
         }),
       hex,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -479,7 +479,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await page.waitForFunction(
       () => /oculist-dim-match[^}]*text-decoration-line/.test(document.getElementById('oc-global-highlight-styles').textContent),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const css = await currentCss();
@@ -500,7 +500,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await page.waitForFunction(
       () => /oculist-dim-match[^}]*background-color:\s*rgba/.test(document.getElementById('oc-global-highlight-styles').textContent),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const css = await currentCss();
@@ -520,7 +520,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await page.emulateMedia({ contrast: 'more' });
     await page.goto(origin + 'dark');
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinder();
@@ -532,7 +532,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await page.waitForFunction(
       () => /oculist-dim-match[^}]*text-decoration-line/.test(document.getElementById('oc-global-highlight-styles').textContent),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     const css = await currentCss();
@@ -556,7 +556,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       await attachCdp();
       await page.goto(origin + 'adaptive');
       await waitForCondition(() => isolatedContextId, Boolean, {
-        timeout: 5000,
+        timeout: POLL_TIMEOUT,
         message: 'never observed the content script isolated execution context',
       });
       await openFinder();
@@ -576,7 +576,7 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
           return h ? Array.from(h).map(function (r) { return r.toString(); }) : [];
         })()`,
         (v) => Array.isArray(v) && v.length > 0 && v.every((t) => t === chip0Term),
-        { timeout: 5000, message: 'clicking chip 0 never rebuilt oculist-match with its own matches' }
+        { timeout: POLL_TIMEOUT, message: 'clicking chip 0 never rebuilt oculist-match with its own matches' }
       );
       // Committing a term via Enter (addTermAndWait() above) fires a transient ~3s
       // attention "beacon" glow (a Web Animation) at the newly-active match — but only
@@ -585,13 +585,13 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       // synchronously. Wait for the beacon to actually appear first — otherwise "wait for
       // absence" can pass vacuously before the deferred call has even run, letting the
       // glow appear later and paint over a screenshot taken after this check "passed".
-      await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+      await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
       // It self-removes when the animation finishes, but until then its radial glow
       // paints over both paragraphs and is by itself enough to make two otherwise-
       // identical screenshots differ. Wait for it to fully leave the DOM so the only
       // thing that can make two screenshots of the same element differ is the stylesheet
       // edits this test makes on purpose.
-      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
 
       const originalCss = await currentCss();
       assert.match(
@@ -698,8 +698,8 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       // Same transient attention-beacon concern as the adaptivity test above: wait for it
       // to actually appear (the deferred animate() call that draws it can still be
       // in-flight here) and then fully leave the DOM before any screenshot is taken.
-      await page.waitForSelector('.oc-beacon', { timeout: 5000 });
-      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: 5000 });
+      await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
 
       const p = page.locator('p');
 

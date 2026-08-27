@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -75,7 +76,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   test('bar stays mounted and re-scans the new page after a body swap', async () => {
@@ -90,7 +91,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
         return !!count && count.textContent.trim() === '1 of 1';
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '1 of 1');
 
@@ -104,7 +105,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
         return !!count && count.textContent.trim() === '1 of 3';
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
 
     assert.strictEqual(
@@ -121,7 +122,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
 
   test('Ctrl+F still reopens the finder after it is closed', async () => {
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.evaluate(() => !!document.getElementById('oc-wrap')), false);
 
     await openFinder();
@@ -135,7 +136,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
   // which would make this test pass for the wrong reason.
   test('our own beacons and markers do not retrigger the scan loop', async () => {
     const popup = await ctx.newPage();
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     await popup.goto(`chrome-extension://${sw.url().split('/')[2]}/popup.html`);
     await popup.waitForSelector('#vision-profile');
     await popup.selectOption('#vision-profile', 'color-blind-deuteranopia');
@@ -147,7 +148,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'color-blind-deuteranopia')),
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -162,7 +163,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
         return !!count && /of \d+/.test(count.textContent);
       },
       null,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await page.keyboard.press('Enter'); // draws a beacon on documentElement, once the deferred animate() call fires
 
@@ -177,8 +178,8 @@ describe('Finder survives SPA navigation that swaps the body', () => {
     // (the count holding steady across two checks) before starting the "future stays
     // quiet" window — starting it mid-burst would let the observer catch the burst's own
     // remaining legitimate insertions as a false "rescan loop" positive.
-    await page.waitForSelector('.oc-viewport-marker', { timeout: 5000 });
-    await page.waitForSelector('.oc-beacon', { timeout: 5000 });
+    await page.waitForSelector('.oc-viewport-marker', { timeout: POLL_TIMEOUT });
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
     await page.evaluate(() => {
       window.__ocBeaconStableLast = -1;
       window.__ocBeaconStableStreak = 0;
@@ -191,7 +192,7 @@ describe('Finder survives SPA navigation that swaps the body', () => {
         return window.__ocBeaconStableStreak >= 2; // holds steady across a couple of consecutive polls
       },
       null,
-      { timeout: 5000, polling: 300 }
+      { timeout: POLL_TIMEOUT, polling: 300 }
     );
 
     assert.ok(

@@ -16,6 +16,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -30,7 +31,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
   let server, ctx, page;
 
   async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 5000 });
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
   }
 
   async function waitForActiveElement(cssSelector, timeoutMs) {
@@ -90,7 +91,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   // Every test starts from a closed overlay, so panel/focus state never leaks between
@@ -106,7 +107,7 @@ describe('Settings-panel Enter activation (oculist-oxh)', () => {
 
   test('Enter on a focused settings-panel button activates it natively (theme toggle)', async () => {
     await page.locator(GEAR_BTN).click();
-    await page.waitForSelector(SETTINGS_PANEL, { timeout: 5000 });
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
     // Move focus onto the "Light" theme toggle button via a real DOM focus() call (not a
     // click), then activate it with a real Enter keypress — this is the exact interaction

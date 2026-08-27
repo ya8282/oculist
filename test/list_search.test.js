@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -64,7 +64,7 @@ describe('performListSearch() and per-term chip counts', () => {
       viewport: { width: 1280, height: 800 },
     });
 
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
@@ -86,13 +86,13 @@ describe('performListSearch() and per-term chip counts', () => {
     // world existing at all — poll the execution-context-created flag the CDP listener
     // above sets, instead of guessing how long injection takes.
     await waitForCondition(() => isolatedContextId, Boolean, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
     await openFinderRetry();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
 
   after(async () => {
@@ -115,7 +115,7 @@ describe('performListSearch() and per-term chip counts', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   function evalInContentScript(expression) {
@@ -138,7 +138,7 @@ describe('performListSearch() and per-term chip counts', () => {
   // instrumentation never leak from one test into the next.
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForFunction(CLOSED, null, { timeout: 5000 });
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinderRetry();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
@@ -162,7 +162,7 @@ describe('performListSearch() and per-term chip counts', () => {
         return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -174,7 +174,7 @@ describe('performListSearch() and per-term chip counts', () => {
         return chips.length === n;
       },
       expected,
-      { timeout: 5000, ...opts }
+      { timeout: POLL_TIMEOUT, ...opts }
     );
   }
 
@@ -190,7 +190,7 @@ describe('performListSearch() and per-term chip counts', () => {
         return !!chips[i] && chips[i].classList.contains('active');
       },
       index,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -218,7 +218,7 @@ describe('performListSearch() and per-term chip counts', () => {
 
   async function waitForSettingsEcho(before, opts) {
     return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'oc-settings change never echoed into the content script',
       ...opts,
     });
@@ -254,7 +254,7 @@ describe('performListSearch() and per-term chip counts', () => {
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
       enabled,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -400,7 +400,7 @@ describe('performListSearch() and per-term chip counts', () => {
     // Wait on the exact counter this test measures instead of guessing the 150ms/400ms
     // debounce window — the debounce firing is precisely what makes it move.
     const after1 = await waitForContentScriptValue(evalInContentScript, 'window.__ocGCSCalls', (v) => v > before1, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'draft-typing debounce never fired a buildPageIndex() call',
     });
     const baselineCalls = after1 - before1;
@@ -411,7 +411,7 @@ describe('performListSearch() and per-term chip counts', () => {
     const before3 = await evalInContentScript('window.__ocGCSCalls');
     await page.locator(CHIP_TERM).nth(0).click();
     const after3 = await waitForContentScriptValue(evalInContentScript, 'window.__ocGCSCalls', (v) => v > before3, {
-      timeout: 5000,
+      timeout: POLL_TIMEOUT,
       message: 'chip-click performListSearch() never fired a buildPageIndex() call',
     });
     const listCalls = after3 - before3;
@@ -505,7 +505,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
       viewport: { width: 1280, height: 800 },
     });
 
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
+    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
@@ -543,7 +543,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
           .get('oc-settings')
           .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
       enabled,
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
     await popup.close();
     await page.bringToFront();
@@ -560,7 +560,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         return chips.length === expected && chips[chips.length - 1] && chips[chips.length - 1].textContent === term;
       },
       { expected: before + 1, term },
-      { timeout: 5000 }
+      { timeout: POLL_TIMEOUT }
     );
   }
 
@@ -578,7 +578,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   test('exceeding the 2000-match total cap stops materialising further terms, fires the notice, and never starves the active term', async () => {

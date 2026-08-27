@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -65,7 +66,7 @@ describe('Popover keeps the find bar width', () => {
         // keep retrying
       }
     }
-    await page.waitForSelector(INPUT, { timeout: 5000 }); // surfaces the real timeout error
+    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
   // Polls document.getElementById('oc-wrap')'s own rendered width until it holds steady
@@ -85,7 +86,7 @@ describe('Popover keeps the find bar width', () => {
         return window.__ocWidthStableStreak >= 3;
       },
       null,
-      { timeout: 5000, polling: 100 }
+      { timeout: POLL_TIMEOUT, polling: 100 }
     );
   }
 
@@ -93,7 +94,7 @@ describe('Popover keeps the find bar width', () => {
     const closed = await hostWidth(page);
 
     await page.locator(GEAR).click();
-    await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
+    await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: POLL_TIMEOUT });
     await waitForStableWidth();
 
     const open = await hostWidth(page);
@@ -110,7 +111,7 @@ describe('Popover keeps the find bar width', () => {
     await page.waitForFunction(() => {
       const root = document.getElementById('oc-wrap');
       return !root || !root.shadowRoot.querySelector('#oc-settings-panel');
-    }, null, { timeout: 5000 });
+    }, null, { timeout: POLL_TIMEOUT });
   });
 
   test('the no-match notice does not widen the popover', async () => {
@@ -118,7 +119,7 @@ describe('Popover keeps the find bar width', () => {
 
     await page.locator(INPUT).fill('');
     await page.locator(INPUT).type('zzzznotpresentzzzz', { delay: 20 });
-    await page.waitForSelector('#oc-wrap >> .oc-notice', { timeout: 5000 });
+    await page.waitForSelector('#oc-wrap >> .oc-notice', { timeout: POLL_TIMEOUT });
     await waitForStableWidth();
 
     const after = await hostWidth(page);
