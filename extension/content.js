@@ -1399,13 +1399,20 @@
     // scale per ring plus a small stagger IS the dispersion — the rings recombine bright at
     // the core and split into iridescent bands toward the fringe.
     var ringCount = settings.performanceMode ? 1 : 3;
-    for (var r = 0; r < ringCount; r++) {
-      var ringColor = hslToHex(_dh + hueOffsets[r], _ds, _dl);
-      var endScale = endScales[r];
+    // Centre the subset of offsets/scales on the ring count instead of indexing hueOffsets
+    // by r directly: with ringCount 1 that picks the unshifted (0-offset) hue rather than
+    // the -22 entry, and it caps the loop bound to the slice length so a future ringCount
+    // can't index past the array and emit undefined/NaN colours.
+    var ringStart = Math.floor((hueOffsets.length - ringCount) / 2);
+    var ringHueOffsets = hueOffsets.slice(ringStart, ringStart + ringCount);
+    var ringEndScales = endScales.slice(ringStart, ringStart + ringCount);
+    for (var r = 0; r < ringHueOffsets.length; r++) {
+      var ringColor = hslToHex(_dh + ringHueOffsets[r], _ds, _dl);
+      var endScale = ringEndScales[r];
 
       var ring = document.createElement('div');
       ring.className = 'oc-dispersion-ring';
-      ring.setAttribute('data-oc-hue-offset', String(hueOffsets[r]));
+      ring.setAttribute('data-oc-hue-offset', String(ringHueOffsets[r]));
       ring.style.cssText = [
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
