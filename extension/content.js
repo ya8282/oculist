@@ -542,6 +542,7 @@
     effectLightning: 'Lightning',
     effectElectronCloud: 'Electron Cloud',
     effectPointingArrows: 'Pointing Arrows',
+    effectDispersionBloom: 'Dispersion Bloom',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -593,6 +594,13 @@
     });
   }
 
+  // manifest.json declares no minimum_chrome_version, so the MV3 baseline (Chrome 88) is
+  // below plus-lighter's Chrome 111 floor. Feature-detected once at module scope and
+  // reused by animateDispersion() rather than re-checked per beacon fire.
+  var OC_DISPERSION_BLEND = (window.CSS && CSS.supports && CSS.supports('mix-blend-mode', 'plus-lighter'))
+    ? 'plus-lighter'
+    : 'screen';
+
   function getActiveThemeName() {
     var themeName = settings.theme;
     if (themeName === 'system') {
@@ -621,7 +629,8 @@
     flame: { label: i18n.effectInfernoFlame, run: animateFlame },
     lightning: { label: i18n.effectLightning, run: animateLightning },
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
-    arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows }
+    arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
+    dispersion: { label: i18n.effectDispersionBloom, run: animateDispersion }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -1300,6 +1309,103 @@
         duration: getBeaconDuration(1400 + Math.random() * 600),
         delay: getBeaconDuration(Math.random() * 500),
         easing: 'ease-out',
+        fill: 'forwards'
+      });
+    }
+
+    // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
+    document.documentElement.appendChild(container);
+
+    setTimeout(function() {
+      container.remove();
+    }, getBeaconDuration(2200));
+  }
+
+  // Dispersion Bloom: reproduces the look of shader-driven radial chromatic dispersion
+  // (UV distortion -> channel offset -> radial attenuation -> additive recombination) as
+  // DOM + WAAPI, with hues derived from the active palette instead of a true RGB spectrum.
+  // A real rainbow split conveys information via hue, which is exactly what tritanopia/
+  // deuteranopia/protanopia users cannot separate — the whole point of Oculist's vision
+  // profiles is to prevent that, so this stays palette-derived, never a hardcoded
+  // spectrum. Single expanding pulse only (no repeat/loop) to stay clear of WCAG 2.3.1.
+  function animateDispersion(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var cx = rect.left + rect.width / 2 + window.scrollX;
+    var cy = rect.top + rect.height / 2 + window.scrollY;
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var _dhsl = hexToHsl(color);
+    var _dh = _dhsl[0], _ds = _dhsl[1], _dl = _dhsl[2];
+    // Palette-derived hue offsets standing in for a shader's RGB channel split — same
+    // idiom animateFlame uses at hexToHsl/hslToHex above, just with a symmetric spread.
+    var hueOffsets = [-22, 0, 22];
+    var endScales = [13, 15, 17.5];
+    var scale = getBeaconScale();
+
+    var containerWidth = 300;
+    var containerHeight = 300;
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var scrollWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body ? document.body.scrollWidth : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var maxLeft = Math.max(0, scrollWidth - containerWidth);
+    var targetTop = Math.min(Math.max(0, cy - 150), maxTop);
+    var targetLeft = Math.min(Math.max(0, cx - 150), maxLeft);
+    var offsetX = cx - targetLeft;
+    var offsetY = cy - targetTop;
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
+      'width:' + containerWidth + 'px', 'height:' + containerHeight + 'px',
+      'pointer-events:none', 'z-index:2147483643',
+      'overflow:visible',
+      // Additive recombination confined to the rings themselves: isolate creates a new
+      // stacking context so plus-lighter/screen blends the rings against each other only,
+      // never bleeding into the host page (which would make the bloom vanish on white).
+      'isolation:isolate'
+    ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
+
+    // Three concentric, hue-offset rings (channel offsetting). A slightly different end
+    // scale per ring plus a small stagger IS the dispersion — the rings recombine bright at
+    // the core and split into iridescent bands toward the fringe.
+    var ringCount = settings.performanceMode ? 1 : 3;
+    for (var r = 0; r < ringCount; r++) {
+      var ringColor = hslToHex(_dh + hueOffsets[r], _ds, _dl);
+      var endScale = endScales[r];
+
+      var ring = document.createElement('div');
+      ring.className = 'oc-dispersion-ring';
+      ring.setAttribute('data-oc-hue-offset', String(hueOffsets[r]));
+      ring.style.cssText = [
+        'position:absolute',
+        'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
+        'width:10px', 'height:10px',
+        'border:2px solid ' + ringColor,
+        'border-radius:50%',
+        'box-shadow:0 0 10px ' + ringColor + ', inset 0 0 8px ' + ringColor,
+        'mix-blend-mode:' + OC_DISPERSION_BLEND,
+        'opacity:0', 'filter:blur(0px)', 'pointer-events:none'
+      ].join(';');
+      container.appendChild(ring);
+
+      ring.animate([
+        { transform: 'scale(0.5)', opacity: 0, filter: 'blur(0px)' },
+        { transform: 'scale(1)', opacity: 1, filter: 'blur(0px)', offset: 0.1 },
+        { transform: 'scale(' + endScale + ')', opacity: 0, filter: 'blur(6px)' }
+      ], {
+        duration: getBeaconDuration(1600),
+        delay: r * getBeaconDuration(80),
+        easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
       });
     }
