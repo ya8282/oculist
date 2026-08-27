@@ -553,10 +553,31 @@
       accent: '#f59e0b', panelBg: 'rgba(255, 255, 255, 0.97)', divider: '#d4d4d8',
     },
   };
+  // Singleton (not a fresh matchMedia() call per read) so a 'change' listener can be
+  // attached exactly once, below — .matches is still read fresh on every
+  // getActiveThemeName() call, so the OS signal stays live either way. See
+  // reducedMotionQuery/prefersMoreContrastQuery further down for the same pattern.
+  var colorSchemeQuery = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+
+  // oculist-cvg: getActiveThemeName()'s result gets baked into a <style> textContent
+  // snapshot inside injectHighlightStyles() (the dialogCss theme custom properties) —
+  // unlike a live .matches read, that snapshot only updates when injectHighlightStyles()
+  // runs again. Without this, an OS colour-scheme flip mid-session left the injected CSS
+  // showing the old theme until some unrelated event happened to re-inject. Registered
+  // once here, at module scope, so it can never stack duplicate listeners across calls to
+  // any function — see __ocDestroy() for why this one is intentionally not removed there.
+  if (colorSchemeQuery) {
+    colorSchemeQuery.addEventListener('change', function () {
+      injectHighlightStyles();
+    });
+  }
+
   function getActiveThemeName() {
     var themeName = settings.theme;
     if (themeName === 'system') {
-      var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var isDark = colorSchemeQuery && colorSchemeQuery.matches;
       themeName = isDark ? 'dark' : 'light';
     }
     return themeName;
@@ -628,6 +649,17 @@
 
   // ── Destroy ───────────────────────────────────────────────────────────────────
 
+  // oculist-cvg: colorSchemeQuery's and prefersMoreContrastQuery's 'change' listeners
+  // (registered once, at module scope, near each singleton's declaration) are
+  // intentionally NOT torn down here, matching chrome.storage.onChanged.addListener
+  // below (also registered once and never removed). Both call injectHighlightStyles(),
+  // which already tolerates a torn-down overlay: it looks up '#oc-global-highlight-styles'
+  // by id (recreating it if destroy() removed it — inert, since destroy() also cleared the
+  // CSS.highlights registry, so no element is actually painted by it) and only touches
+  // wrapRoot inside its own `if (wrapRoot)` guard, which destroy() has already nulled. So a
+  // flip arriving after destroy() is a harmless no-op, not a leak or a throw, and removing
+  // the listeners here would just re-add them on the next boot() of a fresh script
+  // instance for no benefit.
   window.__ocDestroy = function () {
     clearViewportMarkers();
     if (viewportMarkersTimer) {
@@ -2135,6 +2167,16 @@
     ? window.matchMedia('(prefers-reduced-motion: reduce)')
     : null;
 
+  // oculist-cvg: unlike colorSchemeQuery/prefersMoreContrastQuery, this one intentionally
+  // gets no 'change' listener. Those two get baked into a <style> textContent snapshot by
+  // injectHighlightStyles() (theme custom properties / dimHighlightCss), so a flip needs
+  // an explicit re-inject to be seen. Nothing injectHighlightStyles() writes depends on
+  // reducedMotionQuery — motion only ever gates JS behaviour (effectiveMotion(), consulted
+  // fresh on every beacon render, e.g. drawActiveOverlays()/animate() below), so an OS
+  // flip is already visible on the very next beacon with zero staleness window and nothing
+  // to re-inject. Re-running injectHighlightStyles() on this query's change would be a
+  // byte-for-byte no-op. See prefers_reduced_motion.test.js (oculist-mg3) for the existing
+  // coverage that this live read already works without any listener.
   function effectiveMotion() {
     var motion = (settings.visionSettings && settings.visionSettings.motionSensitivity) ? settings.visionSettings.motionSensitivity : 'full';
     if (motion === 'full' && reducedMotionQuery && reducedMotionQuery.matches) return 'reduced';
@@ -4730,6 +4772,19 @@
   var prefersMoreContrastQuery = window.matchMedia
     ? window.matchMedia('(prefers-contrast: more)')
     : null;
+
+  // oculist-cvg: dimIsHighContrast (below, inside injectHighlightStyles()) reads
+  // .matches at inject time and bakes the result into the dimHighlightCss it writes into
+  // the shared <style id="oc-global-highlight-styles"> element. Without this listener, a
+  // prefers-contrast flip mid-session left the dim treatment on whichever branch (wash vs
+  // underline) was resolved at the last inject. Registered once here, at module scope —
+  // see colorSchemeQuery above and __ocDestroy() below for why it is intentionally not
+  // removed there.
+  if (prefersMoreContrastQuery) {
+    prefersMoreContrastQuery.addEventListener('change', function () {
+      injectHighlightStyles();
+    });
+  }
 
   // WCAG 2.2 SC 1.4.11 non-text contrast minimum. Below this, the dotted-underline
   // treatment (oculist-l6m.17) is used instead of the alpha wash regardless of vision
