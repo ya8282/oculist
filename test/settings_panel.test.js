@@ -372,5 +372,62 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(markersAfterClear.length, 0, 'Viewport shape markers should be cleared once the search is emptied');
     });
 
+    test('A settings.effect value for a removed effect (e.g. the deleted Lens) still renders a working beacon via the post-boot storage.onChanged sync path (oculist-e9u)', async () => {
+      const dom = createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+
+      const p1 = document.createElement('p');
+      p1.textContent = 'orphan beacon target';
+      document.body.appendChild(p1);
+
+      // Boot with a *valid* effect. The boot-time coercion
+      // (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`, content.js:6122)
+      // would silently rewrite a stale key like 'lens' before boot() ever runs, so booting
+      // with one here means that coercion cannot be what's carrying this test.
+      global.chrome.storage.sync.get = (key, cb) => cb({
+        'oc-settings': { effect: 'hud' }
+      });
+
+      // Capture the listener content.js registers via chrome.storage.onChanged.addListener
+      // so it can be fired manually below, after boot. That listener's SETTINGS_KEYS.forEach
+      // (content.js:6062-6069) applies `settings[k] = nv[k]` for every key, including
+      // `effect`, with no registry guard — it is the only route by which settings.effect can
+      // actually hold a stale/removed key like 'lens' at animate()-time, which is what makes
+      // the animate()-time fallback (effectsRegistry[effectKey] || effectsRegistry.hud,
+      // content.js:2589) the thing this test pins.
+      let onChangedListener;
+      global.chrome.storage.onChanged.addListener = (fn) => { onChangedListener = fn; };
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const input = wrap.shadowRoot.querySelector('.oc-input');
+
+      input.value = 'orphan beacon';
+      input.dispatchEvent(new global.window.Event('input'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const countEl = wrap.shadowRoot.querySelector('.oc-count');
+      assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find the single match in content.js');
+
+      // Simulate a settings payload persisted before an effect was removed from the
+      // registry (e.g. Lens, oculist-e9u) landing post-boot from elsewhere (popup, another
+      // tab, or a direct chrome.storage.sync.set()) via chrome.storage.onChanged.
+      assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
+
+      // The beacon only fires on an explicit navigation (findNext), not on the initial
+      // search — mirrors how trail_effect.test.js's replay() drives it via Enter too.
+      global.document.dispatchEvent(new global.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const beacons = document.documentElement.querySelectorAll('.oc-beacon');
+      assert.ok(beacons.length > 0, 'A beacon should still render for a stale/unknown effect key rather than silently no-op');
+    });
+
   });
 });
