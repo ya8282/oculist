@@ -1025,6 +1025,7 @@
       'position:fixed',
       'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
       'width:' + w + 'px', 'height:' + h + 'px',
+      'box-sizing:content-box',
       'border:2.5px solid ' + color,
       'border-radius:50%',
       'box-shadow:0 0 20px ' + color + ', inset 0 0 20px ' + color,
@@ -1169,6 +1170,7 @@
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
         'width:10px', 'height:10px',
+        'box-sizing:content-box',
         'border:2px solid #ffffff',
         'border-radius:50%',
         'box-shadow:0 0 10px ' + color + ', inset 0 0 8px ' + color,
@@ -1483,6 +1485,7 @@
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
         'width:10px', 'height:10px',
+        'box-sizing:content-box',
         'border:2px solid ' + ringColor,
         'border-radius:50%',
         'box-shadow:0 0 10px ' + ringColor + ', inset 0 0 8px ' + ringColor,
@@ -2640,6 +2643,7 @@
       'top:' + (localY(rect.top) - boxPad) + 'px',
       'width:' + (mw + boxPad * 2) + 'px',
       'height:' + (mh + boxPad * 2) + 'px',
+      'box-sizing:content-box',
       'border:' + Math.max(1, 2 * scale) + 'px solid ' + color,
       'box-shadow:0 0 ' + (10 * scale) + 'px ' + color + ', inset 0 0 ' + (8 * scale) + 'px ' + color,
       'pointer-events:none'
@@ -2799,6 +2803,7 @@
     // border) on its leading (bottom) side.
     var sweep = add('oc-cv-sweep', [
       'position:absolute', 'left:0', 'width:100%', 'height:78px',
+      'box-sizing:content-box',
       'background:linear-gradient(to bottom, transparent,' + hexToRgba(color, 0.32) + ', transparent)',
       'border-bottom:2px solid ' + color
     ].join(';'));
@@ -2854,7 +2859,7 @@
     for (var i = 0; i < corners.length; i++) {
       var cdef = corners[i];
       var bracket = add('oc-cv-bracket', [
-        'position:absolute', 'border:2px solid ' + color, cdef[0],
+        'position:absolute', 'box-sizing:content-box', 'border:2px solid ' + color, cdef[0],
         'left:' + cdef[1] + 'px', 'top:' + cdef[2] + 'px',
         'width:' + L + 'px', 'height:' + L + 'px'
       ].join(';'));
@@ -2936,6 +2941,7 @@
       'position:absolute',
       'left:' + (x - 3) + 'px', 'top:' + (y - 3) + 'px',
       'width:' + (w + 6) + 'px', 'height:' + (h + 6) + 'px',
+      'box-sizing:content-box',
       'border:3px solid ' + color,
       'border-radius:4px',
       'pointer-events:none',
@@ -2976,6 +2982,7 @@
         'position:absolute',
         'left:' + (x - 6) + 'px', 'top:' + (y - 6) + 'px',
         'width:' + (w + 12) + 'px', 'height:' + (h + 12) + 'px',
+        'box-sizing:content-box',
         'background:' + hexToRgba(color, 0.15),
         'border:2.5px solid ' + color,
         'border-radius:4px',
@@ -3074,6 +3081,7 @@
       'position:absolute',
       'left:' + (x - 4) + 'px', 'top:' + (y - 4) + 'px',
       'width:' + (w + 8) + 'px', 'height:' + (h + 8) + 'px',
+      'box-sizing:content-box',
       'background:' + hexToRgba(color, 0.25),
       'border:2px solid ' + color,
       'border-radius:4px',
@@ -3123,6 +3131,7 @@
       'position:absolute',
       'left:' + (x - 2) + 'px', 'top:' + (y - 2) + 'px',
       'width:' + (w + 4) + 'px', 'height:' + (h + 4) + 'px',
+      'box-sizing:content-box',
       'border:' + borderWidth + ' solid ' + color,
       'border-radius:4px',
       'pointer-events:none',
@@ -4777,6 +4786,7 @@
           'position:absolute',
           'left:' + pos.left + 'px', 'top:' + pos.top + 'px',
           'width:8px', 'height:8px',
+          'box-sizing:content-box',
           'border:2px solid ' + markerColor,
           'border-radius:50%',
           'background:transparent',
