@@ -5,6 +5,19 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
+## [Unreleased]
+
+### Added
+
+* **Speed Lines.** A new effect that fires horizontal light streaks blasting outward from the
+  match; the streak hue rides your beacon colour.
+* **Chrono Tunnel.** A new effect with kaleidoscopic rings rushing outward in a slit-scan smear;
+  hue rides your beacon colour within a bounded sweep.
+* **Light Cycle.** A new effect where a cycle runs in on right angles, leaving a glowing wall
+  that holds, boxes the match, then de-rezzes.
+* **Cyber-Vision.** A new effect with scanlines, a sweeping bar, and thermal blocks over the
+  match, plus targeting brackets and a readout showing the real match index and count.
+
 ## [1.7.0] — 2026-08-25
 
 ### Added
