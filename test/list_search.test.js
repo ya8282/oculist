@@ -16,6 +16,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { enableAccessibilityDomain, computedAccessibleName } = require('./helpers/accessible_name');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -517,6 +518,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
     client = await ctx.newCDPSession(page);
     await client.send('Page.enable');
     await client.send('Runtime.enable');
+    await enableAccessibilityDomain(client);
     client.on('Runtime.executionContextCreated', (event) => {
       const c = event.context;
       if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
@@ -624,6 +626,13 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
     await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
   }
 
+  // expression run via Runtime.evaluate in the page's default (main) world (see
+  // test/helpers/accessible_name.js) — the shadow DOM node itself lives in the one real
+  // page document even though content.js's own JS runs in an isolated world.
+  function chipExprByIndex(i) {
+    return `document.getElementById('oc-wrap').shadowRoot.querySelectorAll('.oc-chip-term')[${i}]`;
+  }
+
   test('exceeding the 2000-match total cap stops materialising further terms, fires the notice, and never starves the active term', async () => {
     await setLiteMode(true);
     try {
@@ -660,6 +669,18 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         zzdeltaLabel,
         'Search term: zzdelta, skipped, match limit reached',
         '"zzdelta" was skipped by the total cap; its accessible name must say so, not just render an em dash'
+      );
+
+      // Strengthened per oculist-l6m.36: also assert on the COMPUTED accessible name (via
+      // the CDP Accessibility domain, not getAttribute), which is what a screen reader
+      // actually announces and is what regressions in name-computation precedence (e.g. an
+      // aria-labelledby appearing) would change without necessarily changing the raw
+      // attribute above.
+      const zzdeltaComputedName = await computedAccessibleName(client, chipExprByIndex(2));
+      assert.strictEqual(
+        zzdeltaComputedName,
+        'Search term: zzdelta, skipped, match limit reached',
+        'the computed accessible name (not just the raw aria-label attribute) must state the starved chip was skipped'
       );
 
       // 999 (zzalpha, active) + 999 (zzbravo) + 999 (zzcharlie) = 2997, the REAL number of
@@ -712,6 +733,14 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         'Search term: zzdelta',
         'an unscanned chip must not claim it was skipped before any scan has actually run'
       );
+      // Strengthened per oculist-l6m.36: computed accessible name, not just the raw
+      // attribute, must not claim "skipped" before any scan has run.
+      const zzdeltaComputedNameBeforeScan = await computedAccessibleName(client, chipExprByIndex(2));
+      assert.strictEqual(
+        zzdeltaComputedNameBeforeScan,
+        'Search term: zzdelta',
+        'the computed accessible name of an unscanned chip must not claim it was skipped before any scan has run'
+      );
 
       // Clicking the already-active chip still forces a full rescan (activateChip() always
       // calls performListSearch()) — the same chip element observed above now runs into
@@ -738,6 +767,13 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         zzdeltaLabelAfterScan,
         'Search term: zzdelta, skipped, match limit reached',
         'the same chip now states it was skipped, distinct from the plain "Search term: zzdelta" it had before the scan'
+      );
+      // Strengthened per oculist-l6m.36: computed accessible name transitions the same way.
+      const zzdeltaComputedNameAfterScan = await computedAccessibleName(client, chipExprByIndex(2));
+      assert.strictEqual(
+        zzdeltaComputedNameAfterScan,
+        'Search term: zzdelta, skipped, match limit reached',
+        'the computed accessible name of the same chip must now state it was skipped'
       );
     } finally {
       await setLiteMode(false);
