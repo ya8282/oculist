@@ -67,7 +67,7 @@ describe('Chip term accessible name includes the hit count', () => {
   }
 
   async function waitForWorkListLoad() {
-    await evalInContentScript("new Promise(function (resolve) { window.__ocLoadWorkList(resolve); })");
+    await evalInContentScript("new Promise(function (resolve) { window.__ocTest.loadWorkList(resolve); })");
   }
 
   before(async () => {

@@ -158,16 +158,22 @@
     }
   }
 
-  // Exposed the same way window.__ocToggle / window.__ocDestroy already are: content
-  // scripts run in an isolated JS world, so nothing outside this IIFE (including a test
-  // harness) can reach loadWorkList/saveWorkList as plain closures. Attaching them to
-  // window makes them reachable from a CDP Runtime.evaluate call scoped to this
-  // extension's isolated execution context, which is how
-  // test/worklist_storage.test.js exercises the real content-script chrome.storage.session
-  // round trip. No UI calls these yet; that lands in a later bead, from inside this
-  // closure directly rather than through window.
-  window.__ocLoadWorkList = loadWorkList;
-  window.__ocSaveWorkList = saveWorkList;
+  // window.__ocTest is this content script's single sanctioned test-only surface,
+  // exposed the same way window.__ocToggle / window.__ocDestroy already are for real
+  // production reasons: content scripts run in an isolated JS world, so nothing outside
+  // this IIFE (including a test harness) can reach closures like loadWorkList/saveWorkList
+  // directly. Attaching them to window makes them reachable from a CDP Runtime.evaluate
+  // call scoped to this extension's isolated execution context — invisible to the host
+  // page's own main world, so this is not a security surface, just plumbing that only a
+  // real browser + CDP test harness can use. Testing through chrome.storage directly
+  // instead would exercise Chrome's storage API, not this code's own logic on top of it.
+  // No UI calls these yet; that lands in later beads, from inside this closure directly
+  // rather than through window. Every member is assigned here or further down next to the
+  // closure it exposes — extend this one namespace for new test hooks rather than adding
+  // another top-level window.__oc* global.
+  window.__ocTest = {};
+  window.__ocTest.loadWorkList = loadWorkList;
+  window.__ocTest.saveWorkList = saveWorkList;
 
   // Same test-reachability reasoning as the two above, for a plain closure variable
   // rather than a function: debounceTimer (declared further down, in the "State"
@@ -178,7 +184,7 @@
   // would need a fixed sleep this suite forbids. The chip-removal-syncs-the-draft case
   // is asserted on the DOM instead (count text and the oculist-match highlight
   // registry), so it needs no matching lastTerm hook.
-  window.__ocGetDebounceTimer = function () { return debounceTimer; };
+  window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
 
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
   //
@@ -445,16 +451,16 @@
     }
   }
 
-  // Exposed on window for the same reason __ocLoadWorkList/__ocSaveWorkList are (see
+  // Exposed on window.__ocTest for the same reason loadWorkList/saveWorkList are (see
   // above): content scripts run in an isolated JS world invisible to page.evaluate(), so
   // a CDP Runtime.evaluate call scoped to this extension's isolated execution context is
   // the only way a test harness can reach these as plain closures. No UI calls these yet
   // — the list-menu UI bead calls them directly from inside this closure, not through
   // window.
-  window.__ocListSavedLists = listSavedLists;
-  window.__ocSaveList = saveList;
-  window.__ocRenameList = renameList;
-  window.__ocDeleteList = deleteList;
+  window.__ocTest.listSavedLists = listSavedLists;
+  window.__ocTest.saveList = saveList;
+  window.__ocTest.renameList = renameList;
+  window.__ocTest.deleteList = deleteList;
 
   function getEffectiveColors() {
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';

@@ -576,7 +576,7 @@ describe('Chip row and working-list state', () => {
       // (rather than an implicit re-scan of the just-removed term).
       assert.strictEqual(await page.locator(COUNT).textContent(), '', 'count text must return to the true empty state');
       assert.strictEqual(
-        await evalInContentScript('window.__ocGetDebounceTimer()'),
+        await evalInContentScript('window.__ocTest.getDebounceTimer()'),
         null,
         'the pending debounce must be cancelled, not left to fire later against stale closures'
       );

@@ -146,24 +146,24 @@ describe('Saved list storage (oc-list-<id>)', () => {
 
   function callSaveList(name, terms) {
     return evalInContentScript(
-      `new Promise((resolve) => window.__ocSaveList(${JSON.stringify(name)}, ${JSON.stringify(terms)}, resolve))`
+      `new Promise((resolve) => window.__ocTest.saveList(${JSON.stringify(name)}, ${JSON.stringify(terms)}, resolve))`
     );
   }
 
   function callRenameList(id, name) {
     return evalInContentScript(
-      `new Promise((resolve) => window.__ocRenameList(${JSON.stringify(id)}, ${JSON.stringify(name)}, resolve))`
+      `new Promise((resolve) => window.__ocTest.renameList(${JSON.stringify(id)}, ${JSON.stringify(name)}, resolve))`
     );
   }
 
   function callDeleteList(id) {
     return evalInContentScript(
-      `new Promise((resolve) => window.__ocDeleteList(${JSON.stringify(id)}, resolve))`
+      `new Promise((resolve) => window.__ocTest.deleteList(${JSON.stringify(id)}, resolve))`
     );
   }
 
   function callListSavedLists() {
-    return evalInContentScript('new Promise((resolve) => window.__ocListSavedLists(resolve))');
+    return evalInContentScript('new Promise((resolve) => window.__ocTest.listSavedLists(resolve))');
   }
 
   // Writes a single raw entry under 'oc-list-<key>', bypassing saveList()/sanitizeListTerms()
@@ -242,7 +242,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
           cb();
           delete chrome.runtime.lastError;
         };
-        window.__ocSaveList(${JSON.stringify(name)}, ${JSON.stringify(terms)}, function (result) {
+        window.__ocTest.saveList(${JSON.stringify(name)}, ${JSON.stringify(terms)}, function (result) {
           chrome.storage.sync.set = originalSet;
           resolve(result);
         });
@@ -327,7 +327,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
         var seed = {};
         seed['oc-list-' + takenId] = { id: takenId, name: 'Taken', terms: ['x'] };
         chrome.storage.sync.set(seed, function () {
-          window.__ocSaveList('Collision Test', ['y'], function (result) {
+          window.__ocTest.saveList('Collision Test', ['y'], function (result) {
             Date.now = originalNow;
             Math.random = originalRandom;
             resolve({ result: result, takenId: takenId });
@@ -450,7 +450,7 @@ describe('Saved list storage (oc-list-<id>)', () => {
   // readListIndex() now keeps its id in the collision-avoidance list regardless (the
   // count/name gate and the ids-push are no longer tied together). That collision
   // avoidance is generateListId()'s internal input, not observable from outside: none
-  // of the four window.__oc* hooks (listSavedLists/saveList/renameList/deleteList)
+  // of the four window.__ocTest members (listSavedLists/saveList/renameList/deleteList)
   // exposes readListIndex() or its `ids` array directly, and ids are always generated
   // via Date.now().toString(36) + Math.random()...slice(2,10) (content.js:223), so a
   // real collision with a hand-authored id like 'x' can't be forced from a black-box

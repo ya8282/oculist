@@ -7,7 +7,7 @@
 //
 // Content scripts execute in an isolated JS world: nothing outside content.js's IIFE
 // (including page.evaluate(), which runs in the page's main world) can call
-// loadWorkList/saveWorkList directly, or even see window.__ocLoadWorkList — Chrome's
+// loadWorkList/saveWorkList directly, or even see window.__ocTest — Chrome's
 // isolated-world model does not expose content-script state to the page. There is also
 // no extension-API bridge available here: chrome.scripting.executeScript needs a host
 // permission or a fresh user gesture (activeTab) that this test cannot manufacture, and
@@ -80,7 +80,7 @@ describe('Working-list session storage (oc-worklist)', () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }
     }
-    // Confirms the content script (and its window.__ocLoadWorkList/__ocSaveWorkList
+    // Confirms the content script (and its window.__ocTest.loadWorkList/saveWorkList
     // hooks) has actually mounted before any test tries to reach into its world. Retry
     // Control+f itself (a keypress a not-yet-attached listener would otherwise silently
     // swallow) until the input actually appears, instead of trusting a single press.
@@ -106,7 +106,7 @@ describe('Working-list session storage (oc-worklist)', () => {
   // Closing (Escape) and reopening (Control+f) the overlay within the same page load
   // reuses the same content-script instance and its window.__ocToggle — this is what
   // actually re-runs buildUI()'s loadWorkList() mount-restore callback, unlike calling
-  // window.__ocLoadWorkList directly (which never touches workListTerms/termRanges/the
+  // window.__ocTest.loadWorkList directly (which never touches workListTerms/termRanges/the
   // chip DOM at all). keydownHandler is registered once in boot() and never torn down
   // by __ocDestroy(), so a single Control+f press is reliable here — no retry loop needed
   // the way the very first open (before any listener exists) requires elsewhere.
@@ -214,6 +214,18 @@ describe('Working-list session storage (oc-worklist)', () => {
   }
 
   test('a read with no stored value yields the empty default', async () => {
+    // The whole justification for window.__ocTest existing is that it is invisible outside
+    // this extension's isolated execution context: reachable via CDP Runtime.evaluate
+    // scoped to isolatedContextId (as the loadWorkList call below and every other test in
+    // this file relies on), but never visible from the host page's own main world, which
+    // is exactly what page.evaluate() runs in. Pinned directly here, alongside the first
+    // real use of the namespace, so a future regression that accidentally leaked it onto
+    // the page is caught explicitly rather than merely implied by other tests succeeding.
+    const isolatedType = await evalInContentScript('typeof window.__ocTest');
+    assert.strictEqual(isolatedType, 'object');
+    const mainWorldValue = await page.evaluate(() => window.__ocTest);
+    assert.strictEqual(mainWorldValue, undefined);
+
     // Explicitly clear first — chrome.storage.session persists for the whole browser
     // session, not just this page load, so a prior test's write would otherwise leak in.
     await evalInContentScript(
@@ -221,7 +233,7 @@ describe('Working-list session storage (oc-worklist)', () => {
     );
 
     const result = await evalInContentScript(
-      'new Promise((resolve) => window.__ocLoadWorkList((list) => resolve(list)))'
+      'new Promise((resolve) => window.__ocTest.loadWorkList((list) => resolve(list)))'
     );
 
     assert.deepStrictEqual(result, { terms: [], activeIndex: -1 });
@@ -234,7 +246,7 @@ describe('Working-list session storage (oc-worklist)', () => {
       '(' +
         function (deadlineMs) {
           return new Promise((resolve, reject) => {
-            window.__ocSaveWorkList({ terms: ['alpha', 'beta'], activeIndex: 1 });
+            window.__ocTest.saveWorkList({ terms: ['alpha', 'beta'], activeIndex: 1 });
             // saveWorkList has no completion callback by design (its signature is
             // saveWorkList(list)) — poll the underlying chrome.storage.session write
             // directly until it actually lands, instead of guessing how long the async
@@ -249,7 +261,7 @@ describe('Working-list session storage (oc-worklist)', () => {
               chrome.storage.session.get('oc-worklist', function (data) {
                 var stored = data && data['oc-worklist'];
                 if (stored && stored.terms && stored.terms.length === 2) {
-                  window.__ocLoadWorkList(function (loaded) { resolve(loaded); });
+                  window.__ocTest.loadWorkList(function (loaded) { resolve(loaded); });
                   return;
                 }
                 if (Date.now() > deadline) {
