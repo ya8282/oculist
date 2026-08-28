@@ -584,6 +584,7 @@
     effectBloom: 'Bloom',
     effectTrail: 'Trail',
     effectSpeedLines: 'Speed Lines',
+    effectChronoTunnel: 'Chrono Tunnel',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -689,7 +690,8 @@
     arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
     dispersion: { label: i18n.effectBloom, run: animateDispersion },
     trail: { label: i18n.effectTrail, run: animateTrail },
-    speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines }
+    speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
+    chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -2258,6 +2260,176 @@
       } else {
         ctx.clearRect(0, 0, W, H);
         window.__ocTest.speedLinesDone = true;
+      }
+    }
+
+    animFrameId = requestAnimationFrame(frame);
+    container.__rafId = animFrameId;
+
+    setTimeout(function () {
+      container.remove();
+    }, DUR);
+  }
+
+  // Chrono Tunnel: a slit-scan tunnel of rotating polygons rushing outward past the
+  // match on an exponential radius curve, additive-blended, each ring's radius wobbling
+  // as a function of angle (the slit-scan smear — the signature of the effect, not
+  // decoration). Ported from the approved beacon-bench.html reference geometry (ring
+  // count, sides, radius curve, rotation, wobble, envelope) verbatim; the one deliberate
+  // departure from that reference is colour. The mockup cycles the full 360-degree hue
+  // spectrum; this ships a hue that rides getEffectiveColors().beacon instead (same
+  // hexToHsl() idiom animateSpeedLines/animateDispersion already use), swept a bounded
+  // +/-60 degrees around that base across depth and time combined, because a full-
+  // spectrum cycle would ignore both the user's chosen beacon colour and
+  // motionSensitivity, and would be the only effect in the registry that does. Lite Mode
+  // collapses the sweep to a single hue and cuts the ring count hard — this is the
+  // loudest of the four new effects, so Lite Mode has to be genuinely calm.
+  function animateChronoTunnel(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var mw = rect.width;
+    var mh = rect.height;
+    var vpCx = rect.left + mw / 2;                // viewport-relative match centre x
+    var my = rect.top + mh / 2 + window.scrollY;   // document-coord match centre y
+
+    var color = getEffectiveColors().beacon || '#38bdf8';
+    var baseHue = hexToHsl(color)[0];
+    var scale = getBeaconScale();
+
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+
+    // Container spans the viewport width and (up to) the viewport height around the
+    // match, clamped vertically against the page's own scroll height — same trap
+    // animateAnimeLaser and animateSpeedLines guard against: an unclamped container
+    // taller than the page would itself enlarge the scrollable area.
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var containerHeight = Math.min(vh, Math.max(mh + 40, scrollHeight));
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var targetTop = Math.min(Math.max(0, my - containerHeight / 2), maxTop);
+    var offsetY = my - targetTop; // match centre, local canvas y
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
+      'width:' + vw + 'px', 'height:' + containerHeight + 'px',
+      'pointer-events:none', 'z-index:2147483640',
+      'overflow:hidden'
+    ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
+    document.documentElement.appendChild(container);
+
+    var canvas = document.createElement('canvas');
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(vw * dpr));
+    canvas.height = Math.max(1, Math.round(containerHeight * dpr));
+    canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block';
+    container.appendChild(canvas);
+
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var W = vw, H = containerHeight;
+    var maxR = Math.hypot(Math.max(vpCx, W - vpCx), Math.max(offsetY, H - offsetY)) + 60;
+
+    // Lite Mode cuts the ring count hard (26 -> 8) and collapses the sweep to a single
+    // hue in hueAt() below — this is the loudest of the four effects, so Lite Mode must
+    // be genuinely calm rather than merely smaller.
+    var RINGS = settings.performanceMode ? 8 : 26;
+    var SIDES = 7;
+    var SWEEP = 60; // bounded +/-60 degrees around the beacon hue; never the full spectrum
+
+    // hue(d, t) is the single source of truth for every hue this effect renders — the
+    // core glow calls it too (at d = 0, the nearest depth). Bounded by construction: raw
+    // is sin(...) in [-1, 1], so the offset added to baseHue is always in [-SWEEP,
+    // SWEEP], and the +360 before the final %360 keeps the modular wrap correct when
+    // baseHue - SWEEP goes negative (e.g. baseHue 10 with a -60 offset must land on 310,
+    // not -50). Lite Mode short-circuits to baseHue with no offset at all.
+    function hueAt(d, t) {
+      if (settings.performanceMode) return baseHue;
+      var raw = Math.sin((d * 2 + t * 1.3) * Math.PI);
+      return (baseHue + raw * SWEEP + 360) % 360;
+    }
+
+    // window.__ocTest is this content script's sanctioned test-only surface (see its
+    // definition near the top of this file). lastChronoHueRun bundles baseHue, the ring
+    // count Lite Mode is expected to cut, and every hue actually applied to a ring's
+    // strokeStyle this run (pushed at the same point that value is used to draw, not a
+    // parallel copy computed some other way) — the hue-tracking and bounded-sweep tests
+    // read hueSamples directly rather than re-deriving hue themselves, so a mutation to
+    // hueAt() (fixed hue, widened sweep, wrong wraparound) shows up as a real difference
+    // in the recorded values. chronoFrameCount/chronoDone mirror
+    // speedLinesFrameCount/speedLinesDone: a per-frame tick counter the cancellation test
+    // proves stops growing after cancelBeacons(), and a deterministic completion flag the
+    // other tests can wait on instead of racing this rAF loop with a second one.
+    window.__ocTest.lastChronoHueRun = { baseHue: baseHue, ringCount: RINGS, hueSamples: [] };
+    window.__ocTest.chronoFrameCount = 0;
+    window.__ocTest.chronoDone = false;
+
+    var DUR = getBeaconDuration(1100);
+    var startTime = performance.now();
+    var animFrameId;
+
+    function frame(now) {
+      var elapsed = now - startTime;
+      var t = Math.min(1, elapsed / DUR);
+      window.__ocTest.chronoFrameCount++;
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      // ramp in over the first ~18%, hold, ramp out over the last ~28%
+      var envelope = t < 0.18 ? t / 0.18 : (t > 0.72 ? 1 - (t - 0.72) / 0.28 : 1);
+
+      for (var i = 0; i < RINGS; i++) {
+        // depth runs 0..1, advanced by time so rings rush outward past the viewer
+        var d = ((i / RINGS) + t * 1.35) % 1;
+        var r = Math.pow(d, 2.35) * maxR;
+        if (r < 4) continue;
+
+        var hue = hueAt(d, t);
+        window.__ocTest.lastChronoHueRun.hueSamples.push(hue);
+
+        var a = envelope * (1 - d) * 0.55;
+        var rot = d * 2.6 + t * 1.1;
+
+        ctx.beginPath();
+        for (var s = 0; s <= SIDES; s++) {
+          var ang = rot + (s / SIDES) * Math.PI * 2;
+          // slit-scan smear: radius wobbles with angle — the signature of the effect
+          var rr = r * (1 + 0.14 * Math.sin(ang * 3 + t * 6));
+          var px = vpCx + Math.cos(ang) * rr;
+          var py = offsetY + Math.sin(ang) * rr * 0.78;
+          if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = 'hsla(' + hue + ',100%,62%,' + a + ')';
+        ctx.lineWidth = 1 + (1 - d) * 4.5;
+        ctx.stroke();
+      }
+
+      // soft core glow at the match
+      var coreHue = hueAt(0, t);
+      var g = ctx.createRadialGradient(vpCx, offsetY, 0, vpCx, offsetY, 70);
+      g.addColorStop(0, 'hsla(' + coreHue + ',100%,78%,' + envelope * 0.55 + ')');
+      g.addColorStop(1, 'hsla(0,0%,0%,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(vpCx - 70, offsetY - 70, 140, 140);
+      ctx.restore();
+
+      if (t < 1) {
+        animFrameId = requestAnimationFrame(frame);
+        container.__rafId = animFrameId;
+      } else {
+        ctx.clearRect(0, 0, W, H);
+        window.__ocTest.chronoDone = true;
       }
     }
 
