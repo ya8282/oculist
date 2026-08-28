@@ -166,6 +166,18 @@ describe('Saved list storage (oc-list-<id>)', () => {
     return evalInContentScript('new Promise((resolve) => window.__ocListSavedLists(resolve))');
   }
 
+  // Writes a single raw entry under 'oc-list-<key>', bypassing saveList()/sanitizeListTerms()
+  // entirely — used to seed storage with shapes saveList() would never itself write (e.g.
+  // an over-long terms array), so a read-time guard like listSavedLists()'s sanitizeListTerms()
+  // call is the only thing standing between it and the caller.
+  function setStorageEntry(key, entry) {
+    const batch = {};
+    batch[key] = entry;
+    return evalInContentScript(
+      `new Promise((resolve) => chrome.storage.sync.set(${JSON.stringify(batch)}, resolve))`
+    );
+  }
+
   function seedLists(count) {
     const batch = {};
     for (let i = 0; i < count; i++) {
@@ -286,16 +298,69 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.strictEqual(afterDelete[0].id, second.list.id);
   });
 
-  test('the 51st saved list hits the 50-list cap and shows the maximum-lists notice', async () => {
-    await seedLists(50);
+  // generateListId(existingIds) derives its id from Date.now().toString(36) +
+  // Math.random().toString(36).slice(2, 10) and only loops again if that id is already
+  // present in existingIds (content.js's generateListId, fed by readListIndex's ids
+  // list). notStrictEqual(second.list.id, first.list.id) above passes even if
+  // generateListId ignored existingIds entirely — two natural calls just happen to land
+  // on different timestamps/randoms. To actually exercise the collision branch, freeze
+  // Date.now and Math.random for the duration of a single saveList() call (the same
+  // override-then-restore pattern callSaveListWithSimulatedWriteFailure uses above for
+  // chrome.storage.sync.set), pre-seed storage with the exact id that first (frozen)
+  // attempt would produce, and let Math.random return a real value on every attempt
+  // after the first so the loop can actually terminate on a fresh id.
+  test('generateListId() regenerates on a forced collision with an existing id instead of returning it', async () => {
+    const outcome = await evalInContentScript(
+      `new Promise((resolve) => {
+        var fixedNow = 1700000000000;
+        var originalNow = Date.now;
+        var originalRandom = Math.random;
+        var callCount = 0;
+        Date.now = function () { return fixedNow; };
+        Math.random = function () {
+          callCount++;
+          // Every attempt after the first gets a real random value, so the collision
+          // loop can find a fresh id and terminate normally.
+          return callCount === 1 ? 0.123456789 : originalRandom.call(Math);
+        };
+        var takenId = fixedNow.toString(36) + (0.123456789).toString(36).slice(2, 10);
+        var seed = {};
+        seed['oc-list-' + takenId] = { id: takenId, name: 'Taken', terms: ['x'] };
+        chrome.storage.sync.set(seed, function () {
+          window.__ocSaveList('Collision Test', ['y'], function (result) {
+            Date.now = originalNow;
+            Math.random = originalRandom;
+            resolve({ result: result, takenId: takenId });
+          });
+        });
+      })`
+    );
+    assert.strictEqual(outcome.result.ok, true);
+    // A generateListId that ignores existingIds would return takenId itself on its very
+    // first (frozen) attempt — this is the assertion that actually catches that bug.
+    assert.notStrictEqual(outcome.result.list.id, outcome.takenId);
+    // The pre-seeded colliding entry itself must survive untouched, confirming the
+    // second list landed under a genuinely different key rather than overwriting it.
+    const rawTaken = await rawGet('oc-list-' + outcome.takenId);
+    assert.deepStrictEqual(rawTaken, { id: outcome.takenId, name: 'Taken', terms: ['x'] });
+  });
+
+  test('the 50th saved list succeeds and the 51st hits the 50-list cap with the maximum-lists notice', async () => {
+    await seedLists(49);
+
+    // The 50th real list must succeed — catches an over-strict cap (e.g. off-by-one
+    // rejecting at count 49) that the rejection-only assertions below would miss.
+    const fiftieth = await callSaveList('Fiftieth List', ['y']);
+    assert.strictEqual(fiftieth.ok, true);
 
     const overflow = await callSaveList('Overflow List', ['x']);
     assert.strictEqual(overflow.ok, false);
     assert.strictEqual(overflow.reason, 'cap');
 
-    // No 51st key was written.
+    // No 51st key was written, and the 50th's is present.
     const afterAttempt = await callListSavedLists();
     assert.strictEqual(afterAttempt.length, 50);
+    assert.ok(afterAttempt.some((l) => l.name === 'Fiftieth List'));
     assert.ok(!afterAttempt.some((l) => l.name === 'Overflow List'));
 
     await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
@@ -448,6 +513,33 @@ describe('Saved list storage (oc-list-<id>)', () => {
     const lists = await callListSavedLists();
     assert.strictEqual(lists.length, 1);
     assert.deepStrictEqual(lists[0], { id: 'objterms', name: 'Object Terms', terms: [] });
+  });
+
+  // sanitizeListTerms()'s two caps (MAX_LIST_TERMS = 10, MAX_LIST_TERM_LENGTH = 100) are
+  // only reachable from outside through listSavedLists()'s unconditional call to it
+  // (content.js), since saveList() already sanitizes on the way in — a caller can never
+  // hand it more than 10 terms or an over-100-char term through saveList() itself. Seed
+  // storage directly, bypassing saveList(), so the read-time guard is the only thing
+  // standing between the oversized data and the caller.
+  test('listSavedLists() caps a stored terms array at 10 entries via sanitizeListTerms()', async () => {
+    const sixteenTerms = Array.from({ length: 16 }, (_, i) => 'term' + i);
+    await setStorageEntry('oc-list-manyterms', { id: 'manyterms', name: 'Many Terms', terms: sixteenTerms });
+
+    const lists = await callListSavedLists();
+    const entry = lists.find((l) => l.id === 'manyterms');
+    assert.strictEqual(entry.terms.length, 10);
+    assert.deepStrictEqual(entry.terms, sixteenTerms.slice(0, 10));
+  });
+
+  test('listSavedLists() clips a stored term over 100 characters to exactly 100 via sanitizeListTerms()', async () => {
+    const longTerm = 'x'.repeat(150);
+    await setStorageEntry('oc-list-longterm', { id: 'longterm', name: 'Long Term', terms: [longTerm] });
+
+    const lists = await callListSavedLists();
+    const entry = lists.find((l) => l.id === 'longterm');
+    assert.strictEqual(entry.terms.length, 1);
+    assert.strictEqual(entry.terms[0].length, 100);
+    assert.strictEqual(entry.terms[0], 'x'.repeat(100));
   });
 
   // oculist-qc8: renameList() must change only the name — it must never be the operation
