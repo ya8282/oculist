@@ -583,6 +583,7 @@
     effectPointingArrows: 'Pointing Arrows',
     effectBloom: 'Bloom',
     effectTrail: 'Trail',
+    effectSpeedLines: 'Speed Lines',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -687,7 +688,8 @@
     electron: { label: i18n.effectElectronCloud, run: animateElectronCloud },
     arrows: { label: i18n.effectPointingArrows, run: animatePointingArrows },
     dispersion: { label: i18n.effectBloom, run: animateDispersion },
-    trail: { label: i18n.effectTrail, run: animateTrail }
+    trail: { label: i18n.effectTrail, run: animateTrail },
+    speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -2034,6 +2036,237 @@
 
     animFrameId = requestAnimationFrame(render);
     container.__rafId = animFrameId;
+  }
+
+  // Speed Lines: horizontal light streaks blasting outward from the match toward both
+  // viewport edges — the anime speed-line idiom (long-exposure light trails, a motion-blur
+  // taper on every streak's trailing end, hairline-through-white-hot-core brightness
+  // tiers). Ported from the approved beacon-bench.html reference geometry (tiers, gradient
+  // stops, outward ease, clear lane, flare) verbatim; the only real adaptations are hue
+  // (derived from getEffectiveColors().beacon instead of a fixed HUE constant, same
+  // hexToHsl() idiom animateDispersion already uses) and sizing (a canvas spanning the
+  // current viewport width, clamped vertically against document height, instead of a small
+  // fixed mockup stage).
+  function animateSpeedLines(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var mw = rect.width;
+    var mh = rect.height;
+    var vpCx = rect.left + mw / 2;                // viewport-relative match centre x
+    var my = rect.top + mh / 2 + window.scrollY;   // document-coord match centre y
+
+    var color = getEffectiveColors().beacon || '#38bdf8';
+    var hue = hexToHsl(color)[0];
+    var scale = getBeaconScale();
+
+    var vw = window.innerWidth;
+    var BAND = 240;   // vertical half-spread of the streak field around the match's line
+    var MARGIN = 260; // distance past the viewport edge a streak fades out over
+
+    // Container tracks the current viewport horizontally (left == scrollX, so local x ==
+    // viewport-relative x, exactly like the reference geometry's stage-relative x) and is
+    // clamped vertically against the page's own scroll height — the same trap
+    // animateAnimeLaser guards against: an unclamped container taller than the page would
+    // itself enlarge the scrollable area.
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var containerHeight = Math.min(BAND * 2 + mh + 60, Math.max(mh + 40, scrollHeight));
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var targetTop = Math.min(Math.max(0, my - containerHeight / 2), maxTop);
+    var offsetY = my - targetTop; // match centre, local canvas y
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
+      'width:' + vw + 'px', 'height:' + containerHeight + 'px',
+      'pointer-events:none', 'z-index:2147483640',
+      'overflow:hidden'
+    ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
+    document.documentElement.appendChild(container);
+
+    var canvas = document.createElement('canvas');
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(vw * dpr));
+    canvas.height = Math.max(1, Math.round(containerHeight * dpr));
+    canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block';
+    container.appendChild(canvas);
+
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var W = vw, H = containerHeight;
+
+    // The clear lane: streaks crossing the match's own text band are attenuated to ~12%
+    // alpha, same as the reference — the beacon must never bury the word it points at.
+    var laneTop = offsetY - mh / 2 - 3;
+    var laneBot = offsetY + mh / 2 + 3;
+
+    var reach = Math.max(vpCx, vw - vpCx) + MARGIN;
+
+    function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+    // Lite Mode cuts the streak count hard (74 -> 20) and drops the tier-2 bloom halos
+    // below; the clear lane and the flare are kept either way.
+    var N = settings.performanceMode ? 20 : 74;
+    var streaks = [];
+    var i;
+    for (i = 0; i < N; i++) {
+      // density weighted toward the match's own line, thinning toward the viewport edges
+      var bias = Math.pow(Math.random(), 1.7);
+      var side = Math.random() < 0.5 ? -1 : 1;
+      var y = offsetY + side * bias * BAND;
+
+      var roll = Math.random();
+      var tier = roll > 0.9 ? 2 : roll > 0.62 ? 1 : 0;
+
+      streaks.push({
+        y: y,
+        dir: Math.random() < 0.5 ? -1 : 1,
+        tier: tier,
+        thick: tier === 2 ? 5 + Math.random() * 9 : tier === 1 ? 2 + Math.random() * 3 : 0.7 + Math.random() * 1.4,
+        len: (tier === 2 ? 190 : tier === 1 ? 130 : 70) + Math.random() * 220,
+        rate: 0.75 + Math.random() * 0.7,
+        delay: Math.random() * 0.3
+      });
+    }
+
+    // window.__ocTest is this content script's sanctioned test-only surface (see its
+    // definition near the top of this file). lastSpeedLinesStreakCount lets the Lite Mode
+    // test assert the streak-count drop directly rather than inferring it from pixel
+    // coverage; speedLinesFrameCount is a per-frame tick counter that proves
+    // cancelBeacons() (via container.__rafId, set below on every frame) genuinely stops the
+    // rAF loop rather than merely removing the container from the DOM.
+    //
+    // lastSpeedLinesLaneAlphaMax/lastSpeedLinesElseAlphaMax accumulate the running maximum
+    // post-attenuation alpha actually applied to lane-crossing vs. non-lane streaks, across
+    // every real frame() call this beacon makes — the clear-lane test asserts on these
+    // directly instead of racing a second, independent requestAnimationFrame poll against
+    // this one for a chance to rasterise the canvas at a lucky instant (that race is what
+    // starved the old pixel-sampling test under parallel load). speedLinesDone flips once
+    // this run reaches its final frame, giving the test a deterministic completion signal
+    // that isn't tied to wall-clock container removal.
+    //
+    // lastSpeedLinesLaneBounds pins *where* the clear lane actually is, in the same local
+    // canvas-y space as everything else in this function: top/bot are the exact laneTop/
+    // laneBot the attenuation check below tests against, and matchY is offsetY — the
+    // match's own vertical centre. Without this, lastSpeedLinesLaneAlphaMax/ElseAlphaMax
+    // alone cannot tell "the lane is dim because it sits over the word" apart from "the
+    // lane is dim because it was never over anything" (an emptied or mislocated lane still
+    // reports a vacuous laneMax of 0, or a real-but-misplaced max) — bundled into one object
+    // instead of three flat keys since all three only ever get read together.
+    window.__ocTest.lastSpeedLinesStreakCount = N;
+    window.__ocTest.speedLinesFrameCount = 0;
+    window.__ocTest.lastSpeedLinesLaneAlphaMax = 0;
+    window.__ocTest.lastSpeedLinesElseAlphaMax = 0;
+    window.__ocTest.lastSpeedLinesLaneBounds = { top: laneTop, bot: laneBot, matchY: offsetY };
+    window.__ocTest.speedLinesDone = false;
+
+    var DUR = getBeaconDuration(760);
+    var startTime = performance.now();
+    var animFrameId;
+
+    function frame(now) {
+      var elapsed = now - startTime;
+      var t = Math.min(1, elapsed / DUR);
+      window.__ocTest.speedLinesFrameCount++;
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      // fast attack, long decay — the burst reads as one impulse
+      var env = t < 0.12 ? t / 0.12 : Math.pow(1 - (t - 0.12) / 0.88, 1.6);
+
+      for (var k = 0; k < streaks.length; k++) {
+        var L = streaks[k];
+        var p = (t - L.delay) / (1 - L.delay);
+        if (p <= 0) continue;
+        p = Math.min(1, p);
+
+        var travel = easeOut(p) * reach * L.rate;
+        var head = vpCx + L.dir * travel;
+        var tail = head - L.dir * L.len;
+
+        // fade a streak as it runs off its own viewport edge
+        var edge = L.dir > 0 ? 1 - Math.max(0, (head - W) / MARGIN) : 1 - Math.max(0, (0 - head) / MARGIN);
+        var a = env * Math.max(0, Math.min(1, edge));
+        if (a <= 0.01) continue;
+
+        // part around the word
+        var inLane = L.y > laneTop - 6 && L.y < laneBot + 6;
+        if (inLane) a *= 0.12;
+
+        // See the __ocTest block above the streak loop's setup: record the post-attenuation
+        // alpha this streak actually got drawn with, split by lane membership.
+        if (inLane) {
+          if (a > window.__ocTest.lastSpeedLinesLaneAlphaMax) window.__ocTest.lastSpeedLinesLaneAlphaMax = a;
+        } else if (a > window.__ocTest.lastSpeedLinesElseAlphaMax) {
+          window.__ocTest.lastSpeedLinesElseAlphaMax = a;
+        }
+
+        var x0 = Math.min(head, tail), x1 = Math.max(head, tail);
+        var g = ctx.createLinearGradient(tail, 0, head, 0);
+        g.addColorStop(0, 'hsla(' + hue + ',100%,55%,0)');
+
+        if (L.tier === 2) {
+          g.addColorStop(0.55, 'hsla(' + hue + ',100%,62%,' + a * 0.55 + ')');
+          g.addColorStop(0.93, 'hsla(' + (hue - 6) + ',100%,88%,' + a + ')');
+          g.addColorStop(1, 'rgba(255,255,255,' + a + ')');
+        } else if (L.tier === 1) {
+          g.addColorStop(0.6, 'hsla(' + hue + ',100%,58%,' + a * 0.5 + ')');
+          g.addColorStop(1, 'hsla(' + hue + ',100%,76%,' + a * 0.95 + ')');
+        } else {
+          g.addColorStop(1, 'hsla(' + (hue + 8) + ',95%,52%,' + a * 0.7 + ')');
+        }
+
+        ctx.fillStyle = g;
+        ctx.fillRect(x0, L.y - L.thick / 2, x1 - x0, L.thick);
+
+        // bloom halo under the hottest streaks, dropped in Lite Mode
+        if (L.tier === 2 && !settings.performanceMode) {
+          ctx.fillStyle = 'hsla(' + hue + ',100%,60%,' + a * 0.16 + ')';
+          ctx.fillRect(x0, L.y - L.thick * 2.2, x1 - x0, L.thick * 4.4);
+        }
+      }
+
+      // flare at the source
+      var fl = env * 0.9;
+      if (fl > 0.01) {
+        var rg = ctx.createRadialGradient(vpCx, offsetY, 0, vpCx, offsetY, Math.max(90, mw));
+        rg.addColorStop(0, 'rgba(255,255,255,' + fl * 0.75 + ')');
+        rg.addColorStop(0.35, 'hsla(' + hue + ',100%,70%,' + fl * 0.38 + ')');
+        rg.addColorStop(1, 'hsla(' + hue + ',100%,60%,0)');
+        ctx.fillStyle = rg;
+        ctx.fillRect(vpCx - mw * 2 - 90, offsetY - 90, mw * 4 + 180, 180);
+
+        // hot horizontal core through the word
+        ctx.fillStyle = 'rgba(255,255,255,' + fl * 0.5 + ')';
+        ctx.fillRect(rect.left - 14, offsetY - 1, mw + 28, 2);
+      }
+
+      ctx.restore();
+
+      if (t < 1) {
+        animFrameId = requestAnimationFrame(frame);
+        container.__rafId = animFrameId;
+      } else {
+        ctx.clearRect(0, 0, W, H);
+        window.__ocTest.speedLinesDone = true;
+      }
+    }
+
+    animFrameId = requestAnimationFrame(frame);
+    container.__rafId = animFrameId;
+
+    setTimeout(function () {
+      container.remove();
+    }, DUR);
   }
 
   function drawStaticActiveBorder(rect) {
