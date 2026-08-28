@@ -586,6 +586,7 @@
     effectSpeedLines: 'Speed Lines',
     effectChronoTunnel: 'Chrono Tunnel',
     effectLightCycle: 'Light Cycle',
+    effectCyberVision: 'Cyber-Vision',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -693,7 +694,8 @@
     trail: { label: i18n.effectTrail, run: animateTrail },
     speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
-    lightcycle: { label: i18n.effectLightCycle, run: animateLightCycle }
+    lightcycle: { label: i18n.effectLightCycle, run: animateLightCycle },
+    cybervision: { label: i18n.effectCyberVision, run: animateCyberVision }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -2679,6 +2681,243 @@
     setTimeout(function () {
       container.remove();
     }, total);
+  }
+
+  // Cyber-Vision: a targeting-HUD sweep over the viewport, resolving down onto the match.
+  // Ported from the approved beacon-bench.html reference geometry (the scanline/tint wash,
+  // the single downward sweep bar with its hard bright leading edge, the per-column
+  // staggered thermal false-colour grid, the four corner brackets snapping in from outside
+  // then holding, and the readout beside them) verbatim, with the same departures every DOM
+  // effect in this registry makes: viewport-relative geometry converted to document space, a
+  // container clamped against the page's own scroll height, and every duration routed
+  // through getBeaconDuration(). Second of the two DOM/WAAPI effects in this batch (Light
+  // Cycle was the first, at content.js:2471) — reuses its container/__waapiAnims pattern.
+  //
+  // Scaling follows animateAnimeLaser (content.js:847), NOT Light Cycle: getBeaconScale()
+  // is applied exactly once, as the container's own transform, anchored on the match centre
+  // so the targeting geometry (brackets, thermal grid) grows/shrinks around the match the
+  // way AnimeLaser's beam grows/shrinks around it. Every child element below therefore uses
+  // a FIXED pixel size — multiplying an already-scaled container's children by scale again
+  // is the double-scaling defect filed separately against Light Cycle (oculist-dvt.8).
+  //
+  // The four thermal heat colours are the approved mockup's fixed false-colour palette, not
+  // derived from getEffectiveColors().beacon — a thermal camera's whole visual point is
+  // multiple fixed hues, so recolouring the blocks to a single user beacon colour would
+  // undercut the effect's own premise. Every other surface (tint, scanlines, sweep, brackets,
+  // readout) rides getEffectiveColors().beacon per the shared beacon contract.
+  function animateCyberVision(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var mw = rect.width;
+    var mh = rect.height;
+    var mxDoc = rect.left + window.scrollX;   // document-coord match left
+    var myDoc = rect.top + window.scrollY;    // document-coord match top
+    var matchCxDoc = mxDoc + mw / 2;
+    var matchCyDoc = myDoc + mh / 2;
+
+    var color = getEffectiveColors().beacon || '#fbbf24';
+    var scale = getBeaconScale();
+    var lite = !!settings.performanceMode;
+
+    // The container spans the full document width (left:0, width:100% — the same idiom
+    // animateAnimeLaser and Light Cycle use) and the CURRENT viewport height, so the sweep
+    // bar has a full viewport to travel — clamped vertically against the page's own scroll
+    // extent exactly like animateAnimeLaser (content.js:859-866), so a viewport-tall
+    // container can never itself extend the page.
+    var containerHeight = window.innerHeight;
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var targetTop = Math.min(Math.max(0, window.scrollY), maxTop);
+
+    function localY(yDoc) { return yDoc - targetTop; }
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:' + targetTop + 'px',
+      'width:100%', 'height:' + containerHeight + 'px',
+      'pointer-events:none', 'z-index:2147483640',
+      'overflow:visible'
+    ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = matchCxDoc + 'px ' + localY(matchCyDoc) + 'px';
+    document.documentElement.appendChild(container);
+
+    var anims = [];
+
+    function add(className, cssText) {
+      var el = document.createElement('div');
+      if (className) el.className = className;
+      el.style.cssText = cssText;
+      container.appendChild(el);
+      return el;
+    }
+
+    var DUR_WASH = getBeaconDuration(1000);
+    var DUR_SWEEP = getBeaconDuration(620);
+    var THERMAL_DUR = getBeaconDuration(760);
+    var THERMAL_BASE_DELAY = getBeaconDuration(300);
+    var THERMAL_COL_STEP = getBeaconDuration(14);
+    var THERMAL_ROW_STEP = getBeaconDuration(20);
+    var BRACKET_DELAY = getBeaconDuration(440);
+    var BRACKET_DUR = getBeaconDuration(900);
+    var READOUT_DELAY = getBeaconDuration(460);
+    var READOUT_DUR = getBeaconDuration(900);
+
+    var maxEnd = Math.max(DUR_WASH, DUR_SWEEP, BRACKET_DELAY + BRACKET_DUR, READOUT_DELAY + READOUT_DUR);
+
+    // 1. Tint wash + scanline overlay, fading in and out across the whole effect. The
+    // scanline overlay is dropped in Lite Mode (see the Lite Mode note on the thermal grid
+    // below); the tint wash is a single, cheap div and stays.
+    var tint = add('oc-cv-tint', [
+      'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
+      'background:' + hexToRgba(color, 0.07)
+    ].join(';'));
+    anims.push(tint.animate(
+      [{ opacity: 0 }, { opacity: 1 }, { opacity: 1 }, { opacity: 0 }],
+      { duration: DUR_WASH, easing: 'linear', fill: 'both' }
+    ));
+
+    if (!lite) {
+      var lines = add('oc-cv-scanlines', [
+        'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
+        'background:repeating-linear-gradient(to bottom,' +
+          hexToRgba(color, 0.10) + ' 0px,' + hexToRgba(color, 0.10) + ' 1px,' +
+          'transparent 1px, transparent 4px)'
+      ].join(';'));
+      anims.push(lines.animate(
+        [{ opacity: 0 }, { opacity: 1 }, { opacity: 1 }, { opacity: 0 }],
+        { duration: DUR_WASH, easing: 'linear', fill: 'both' }
+      ));
+    }
+
+    // 2. A bright bar sweeping the full viewport height once, hard bright edge (the solid
+    // border) on its leading (bottom) side.
+    var sweep = add('oc-cv-sweep', [
+      'position:absolute', 'left:0', 'width:100%', 'height:78px',
+      'background:linear-gradient(to bottom, transparent,' + hexToRgba(color, 0.32) + ', transparent)',
+      'border-bottom:2px solid ' + color
+    ].join(';'));
+    anims.push(sweep.animate(
+      [
+        { transform: 'translateY(-90px)', opacity: 1 },
+        { transform: 'translateY(' + containerHeight + 'px)', opacity: 1 },
+        { transform: 'translateY(' + containerHeight + 'px)', opacity: 0 }
+      ],
+      { duration: DUR_SWEEP, easing: 'cubic-bezier(.4,0,.5,1)', fill: 'both' }
+    ));
+
+    // 3. Thermal false-colour blocks resolving over the match, staggered in by column so
+    // they resolve left to right. Dropped entirely in Lite Mode.
+    if (!lite) {
+      var cols = Math.max(6, Math.round(mw / 9));
+      var rows = 3;
+      var bw = mw / cols;
+      var bh = (mh + 6) / rows;
+      for (var c = 0; c < cols; c++) {
+        for (var r = 0; r < rows; r++) {
+          var heat = Math.random();
+          var heatColor = heat > 0.72 ? '#FFE9A8' : heat > 0.45 ? '#FF7A2D' : heat > 0.22 ? '#C42B7A' : '#2C2470';
+          var block = add('oc-cv-thermal', [
+            'position:absolute',
+            'left:' + (mxDoc + c * bw) + 'px',
+            'top:' + localY(myDoc - 3 + r * bh) + 'px',
+            'width:' + (bw + 0.6) + 'px',
+            'height:' + (bh + 0.6) + 'px',
+            'background:' + heatColor
+          ].join(';'));
+          block.setAttribute('data-oc-cv-col', String(c));
+          var thermalDelay = THERMAL_BASE_DELAY + c * THERMAL_COL_STEP + r * THERMAL_ROW_STEP;
+          anims.push(block.animate(
+            [{ opacity: 0 }, { opacity: 0.85 }, { opacity: 0.85 }, { opacity: 0 }],
+            { duration: THERMAL_DUR, delay: thermalDelay, fill: 'both' }
+          ));
+          maxEnd = Math.max(maxEnd, thermalDelay + THERMAL_DUR);
+        }
+      }
+    }
+
+    // 4. Targeting brackets: four corners, each a div with two borders removed, snapping
+    // inward onto the match from outside, holding, then fading. Fixed pixel sizes (L, pad,
+    // border width) — the container's own transform above is the only scaling applied.
+    var L = 15, pad = 11;
+    var corners = [
+      ['border-right:0;border-bottom:0;', mxDoc - pad, localY(myDoc - pad), -22, -22],
+      ['border-left:0;border-bottom:0;', mxDoc + mw + pad - L, localY(myDoc - pad), 22, -22],
+      ['border-right:0;border-top:0;', mxDoc - pad, localY(myDoc + mh + pad - L), -22, 22],
+      ['border-left:0;border-top:0;', mxDoc + mw + pad - L, localY(myDoc + mh + pad - L), 22, 22]
+    ];
+    for (var i = 0; i < corners.length; i++) {
+      var cdef = corners[i];
+      var bracket = add('oc-cv-bracket', [
+        'position:absolute', 'border:2px solid ' + color, cdef[0],
+        'left:' + cdef[1] + 'px', 'top:' + cdef[2] + 'px',
+        'width:' + L + 'px', 'height:' + L + 'px'
+      ].join(';'));
+      anims.push(bracket.animate(
+        [
+          { opacity: 0, transform: 'translate(' + cdef[3] + 'px,' + cdef[4] + 'px)' },
+          { opacity: 1, transform: 'translate(0,0)', offset: 0.3 },
+          { opacity: 1, transform: 'translate(0,0)', offset: 0.78 },
+          { opacity: 0, transform: 'translate(0,0)' }
+        ],
+        { duration: BRACKET_DUR, delay: BRACKET_DELAY, easing: 'cubic-bezier(.2,.9,.3,1)', fill: 'both' }
+      ));
+    }
+
+    // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
+    // (mirrors lightCycleRunInDone). The brackets' own keyframes (above) reach translate(0,0)
+    // — fully snapped in — at offset 0.3 of their delay+duration and hold there until the
+    // fade-out; that offset is exact real math derived from this run's own BRACKET_DELAY/
+    // BRACKET_DUR, not a guess, so a timeout keyed to it is a genuine completion signal
+    // (mirrors why Light Cycle instead uses .finished — there, "done" IS the animation's
+    // end; here "settled" is a mid-animation point .finished cannot express, since waiting
+    // for full completion would race the container's own self-removal timeout below, which
+    // fires at the same moment the brackets' fade-out actually finishes).
+    window.__ocTest.cyberVisionBracketsSettled = false;
+    setTimeout(function () {
+      window.__ocTest.cyberVisionBracketsSettled = true;
+    }, BRACKET_DELAY + BRACKET_DUR * 0.3);
+
+    // Readout beside the brackets. Decorative HUD chrome, not content — aria-hidden so it is
+    // never announced and never collides with the chip/counter accessible names, which are
+    // the actual source of truth for match position. "MATCH n OF m" is real: activeIndex and
+    // searchRanges describe exactly the match this beacon is firing on (animate() only ever
+    // fires the registry's run(rect) for the active match), the same module state
+    // drawActiveMatchLabel() and the chip counter already read (content.js:2966, :4356) — so
+    // this reuses that state directly rather than duplicating any counting logic. Falls back
+    // to the static line alone rather than ever printing a count it cannot vouch for.
+    var countLabel = (searchRanges.length > 0 && activeIndex >= 0 && activeIndex < searchRanges.length)
+      ? ('MATCH ' + (activeIndex + 1) + ' OF ' + searchRanges.length)
+      : '';
+    var readout = add('oc-cv-readout', [
+      'position:absolute',
+      'left:' + (mxDoc + mw + 26) + 'px',
+      'top:' + localY(myDoc - 8) + 'px',
+      'font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      'font-size:11px', 'letter-spacing:0.08em', 'line-height:1.5', 'white-space:pre',
+      'color:' + color,
+      'text-shadow:0 0 8px ' + hexToRgba(color, 0.8)
+    ].join(';'));
+    readout.textContent = countLabel ? ('TARGET ACQUIRED\n' + countLabel) : 'TARGET ACQUIRED';
+    readout.setAttribute('aria-hidden', 'true');
+    anims.push(readout.animate(
+      [{ opacity: 0 }, { opacity: 1, offset: 0.32 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }],
+      { duration: READOUT_DUR, delay: READOUT_DELAY, fill: 'both' }
+    ));
+
+    // See cancelBeacons(): WAAPI animations keep running on a detached element unless
+    // explicitly cancelled, so every Animation this beacon created is hung off the
+    // container for cancelBeacons() to reach.
+    container.__waapiAnims = anims;
+
+    setTimeout(function () {
+      container.remove();
+    }, maxEnd);
   }
 
   function drawStaticActiveBorder(rect) {
