@@ -280,6 +280,24 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     );
   }
 
+  // The WAAPI end scale (18/21/24.5) never lands in the DOM — it only exists inside each
+  // ring's animate() keyframes — so read it straight off the live Animation object instead.
+  // Must be called shortly after replay() resolves, mid-flight, before a ring's animation
+  // finishes and animateDispersion()'s own setTimeout removes the container; getKeyframes()
+  // itself doesn't require the animation to still be running, only that the ring node (and
+  // its Animation) hasn't been torn down yet.
+  async function ringEndScales() {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll('.oc-dispersion-ring')).map((el) => {
+        const anim = el.getAnimations()[0];
+        const keyframes = anim.effect.getKeyframes();
+        const last = keyframes[keyframes.length - 1];
+        const m = /scale\(([\d.]+)\)/.exec(last.transform);
+        return m ? parseFloat(m[1]) : null;
+      })
+    );
+  }
+
   function rgbStringToArr(str) {
     const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(str);
     assert.ok(m, `not an rgb()/rgba() colour string: ${str}`);
@@ -384,14 +402,30 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 3, 'full mode must render all 3 rings');
 
     // Full mode must still render exactly the three -22/0/+22 offsets (not a collapsed
-    // subset) so the Lite Mode fix below can't silently regress the non-Lite path.
-    const fullOffsets = (await ringHueOffsets()).map(Number).sort((a, b) => a - b);
+    // subset) so the Lite Mode fix below can't silently regress the non-Lite path. Compared
+    // in DOM order (not sorted): sorting would hide a swap in ring append order, which is
+    // exactly the blind spot the paired end-scale assertion below is designed to catch.
+    const fullOffsets = (await ringHueOffsets()).map(Number);
     assert.deepStrictEqual(
       fullOffsets,
       [-22, 0, 22],
-      `full mode must render all three hue offsets, got ${JSON.stringify(fullOffsets)}`
+      `full mode must render the three hue offsets in DOM order, got ${JSON.stringify(fullOffsets)}`
     );
     assertColorsMatch(await ringColors(), expectedRingHexes(baseBeacon));
+
+    // Pair each hue offset with its ring's WAAPI end scale, in DOM order. Comparing the
+    // zipped (offset, endScale) pairs — rather than asserting the two arrays separately —
+    // is deliberate: it is the only assertion that catches a ring whose hue offset and end
+    // scale came from mismatched positions in content.js's source arrays (e.g. -22 paired
+    // with 24.5 instead of 18, as happens if ringHueOffsets and ringEndScales are both
+    // reversed) while every individual offset and every individual end scale still exists
+    // somewhere on the page.
+    const fullEndScales = await ringEndScales();
+    assert.deepStrictEqual(
+      fullOffsets.map((offset, i) => [offset, fullEndScales[i]]),
+      [[-22, 18], [0, 21], [22, 24.5]],
+      `full mode must pair each hue offset with its matching end scale in DOM order, got offsets=${JSON.stringify(fullOffsets)} endScales=${JSON.stringify(fullEndScales)}`
+    );
 
     try {
       await setSettings({ performanceMode: true });
