@@ -513,6 +513,7 @@
     of: 'of',
     matchSingular: 'match',
     matchPlural: 'matches',
+    matchCapReached: 'skipped, match limit reached',
     
     // Preference Panel Strings
     prefTitle: 'Oculist Preferences',
@@ -690,10 +691,16 @@
   // entry is the array of visible Ranges performListSearch() found for that term, and
   // its .length is what renderChipRow() shows in each chip's .oc-chip-count slot. It can
   // be out of sync with workListTerms between a chip add/remove and the next scan; a
-  // missing entry (undefined) renders as a blank count rather than "0".
+  // missing entry (undefined) renders as a blank count rather than "0". termStarved is
+  // also parallel to workListTerms (oculist-l6m.21): a term left undefined in termRanges
+  // because performListSearch() never got to scan it yet (no cap involved) and a term
+  // left undefined because the TOTAL_MATCH_CAP was hit before its turn are otherwise
+  // indistinguishable — termStarved[i] === true marks the latter so renderChipRow() can
+  // render it distinctly instead of as a plain blank.
   var workListTerms    = [];
   var activeTermIndex  = -1;
   var termRanges       = [];
+  var termStarved      = [];
   var chipRow          = null;
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
@@ -788,7 +795,7 @@
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
     listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
-    chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = [];
+    chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = []; termStarved = [];
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -2930,6 +2937,7 @@
 
     if (terms.length === 0) {
       termRanges = [];
+      termStarved = [];
       if (!lastTerm) {
         countEl.textContent = '';
         setNavEnabled(false);
@@ -2951,6 +2959,12 @@
     var termsStarved = false;
 
     var newTermRanges = new Array(terms.length);
+    // Parallel to newTermRanges — set true for a term this scan skips outright because
+    // TOTAL_MATCH_CAP was already spent (see the loop below). Written through to the
+    // module-level termStarved alongside newTermRanges/termRanges further down so
+    // renderChipRow() can tell "not scanned yet" apart from "scanned scan, but skipped by
+    // the cap" (oculist-l6m.21) — both otherwise leave the same undefined termRanges[i].
+    var newTermStarved = new Array(terms.length);
     // This is the only place the module-level termRanges[activeTermIndex] is ever given
     // real Ranges (Lite Mode's cheap placeholder below is for inactive terms only) — every
     // writer of activeTermIndex must either call performListSearch() synchronously after
@@ -2970,9 +2984,11 @@
 
       // Budget already spent by earlier terms in this loop (plus the active term) — stop
       // materialising any further inactive term entirely rather than truncating one mid-
-      // scan. termsStarved drives the "Showing the first 2000 matches" notice below.
+      // scan. termsStarved drives the cap notice below; newTermStarved[i] marks this one
+      // term's chip so renderChipRow() can render it distinctly from an unscanned chip.
       if (totalMatches >= TOTAL_MATCH_CAP) {
         termsStarved = true;
+        newTermStarved[i] = true;
         continue;
       }
 
@@ -2994,6 +3010,7 @@
     // chip position is held back (oculist-l6m.15).
     if (!isImplicitTerm) {
       termRanges = newTermRanges;
+      termStarved = newTermStarved;
     }
 
     searchRanges = (activeIdx >= 0 && activeIdx < newTermRanges.length) ? newTermRanges[activeIdx] : [];
@@ -3043,8 +3060,13 @@
     // removeNotice()s whenever it isn't itself showing a notice (see its zeroMatches
     // branch), so calling showNotice() any earlier would have this notice wiped out from
     // under it in the same scan — the same ordering addChipTerm()'s cap message relies on.
+    //
+    // totalMatches, not TOTAL_MATCH_CAP, is what actually gets shown: the cap is checked
+    // BEFORE materialising each term (see the loop above), so a term already in flight
+    // when the budget is spent still gets its full (up to per-term-capped) count — the
+    // real total this notice reports can run past 2000, up to 2997 (oculist-l6m.21).
     if (termsStarved) {
-      showNotice('Showing the first 2000 matches. Remove a term for a complete count.', 'match-scan-cap');
+      showNotice('Showing the first ' + totalMatches + ' matches. Remove a term for a complete count.', 'match-scan-cap');
     }
 
     renderChipRow();
@@ -3427,8 +3449,10 @@
     // Keep termRanges parallel to workListTerms so a stale/misaligned count is never
     // shown for a term that shifted index — termRanges itself is only fully refreshed
     // by the next performListSearch() call, splice() here is a no-op if there is no
-    // scan yet (termRanges shorter than index).
+    // scan yet (termRanges shorter than index). termStarved gets the same treatment so a
+    // starved marker never survives onto the wrong (shifted) chip either.
     termRanges.splice(index, 1);
+    termStarved.splice(index, 1);
     if (activeTermIndex === index) {
       activeTermIndex = Math.max(0, index - 1);
     } else if (activeTermIndex > index) {
@@ -3594,11 +3618,16 @@
       // termRanges[i] is undefined until performListSearch() has scanned this term at
       // least once — right after addChipTerm() pushes it before any scan, or a term
       // skipped outright by the oculist-l6m.7 total-match cap (termsStarved). Both cases
-      // leave the visual slot blank, and the accessible name must not claim a count for
-      // either: "0 matches" is only correct once termRanges[i] is a real (possibly empty)
-      // array from an actual scan (oculist-l6m.19's undefined-vs-empty-array distinction).
+      // leave termRanges[i] undefined, but they are not the same state to the user: an
+      // unscanned chip simply hasn't been looked at yet, while a starved chip WAS in this
+      // scan and got skipped because the cap was already spent. termStarved[i] (set
+      // alongside termRanges in performListSearch()) is how the two are told apart here
+      // (oculist-l6m.21) — the accessible name must not claim a count for either: "0
+      // matches" is only correct once termRanges[i] is a real (possibly empty) array from
+      // an actual scan (oculist-l6m.19's undefined-vs-empty-array distinction).
       var hasCount = !!termRanges[i];
       var countValue = hasCount ? termRanges[i].length : 0;
+      var isStarved = !hasCount && !!termStarved[i];
 
       var termBtn = document.createElement('button');
       termBtn.type = 'button';
@@ -3608,16 +3637,21 @@
       var termLabel = (isActive ? 'Active search term: ' : 'Search term: ') + term;
       if (hasCount) {
         termLabel += ', ' + countValue + ' ' + (countValue === 1 ? i18n.matchSingular : i18n.matchPlural);
+      } else if (isStarved) {
+        termLabel += ', ' + i18n.matchCapReached;
       }
       termBtn.setAttribute('aria-label', termLabel);
       termBtn.addEventListener('click', function () { activateChip(i); });
 
       // The visual count span stays aria-hidden — its value is already folded into
       // termBtn's aria-label above, so a screen reader is never asked to read it twice.
+      // A starved chip gets an em dash rather than the plain blank an unscanned chip
+      // shows: visually distinct from both a real number and "nothing rendered yet",
+      // without needing a new colour or icon (oculist-l6m.21).
       var chipCountEl = document.createElement('span');
       chipCountEl.className = 'oc-chip-count';
       chipCountEl.setAttribute('aria-hidden', 'true');
-      chipCountEl.textContent = hasCount ? String(countValue) : '';
+      chipCountEl.textContent = hasCount ? String(countValue) : (isStarved ? '—' : '');
 
       var removeBtn = document.createElement('button');
       removeBtn.type = 'button';
@@ -4543,6 +4577,7 @@
     workListTerms = terms;
     activeTermIndex = -1;
     termRanges = [];
+    termStarved = [];
     searchRanges = [];
     activeIndex = -1;
     firstEnter = false;
@@ -5018,6 +5053,7 @@
       // stale entries from before this mount — see the "every writer of activeTermIndex"
       // note in performListSearch() for the invariant this upholds without scanning.
       termRanges = [];
+      termStarved = [];
       renderChipRow();
     });
   }
