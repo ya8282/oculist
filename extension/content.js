@@ -6071,6 +6071,7 @@
       });
       if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+      if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
       if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
         window.__ocDestroy();
       } else {

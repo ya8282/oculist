@@ -429,5 +429,51 @@ describe('Oculist Preference Panel Tests', () => {
       assert.ok(beacons.length > 0, 'A beacon should still render for a stale/unknown effect key rather than silently no-op');
     });
 
+    test('A post-boot storage.onChanged effect value for a removed effect is normalised back to hud so the settings panel still shows a selection (oculist-7z3)', async () => {
+      const dom = createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+
+      // Boot with a *valid* effect, same rationale as the oculist-e9u test above: booting
+      // with a stale value would let the boot-time coercion (content.js:6122) carry the
+      // fix instead of the onChanged-path guard this test targets.
+      global.chrome.storage.sync.get = (key, cb) => cb({
+        'oc-settings': { effect: 'hud' }
+      });
+
+      let onChangedListener;
+      global.chrome.storage.onChanged.addListener = (fn) => { onChangedListener = fn; };
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const wrapRoot = wrap.shadowRoot;
+
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+      assert.ok(wrapRoot.querySelector('#oc-settings-panel'), 'Settings panel should be open before the storage change lands');
+
+      // Simulate a stale/removed effect key (e.g. the deleted Lens, oculist-e9u) arriving
+      // post-boot via chrome.storage.onChanged, same mechanism as the test above.
+      assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
+
+      // The onChanged handler rebuilds the settings panel synchronously
+      // (rebuildSettingsPanelPreservingFocus -> buildSettingsPanel), so no wait is needed
+      // before re-querying it.
+      const settingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanel, 'Settings panel should still be present after the storage change rebuild');
+
+      const effectRows = Array.from(settingsPanel.querySelectorAll('.oc-radio-item[data-oc-key^="effect:"]'));
+      assert.ok(effectRows.length > 0, 'Effect picker rows should be present in the settings panel');
+
+      const activeRows = effectRows.filter(row => row.classList.contains('active'));
+      assert.strictEqual(activeRows.length, 1, 'Exactly one effect row should be marked active; without the onChanged registry guard an unknown effect value matches nothing and every row loses its selection');
+      assert.strictEqual(activeRows[0].getAttribute('data-oc-key'), 'effect:hud', 'The active effect row should be HUD, since settings.effect must be normalised back to "hud" for the removed "lens" key');
+    });
+
   });
 });
