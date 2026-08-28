@@ -6213,6 +6213,19 @@
 
       var t = T();
       var activeTheme = getActiveThemeName();
+      // oculist-6cd: .oc-bar's own rendered height, used below to cap #oc-settings-panel's
+      // max-height to whatever's left of the viewport once the bar is accounted for. Not
+      // measured live off the real `bar` element — the very first injectHighlightStyles()
+      // call of a session runs *before* this same CSS (specifically the '.oc-bar button'
+      // rule below, which pins the bar's tallest child to a fixed 26px) has ever been
+      // attached to the shadow root, so a live getBoundingClientRect() read here would
+      // measure the *unstyled* bar (an unstyled div of default-sized form controls, ~22px)
+      // and bake that too-small number into the stylesheet for the rest of the session.
+      // 44px is a fixed, deterministic upper bound instead: 6px + 6px .oc-bar padding + the
+      // 26px fixed height '.oc-bar button' sets below (font-size/DPI/OS-independent, unlike
+      // the bar's own text/line-height) + :host's own 1px top + 1px bottom border, rounded
+      // up a few px for cross-platform subpixel-rounding safety.
+      var barChromePx = 44;
 
       var dialogCss = [
         ':host {',
@@ -6369,6 +6382,20 @@
         // bar, so the whole popover jumped ~33px.
         '  width: 0;',
         '  min-width: 100%;',
+        // oculist-6cd: the panel's own intrinsic height (header + grid content) had no cap,
+        // so on short viewports the whole host (bar + this panel, both position: fixed with
+        // no scrollable ancestor per :host's overflow: hidden above) grew past the viewport
+        // with no way to reach the clipped end — top-anchored bars (tl/tr) lost the footer,
+        // bottom-anchored bars (bl/br) pushed the header (and the bar itself) above y=0
+        // instead, since a bottom-anchored host grows upward. This predates oculist-dvt's
+        // effect-list growth (oculist-dvt.5 capped .oc-radio-list, one level down, for the
+        // same underlying reason) and is independent of effect-registry size entirely.
+        // Capping this panel at 100vh minus the bar's own chrome (barChromePx, above) keeps
+        // panel + bar together within the viewport regardless of which of the four positions
+        // is active — the same numeric cap applies to all four since the bar's contribution
+        // to total host height does not depend on which edge it is anchored to.
+        '  max-height: calc(100vh - ' + barChromePx + 'px);',
+        '  overflow-y: auto;',
         '}',
         ':host(.is-bottom) #oc-settings-panel {',
         '  border-bottom: 1px solid var(--oc-divider);',
@@ -6383,6 +6410,12 @@
         '  border-bottom: 1px solid var(--oc-divider);',
         '  padding-bottom: 8px;',
         '  margin-bottom: 2px;',
+        // oculist-6cd: #oc-settings-panel is now itself a bounded scroll container (max-
+        // height/overflow-y above). Flex items shrink to fit their container by default
+        // (flex-shrink: 1) — without this the header would get visually squashed instead of
+        // the panel actually overflowing and scrolling, the same failure oculist-dvt.5 found
+        // for .oc-radio-item one level down.
+        '  flex-shrink: 0;',
         '}',
         '.oc-settings-title-container {',
         '  display: flex;',
@@ -6431,6 +6464,10 @@
         '  gap: 12px 18px;',
         '  width: 100%;',
         '  box-sizing: border-box;',
+        // oculist-6cd: same flex-shrink: 0 rationale as .oc-settings-header above — keeps
+        // the grid (and the effect list/footer content inside it) at natural height so the
+        // panel overflows and scrolls instead of squashing this content to fit.
+        '  flex-shrink: 0;',
         '}',
         '.oc-settings-col {',
         '  display: flex;',
