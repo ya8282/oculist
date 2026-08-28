@@ -41,6 +41,22 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 // Section 4 ("PEANUT") is real mixed-case page text findable via the lowercase search
 // term "peanut" — search is case-insensitive/accent-folded, so this is the real-casing
 // regression target.
+//
+// Section 5 (font-{mid,low,high}-target, oculist-l6m.41) each wraps its own matched word
+// in a <span> with an explicit inline font-size on that span itself — the *immediate*
+// parent of the text node the match range starts in, not merely an ancestor. This mirrors
+// drawActiveMatchMagnifier()'s own `matchEl = startNode.parentElement` read exactly, so a
+// regression that instead walked up to an ancestor, or rode getBeaconScale() the way chip
+// sizing wrongly did (oculist-l6m.11), would show up as a wrong computed font-size. The
+// three sizes are chosen so the x2.5 arithmetic lands in a different regime for each:
+//   - font-mid-target:  10px -> 25px (10*2.5), inside both clamp bounds (16..48)
+//   - font-low-target:   4px -> 16px (4*2.5=10, clamped up to the 16px floor)
+//   - font-high-target: 40px -> 48px (40*2.5=100, clamped down to the 48px ceiling)
+//
+// Section 6 (trunc24-target/trunc25-target) are single unbroken "words" so search matches
+// them as an exact, whitespace-free substring — trunc24 is exactly 24 characters (the
+// truncation boundary: must render untouched, no ellipsis), trunc25 is exactly 25 (must
+// truncate to its first 24 characters plus '…').
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>
   body { margin: 0; font: 16px/1.6 system-ui, sans-serif; }
@@ -53,7 +69,12 @@ const PAGE = `<!doctype html><meta charset="utf-8">
   <span id="quarklet-target">quarklet</span>
   ${'more filler to keep the paragraph long. '.repeat(60)}</p>
 </div>
-<p>${'more page filler text. '.repeat(10)} <span id="peanut-target">PEANUT</span> ${'trailing filler text. '.repeat(10)}</p>`;
+<p>${'more page filler text. '.repeat(10)} <span id="peanut-target">PEANUT</span> ${'trailing filler text. '.repeat(10)}</p>
+<p id="font-mid-line">omega <span id="font-mid-target" style="font-size:10px">fontmidword</span> psi</p>
+<p id="font-low-line">omega <span id="font-low-target" style="font-size:4px">fontlowword</span> psi</p>
+<p id="font-high-line">omega <span id="font-high-target" style="font-size:40px">fonthighword</span> psi</p>
+<p id="trunc24-line">omega trunctwentyfourcharsxxxx psi</p>
+<p id="trunc25-line">omega trunctwentyfivecharsxxxxx psi</p>`;
 
 const INPUT = '#oc-wrap >> .oc-input';
 const MAGNIFIER = '#oc-active-match-magnifier';
@@ -120,6 +141,53 @@ describe('Active-match magnifier overlay', () => {
         '});' +
         '})'
     );
+  }
+
+  // content.js's own DEFAULTS.visionSettings (extension/content.js) — kept here as a
+  // literal rather than read from the content script, so a test file bug can never make
+  // this "reset" silently agree with whatever the content script currently thinks its
+  // defaults are.
+  const DEFAULT_VISION_SETTINGS = {
+    beaconSize: 'm',
+    animationSpeed: 'normal',
+    textLabels: false,
+    magnifier: false,
+    motionSensitivity: 'full',
+    colorPalette: 'default',
+    borderStyle: 'none',
+    customColors: {
+      matchColor: '#fef08a',
+      activeColor: '#f59e0b',
+      beaconColor: '#fbbf24',
+    },
+  };
+
+  // Restores visionSettings to its shipped defaults through the exact same
+  // chrome.storage.sync.set() path setVisionSettings() uses (not chrome.storage.sync.
+  // clear(), which would also wipe unrelated keys like 'effect'/'position' this suite
+  // never touches) — used between tests (oculist-l6m.41) so a test that failed partway
+  // through, after calling setVisionSettings() but before restoring it, can never leak a
+  // non-default vision setting into the next test.
+  function resetVisionSettings() {
+    return evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var next = Object.assign({}, current, { visionSettings: ' +
+        JSON.stringify(DEFAULT_VISION_SETTINGS) +
+        ' });' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+  }
+
+  // Mirrors chip_count_accessibility.test.js's own helper of the same name: loadWorkList()
+  // also runs implicitly from buildUI() on a fresh mount, but awaiting it explicitly here
+  // confirms that async round trip against the just-cleared storage has actually settled
+  // before a test's own actions run, rather than trusting mount timing.
+  function waitForWorkListLoad() {
+    return evalInContentScript("new Promise(function (resolve) { window.__ocTest.loadWorkList(resolve); })");
   }
 
   async function openBar() {
@@ -208,18 +276,21 @@ describe('Active-match magnifier overlay', () => {
   // clamp-to-page-edge content.js itself applies (see the "flips below" test's near-left-
   // edge 'titanium' fixture), not just an unclamped center, since a small target close to
   // the page edge legitimately never gets a perfectly centered card.
-  function searchUntilMagnifierWord(term, expected) {
+  // Shared core: re-issues search(term) until the magnifier's rendered text satisfies
+  // textCheckFn AND the card has actually redrawn at the right spot (see the cross-check
+  // below) — extracted from searchUntilMagnifierWord so a caller whose "is this ready"
+  // condition is weaker than exact-string-equality (e.g. the truncation test below, whose
+  // whole point is that the exact string is what's under test, not what gates readiness)
+  // can still reuse the same real, observable readiness gate instead of a fixed sleep.
+  function searchUntilMagnifierTextMatches(term, textCheckFn) {
     return untilTrue(
       () => search(term),
       async () => {
-        const textOk = await page.evaluate(
-          (args) => {
-            const el = document.querySelector(args.sel);
-            return !!(el && el.children[0] && el.children[0].textContent === args.expected);
-          },
-          { sel: MAGNIFIER, expected: expected }
-        );
-        if (!textOk) return false;
+        const text = await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          return el && el.children[0] ? el.children[0].textContent : null;
+        }, MAGNIFIER);
+        if (text === null || !textCheckFn(text)) return false;
 
         const rangeRect = await evalInContentScript(`
           (function () {
@@ -249,6 +320,10 @@ describe('Active-match magnifier overlay', () => {
         );
       }
     );
+  }
+
+  function searchUntilMagnifierWord(term, expected) {
+    return searchUntilMagnifierTextMatches(term, (text) => text === expected);
   }
 
   // highlightActiveRange() never calls animate() synchronously — only from inside a
@@ -318,16 +393,32 @@ describe('Active-match magnifier overlay', () => {
   });
 
   // Every test starts from a closed overlay so searchRanges/activeIndex never leak
-  // between tests — but visionSettings persists in chrome.storage.sync exactly like real
-  // usage, so every test that cares sets it explicitly via setVisionSettings() rather
-  // than relying on whatever the previous test left behind. Scroll position also resets:
-  // a previous test's auto-scroll-to-match otherwise leaks into this one, which the
-  // viewport-top-relative flip test in particular depends on starting from (0, 0).
+  // between tests. Scroll position also resets: a previous test's auto-scroll-to-match
+  // otherwise leaks into this one, which the viewport-top-relative flip test in
+  // particular depends on starting from (0, 0).
+  //
+  // oculist-l6m.41: this whole file shares one browser page/content-script instance
+  // across every test in it (see the "Needs a real browser" note up top for why — a
+  // fresh page per test would multiply the real wall-clock and contention cost of that
+  // setup for a diagnostics-quality benefit, and this suite already flakes under
+  // parallel load on constrained boxes, tracked as oculist-li8). So beyond the overlay,
+  // visionSettings and the working list are explicitly reset to their shipped defaults
+  // here too, through the exact chrome.storage paths a real settings/list change takes —
+  // not just relying on "every test that cares sets what it needs" (true today, but a
+  // test that fails partway through, after changing one of these and before restoring
+  // it, would otherwise leak that non-default state into whichever test runs next).
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
     await waitForOverlayClosed();
     await page.evaluate(() => window.scrollTo(0, 0));
+
+    await resetVisionSettings();
+    await evalInContentScript(
+      "new Promise(function (resolve) { chrome.storage.session.remove('oc-worklist', resolve); })"
+    );
+
     await openBar();
+    await waitForWorkListLoad();
   });
 
   test('shows the real page text with its original casing, not the typed term', async () => {
@@ -680,6 +771,101 @@ describe('Active-match magnifier overlay', () => {
       disappeared,
       true,
       'toggling textLabels off must remove the label in place, without navigating'
+    );
+  });
+
+  // Reads the magnifier word element's COMPUTED font-size (getComputedStyle), not its
+  // inline style string — the assertion must survive a change in *how* the style gets
+  // applied (e.g. a CSS class instead of cssText), not just in the arithmetic that
+  // produces the value. Returns a bare number (px) so a mismatch reports the actual
+  // observed size rather than failing via an opaque wait timeout.
+  function magnifierFontSizePx() {
+    return page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el && el.children[0] ? parseFloat(getComputedStyle(el.children[0]).fontSize) : null;
+    }, MAGNIFIER);
+  }
+
+  // oculist-l6m.41: pins fontSize = clamp(16, baseFontSize * 2.5, 48), reading
+  // baseFontSize from the MATCH's own computed font-size (matchEl = startNode.
+  // parentElement), not getBeaconScale() — the same knob bead .11 records being wrongly
+  // reused for chip sizing. A regression that swapped in getBeaconScale() (or any other
+  // multiplier) here would leave this test's mid-range case observably wrong (e.g. 25 vs
+  // 20) while still passing the two clamp-bound cases below, which is why this case is
+  // asserted separately from them.
+  test('scales the magnifier font to 2.5x the matched text\'s own computed font-size (mid-range, neither clamp active)', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('fontmidword', 'fontmidword');
+
+    const size = await magnifierFontSizePx();
+    assert.strictEqual(size, 25, `expected 10px match font-size * 2.5 = 25px, got ${size}px`);
+  });
+
+  test('clamps the magnifier font to a 16px floor when 2.5x the match font-size would be smaller', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('fontlowword', 'fontlowword');
+
+    const size = await magnifierFontSizePx();
+    assert.strictEqual(
+      size,
+      16,
+      `expected the 16px floor to override 4px match font-size * 2.5 = 10px, got ${size}px`
+    );
+  });
+
+  test('clamps the magnifier font to a 48px ceiling when 2.5x the match font-size would be larger', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('fonthighword', 'fonthighword');
+
+    const size = await magnifierFontSizePx();
+    assert.strictEqual(
+      size,
+      48,
+      `expected the 48px ceiling to override 40px match font-size * 2.5 = 100px, got ${size}px`
+    );
+  });
+
+  // oculist-l6m.41: pins the >24-character truncation and its own boundary in the same
+  // test — a fix that always truncates (never leaving a match untouched) would pass a
+  // one-sided test that only checked the over-limit case, so both halves are asserted
+  // here together. Both fixture words are literal, whitespace-free "words" so search
+  // matches them as an exact substring with no whitespace-collapse involved.
+  //
+  // The 25-character half's readiness gate deliberately does NOT wait for the exact
+  // truncated string (unlike searchUntilMagnifierWord elsewhere in this file) — the exact
+  // string is the very thing under test here, and gating on it would mean a truncation
+  // regression (the mutation `text.length > 24` -> `> 240` this test exists to catch)
+  // fails as an opaque "untilTrue: condition never became true" timeout instead of a
+  // value mismatch, which is exactly the failure mode oculist-l6m.41 calls out as
+  // ambiguous under load. Instead it gates on a 24-character prefix common to both the
+  // truncated and (bug-)untouched renderings — truncation only ever appends '…' after
+  // that prefix, never edits it — so the gate is satisfied by either outcome, and the
+  // real comparison below is a plain assert.strictEqual reporting the actual string.
+  test('truncates matches longer than 24 characters with an ellipsis, and leaves a 24-character match untouched', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+
+    // Boundary: exactly 24 characters must render exactly as-is, with no ellipsis.
+    await searchUntilMagnifierTextMatches(
+      'trunctwentyfourcharsxxxx',
+      (t) => t.indexOf('trunctwentyfourcharsxxxx') === 0
+    );
+    const untouched = await magnifierWordText();
+    assert.strictEqual(
+      untouched,
+      'trunctwentyfourcharsxxxx',
+      'a 24-character match must not be truncated'
+    );
+
+    // Over the limit: 25 characters must truncate to the first 24 plus '…'.
+    await searchUntilMagnifierTextMatches(
+      'trunctwentyfivecharsxxxxx',
+      (text) => text.indexOf('trunctwentyfivecharsxxxx') === 0
+    );
+    const truncated = await magnifierWordText();
+    assert.strictEqual(
+      truncated,
+      'trunctwentyfivecharsxxxx…',
+      'a 25-character match must truncate to its first 24 characters plus an ellipsis'
     );
   });
 });
