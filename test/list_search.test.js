@@ -488,7 +488,7 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
 
   const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
 
-  let server, ctx, page, extId;
+  let server, ctx, page, extId, client, isolatedContextId;
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -509,12 +509,55 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
     extId = sw.url().split('/')[2];
 
     page = await ctx.newPage();
+
+    // Attach CDP and watch for execution-context creation *before* navigating (same
+    // pattern as the sibling describe above) — needed by the unscanned-vs-starved test
+    // below to seed chrome.storage.session directly from the content script's isolated
+    // world, ahead of ever opening the finder.
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
     await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
   });
 
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
+
+  // Each test starts from a closed overlay and a cleared working list, so chips never
+  // leak between the two tests in this describe.
+  beforeEach(async () => {
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+    await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
   });
 
   async function setLiteMode(enabled) {
@@ -594,9 +637,9 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
       const counts = await page.locator(CHIP_COUNT).allTextContents();
       assert.deepStrictEqual(
         counts,
-        ['999', '999', '', '999'],
-        '"zzbravo"/"zzcharlie" hit the per-term 999 cap, "zzdelta" is starved by the total cap (blank, not "5"), ' +
-          '"zzalpha" (active) still shows its full per-term-capped count'
+        ['999', '999', '—', '999'],
+        '"zzbravo"/"zzcharlie" hit the per-term 999 cap, "zzdelta" is starved by the total cap (an em dash, not ' +
+          'blank and not "5"), "zzalpha" (active) still shows its full per-term-capped count'
       );
 
       // Enter-driven commits land on match 0 via highlightActiveRange() (see
@@ -609,8 +652,93 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
         'the active term ("zzalpha") must never be starved by the total cap'
       );
 
+      // The starved chip's accessible name must say WHY it has no count, using the same
+      // aria-label mechanism every other chip state already uses (oculist-l6m.21) — a bare
+      // em dash on its own conveys nothing to a screen reader.
+      const zzdeltaLabel = await page.locator(CHIP_TERM).nth(2).getAttribute('aria-label');
+      assert.strictEqual(
+        zzdeltaLabel,
+        'Search term: zzdelta, skipped, match limit reached',
+        '"zzdelta" was skipped by the total cap; its accessible name must say so, not just render an em dash'
+      );
+
+      // 999 (zzalpha, active) + 999 (zzbravo) + 999 (zzcharlie) = 2997, the REAL number of
+      // matches materialised this scan — not the 2000 constant the cap is checked against.
+      // The cap is checked BEFORE materialising each term (performListSearch()), so the
+      // running total can — and here does — run past 2000 before a term is finally
+      // skipped. This assertion fails if the literal 2000 is restored.
       const noticeText = await page.locator(NOTICE_TEXT).textContent();
-      assert.strictEqual(noticeText, 'Showing the first 2000 matches. Remove a term for a complete count.');
+      assert.strictEqual(noticeText, 'Showing the first 2997 matches. Remove a term for a complete count.');
+    } finally {
+      await setLiteMode(false);
+    }
+  });
+
+  test('a starved chip is visually and semantically distinct from the same chip before it was ever scanned', async () => {
+    // Seed the working list directly via storage (mirrors chip_count_accessibility.
+    // test.js's carry-over-restore fixture) so the chip row renders once with all four
+    // terms in the genuinely unscanned state — no performListSearch() has run yet, so
+    // termRanges and termStarved are both still empty.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['zzbravo', 'zzcharlie', 'zzdelta', 'zzalpha'], activeIndex: 3 } }, resolve))"
+    );
+
+    await setLiteMode(true);
+    try {
+      await openFinder();
+      await page.waitForFunction(
+        (expected) => {
+          const root = document.getElementById('oc-wrap');
+          const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+          return chips.length === expected;
+        },
+        4,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      // Before ANY scan: every chip, including the one that is about to become starved,
+      // is blank with no count suffix in its accessible name — carry-over restore alone
+      // must never claim a count, real or skipped.
+      const countsBeforeScan = await page.locator(CHIP_COUNT).allTextContents();
+      assert.deepStrictEqual(
+        countsBeforeScan,
+        ['', '', '', ''],
+        'an unscanned chip renders a plain blank, not the em dash a starved chip uses'
+      );
+      const zzdeltaLabelBeforeScan = await page.locator(CHIP_TERM).nth(2).getAttribute('aria-label');
+      assert.strictEqual(
+        zzdeltaLabelBeforeScan,
+        'Search term: zzdelta',
+        'an unscanned chip must not claim it was skipped before any scan has actually run'
+      );
+
+      // Clicking the already-active chip still forces a full rescan (activateChip() always
+      // calls performListSearch()) — the same chip element observed above now runs into
+      // the total cap and becomes starved.
+      await page.locator(CHIP_TERM).nth(3).click();
+      await page.waitForFunction(
+        () => {
+          const root = document.getElementById('oc-wrap');
+          const el = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-count') : null;
+          return !!(el && el.textContent && el.textContent.indexOf('999') !== -1);
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      const countsAfterScan = await page.locator(CHIP_COUNT).allTextContents();
+      assert.deepStrictEqual(
+        countsAfterScan,
+        ['999', '999', '—', '999'],
+        'the same "zzdelta" chip now shows the starved em dash, visually distinct from the blank it showed before any scan ran'
+      );
+      const zzdeltaLabelAfterScan = await page.locator(CHIP_TERM).nth(2).getAttribute('aria-label');
+      assert.strictEqual(
+        zzdeltaLabelAfterScan,
+        'Search term: zzdelta, skipped, match limit reached',
+        'the same chip now states it was skipped, distinct from the plain "Search term: zzdelta" it had before the scan'
+      );
     } finally {
       await setLiteMode(false);
     }
