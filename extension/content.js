@@ -2244,6 +2244,12 @@
     window.__ocTest.lastSpeedLinesLaneAlphaMax = 0;
     window.__ocTest.lastSpeedLinesElseAlphaMax = 0;
     window.__ocTest.lastSpeedLinesLaneBounds = { top: laneTop, bot: laneBot, matchY: offsetY };
+    // lastSpeedLinesAnchor exposes the same local-canvas anchor (vpCx, offsetY) every
+    // streak/flare/lane computation above is drawn relative to, so a test can grade it
+    // against the match's own independently-observed rendered position (see
+    // test/helpers/effect_anchor.js) rather than only ever checking this effect's
+    // internals for self-consistency (oculist-dvt.7).
+    window.__ocTest.lastSpeedLinesAnchor = { matchX: vpCx, matchY: offsetY };
     window.__ocTest.speedLinesDone = false;
 
     var DUR = getBeaconDuration(760);
@@ -2446,6 +2452,11 @@
     // proves stops growing after cancelBeacons(), and a deterministic completion flag the
     // other tests can wait on instead of racing this rAF loop with a second one.
     window.__ocTest.lastChronoHueRun = { baseHue: baseHue, ringCount: RINGS, hueSamples: [] };
+    // lastChronoAnchor exposes the same local-canvas anchor (vpCx, offsetY) every ring and
+    // the core glow are drawn relative to, so a test can grade it against the match's own
+    // independently-observed rendered position (see test/helpers/effect_anchor.js) rather
+    // than only ever checking this effect's internals for self-consistency (oculist-dvt.7).
+    window.__ocTest.lastChronoAnchor = { matchX: vpCx, matchY: offsetY };
     window.__ocTest.chronoFrameCount = 0;
     window.__ocTest.chronoDone = false;
 
@@ -2494,6 +2505,11 @@
 
       // soft core glow at the match
       var coreHue = hueAt(0, t);
+      // Pushed into the same hueSamples array the ring loop above feeds (oculist-dvt.7):
+      // without this, a regression that hardcoded coreHue to a fixed value instead of
+      // calling hueAt(0, t) would go undetected, since hueSamples would still only ever
+      // reflect the ring hues.
+      window.__ocTest.lastChronoHueRun.hueSamples.push(coreHue);
       var g = ctx.createRadialGradient(vpCx, offsetY, 0, vpCx, offsetY, 70);
       g.addColorStop(0, 'hsla(' + coreHue + ',100%,78%,' + envelope * 0.55 + ')');
       g.addColorStop(1, 'hsla(0,0%,0%,0)');
