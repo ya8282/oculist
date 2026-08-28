@@ -844,6 +844,15 @@
     activeBeacons = 0;
   }
 
+  // Same test-reachability reasoning as window.__ocTest.getDebounceTimer above: a real
+  // second search calls cancelBeacons() from inside an animate() that is itself invoked off
+  // a scroll-settle handler or a setTimeout (highlightActiveRange()), never synchronously
+  // from the keypress that triggered it — a test driving "cancel mid-flight" through
+  // simulated keystrokes alone would be racing that latency instead of testing cancellation
+  // itself. Exposing the real closure directly removes that race without changing
+  // cancelBeacons()'s own behavior at all.
+  window.__ocTest.cancelBeacons = cancelBeacons;
+
   // ── Effects (CSP-Compliant via Web Animations API & Document Root Mount) ───
 
   function animateAnimeLaser(rect) {
@@ -879,6 +888,10 @@
     laserContainer.style.transform = 'scale(' + scale + ')';
     laserContainer.style.transformOrigin = cx + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Primary main core beam (thick outer aura sheath)
     var sheath = document.createElement('div');
     sheath.style.cssText = [
@@ -890,7 +903,7 @@
     ].join(';');
     laserContainer.appendChild(sheath);
 
-    sheath.animate([
+    anims.push(sheath.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(1.5)', opacity: 0.6, offset: 0.1 },
       { transform: 'scaleY(1)', opacity: 0.4, offset: 0.8 },
@@ -899,7 +912,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 2. High-energy inner core beam (sharp white core)
     var core = document.createElement('div');
@@ -913,7 +926,7 @@
     ].join(';');
     laserContainer.appendChild(core);
 
-    core.animate([
+    anims.push(core.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(2.2)', opacity: 1, offset: 0.15 },
       { transform: 'scaleY(1.2)', opacity: 0.85, offset: 0.8 },
@@ -922,7 +935,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 3. Central energy sphere/flash over active match
     var flash = document.createElement('div');
@@ -938,7 +951,7 @@
     ].join(';');
     laserContainer.appendChild(flash);
 
-    flash.animate([
+    anims.push(flash.animate([
       { transform: 'scale(0.2)', opacity: 0 },
       { transform: 'scale(1.3)', opacity: 1, offset: 0.15 },
       { transform: 'scale(1)', opacity: 0.9, offset: 0.8 },
@@ -947,7 +960,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 4. Spark explosion
     var sparkCount = settings.performanceMode ? Math.round(5 * scale) : Math.round(20 * (scale > 1 ? 1.5 : scale));
@@ -970,15 +983,17 @@
       var dx = Math.cos(angle) * distance;
       var dy = Math.sin(angle) * distance;
 
-      spark.animate([
+      anims.push(spark.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(1.5)', opacity: 1 },
         { transform: 'translate(-50%, -50%) translate(' + dx + 'px, ' + dy + 'px) scale(0)', opacity: 0 }
       ], {
         duration: getBeaconDuration(1500 + Math.random() * 500),
         easing: 'cubic-bezier(0.1, 0.8, 0.2, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    laserContainer.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(laserContainer);
@@ -1006,7 +1021,10 @@
     ].join(';');
     document.documentElement.appendChild(overlay);
 
-    overlay.animate([
+    // overlay and ring are each their own top-level .oc-beacon element (no shared
+    // container here), so cancelBeacons() reaches them independently — each needs its
+    // own __waapiAnims, not a shared array.
+    overlay.__waapiAnims = [overlay.animate([
       { opacity: 0 },
       { opacity: 1, offset: 0.15 },
       { opacity: 1, offset: 0.8 },
@@ -1015,7 +1033,7 @@
       duration: getBeaconDuration(2000),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    })];
 
     var color = getEffectiveColors().beacon || '#38bdf8';
 
@@ -1025,6 +1043,7 @@
       'position:fixed',
       'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
       'width:' + w + 'px', 'height:' + h + 'px',
+      'box-sizing:content-box',
       'border:2.5px solid ' + color,
       'border-radius:50%',
       'box-shadow:0 0 20px ' + color + ', inset 0 0 20px ' + color,
@@ -1032,7 +1051,7 @@
     ].join(';');
     document.documentElement.appendChild(ring);
 
-    ring.animate([
+    ring.__waapiAnims = [ring.animate([
       { opacity: 0, transform: 'scale(4)' },
       { opacity: 1, transform: 'scale(1)', offset: 0.2 },
       { opacity: 0.85, transform: 'scale(0.95)', offset: 0.8 },
@@ -1041,7 +1060,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
       fill: 'forwards'
-    });
+    })];
 
     setTimeout(function() {
       overlay.remove();
@@ -1101,19 +1120,22 @@
 
     var duration = getBeaconDuration(2000);
 
+    // leftArrow and rightArrow are each their own top-level .oc-beacon element (no
+    // shared container), so each needs its own __waapiAnims for cancelBeacons() to reach.
     var anim = leftArrow.animate([
       { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
       { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
       { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
       { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
     ], { duration: duration, fill: 'forwards' });
+    leftArrow.__waapiAnims = [anim];
 
-    rightArrow.animate([
+    rightArrow.__waapiAnims = [rightArrow.animate([
       { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
       { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
       { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
       { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
-    ], { duration: duration, fill: 'forwards' });
+    ], { duration: duration, fill: 'forwards' })];
 
     anim.finished.then(function () {
       leftArrow.remove();
@@ -1161,6 +1183,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Triple Staggered Expanding Warp Rings
     var ringCount = settings.performanceMode ? 1 : 3;
     for (var r = 0; r < ringCount; r++) {
@@ -1169,6 +1195,7 @@
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
         'width:10px', 'height:10px',
+        'box-sizing:content-box',
         'border:2px solid #ffffff',
         'border-radius:50%',
         'box-shadow:0 0 10px ' + color + ', inset 0 0 8px ' + color,
@@ -1176,7 +1203,7 @@
       ].join(';');
       container.appendChild(ring);
 
-      ring.animate([
+      anims.push(ring.animate([
         { transform: 'scale(0.5)', opacity: 0 },
         { transform: 'scale(1)', opacity: 1, offset: 0.1 },
         { transform: 'scale(15)', opacity: 0 }
@@ -1185,7 +1212,7 @@
         delay: r * getBeaconDuration(150),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
-      });
+      }));
     }
 
     // 2. Warp Speed Radial Star Streaks
@@ -1210,7 +1237,7 @@
       var travel = (Math.random() * 240 + 130) * scale;
       var startDelay = Math.random() * 550;
 
-      streak.animate([
+      anims.push(streak.animate([
         { transform: 'rotate(' + angle + 'rad) translate(10px, 0) scaleX(0.05)', opacity: 0 },
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.25) + 'px, 0) scaleX(3.5)', opacity: 1, offset: 0.15 },
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.7) + 'px, 0) scaleX(7.0)', opacity: 1, offset: 0.7 },
@@ -1220,8 +1247,10 @@
         delay: getBeaconDuration(startDelay),
         easing: 'cubic-bezier(0.1, 0.8, 0.25, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1277,6 +1306,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Fiery glowing outline
     var outline = document.createElement('div');
     outline.style.cssText = [
@@ -1289,7 +1322,7 @@
     ].join(';');
     container.appendChild(outline);
 
-    outline.animate([
+    anims.push(outline.animate([
       { opacity: 0, transform: 'scale(1.15)' },
       { opacity: 0.9, transform: 'scale(1)', offset: 0.15 },
       { opacity: 0.8, transform: 'scale(1)', offset: 0.85 },
@@ -1298,7 +1331,7 @@
       duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    }));
 
     // 2. Soft heat glow behind
     var glow = document.createElement('div');
@@ -1312,7 +1345,7 @@
     ].join(';');
     container.appendChild(glow);
 
-    glow.animate([
+    anims.push(glow.animate([
       { opacity: 0, transform: 'scale(0.8)' },
       { opacity: 1, transform: 'scale(1)', offset: 0.2 },
       { opacity: 0.8, transform: 'scale(1.05)', offset: 0.85 },
@@ -1321,7 +1354,7 @@
       duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    }));
 
     // 3. Flame particles rising
     var colors = [colorDeep, color, colorMid, colorWarm, colorTip];
@@ -1348,7 +1381,7 @@
       var swayX = (Math.random() - 0.5) * 100 * scale;
       var randomRotate = Math.random() * 360;
 
-      p.animate([
+      anims.push(p.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) rotate(' + randomRotate + 'deg) scale(0.2)', opacity: 0 },
         { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.3) + 'px, -' + (riseHeight * 0.3) + 'px) rotate(' + (randomRotate + 45) + 'deg) scale(1.2)', opacity: 0.9, offset: 0.2 },
         { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.7) + 'px, -' + (riseHeight * 0.7) + 'px) rotate(' + (randomRotate + 90) + 'deg) scale(0.8)', opacity: 0.6, offset: 0.7 },
@@ -1358,7 +1391,7 @@
         delay: getBeaconDuration(Math.random() * 400),
         easing: 'cubic-bezier(0.21, 0.61, 0.35, 1)',
         fill: 'forwards'
-      });
+      }));
     }
 
     // 4. Gray smoke particles
@@ -1383,7 +1416,7 @@
       var sRise = (Math.random() * 240 + 200) * scale;
       var sSway = (Math.random() - 0.5) * 160 * scale;
 
-      s.animate([
+      anims.push(s.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(0.5)', opacity: 0 },
         { transform: 'translate(-50%, -50%) translate(' + (sSway * 0.4) + 'px, -' + (sRise * 0.4) + 'px) scale(1.2)', opacity: 0.3, offset: 0.3 },
         { transform: 'translate(-50%, -50%) translate(' + sSway + 'px, -' + sRise + 'px) scale(2)', opacity: 0 }
@@ -1392,8 +1425,10 @@
         delay: getBeaconDuration(Math.random() * 500),
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1457,6 +1492,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // Three concentric, hue-offset rings (channel offsetting). A slightly different end
     // scale per ring plus a small stagger IS the dispersion — the rings recombine bright at
     // the core and split into iridescent bands toward the fringe.
@@ -1483,6 +1522,7 @@
         'position:absolute',
         'left:' + (offsetX - 5) + 'px', 'top:' + (offsetY - 5) + 'px',
         'width:10px', 'height:10px',
+        'box-sizing:content-box',
         'border:2px solid ' + ringColor,
         'border-radius:50%',
         'box-shadow:0 0 10px ' + ringColor + ', inset 0 0 8px ' + ringColor,
@@ -1491,7 +1531,7 @@
       ].join(';');
       container.appendChild(ring);
 
-      ring.animate([
+      anims.push(ring.animate([
         { transform: 'scale(0.5)', opacity: 0, filter: 'blur(0px)' },
         { transform: 'scale(1)', opacity: 1, filter: 'blur(0px)', offset: 0.1 },
         { transform: 'scale(' + endScale + ')', opacity: 0, filter: 'blur(6px)' }
@@ -1500,8 +1540,10 @@
         delay: r * getBeaconDuration(110),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1593,6 +1635,9 @@
         { strokeDashoffset: lineLength },
         { strokeDashoffset: '0' }
       ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+      // linePath is a child of lineSvg, not itself .oc-beacon — the Animation is hung
+      // off lineSvg (the element cancelBeacons() actually selects) instead.
+      lineSvg.__waapiAnims = [lineAnim];
 
       lineAnim.finished.then(function () {
         lineSvg.remove();
@@ -1626,6 +1671,7 @@
       { offsetDistance: '88%', opacity: 1, offset: 0.88 },
       { offsetDistance: '100%', opacity: 0 }
     ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+    arrow.__waapiAnims = [anim];
 
     anim.finished.then(function () {
       arrow.remove();
@@ -1672,6 +1718,7 @@
       { opacity: 1, transform: 'scale(1.15)', offset: 0.35 },
       { opacity: 0, transform: 'scale(1)' }
     ], { duration: flashDuration, delay: duration, easing: 'ease-out', iterations: 1 });
+    flash.__waapiAnims = [flashAnim];
 
     flashAnim.finished.then(function () {
       flash.remove();
@@ -1791,6 +1838,14 @@
 
     var travelDuration = getBeaconDuration(350);
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    // container.__waapiAnims is assigned once, right after this batch — the setTimeout
+    // callback below pushes its own (later-scheduled) animations onto this same array
+    // reference, so a cancelBeacons() that fires either before or after that callback
+    // still sees every animation that exists at the time it runs.
+    var anims = [];
+
     paths.forEach(function (p) {
       var totalLength = 1500;
       try {
@@ -1802,40 +1857,47 @@
       p.core.setAttribute('stroke-dasharray', totalLength);
       p.core.setAttribute('stroke-dashoffset', totalLength);
 
-      p.glow.animate([
+      anims.push(p.glow.animate([
         { strokeDashoffset: totalLength },
         { strokeDashoffset: '0' }
       ], {
         duration: travelDuration,
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
 
-      p.core.animate([
+      anims.push(p.core.animate([
         { strokeDashoffset: totalLength },
         { strokeDashoffset: '0' }
       ], {
         duration: travelDuration,
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
     });
 
+    container.__waapiAnims = anims;
+
     setTimeout(function () {
+      // The container may already have been cancelled/removed (cancelBeacons() ran
+      // mid-flight, before this scheduled callback) — do not create new elements or
+      // animations on a detached container; nothing would ever cancel them.
+      if (!container.isConnected) return;
+
       var flashBg = document.createElement('div');
       flashBg.style.cssText = [
         'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
         'background:#ffffff', 'opacity:0', 'pointer-events:none'
       ].join(';');
       container.appendChild(flashBg);
-      flashBg.animate([
+      anims.push(flashBg.animate([
         { opacity: 0.3 },
         { opacity: 0, offset: 0.8 }
       ], {
         duration: getBeaconDuration(300),
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
 
       var flashCircle = document.createElement('div');
       var fw = rect.width + 60;
@@ -1852,7 +1914,7 @@
       ].join(';');
       container.appendChild(flashCircle);
 
-      flashCircle.animate([
+      anims.push(flashCircle.animate([
         { transform: 'scale(0.5)', opacity: 1 },
         { transform: 'scale(1.4)', opacity: 1, offset: 0.2 },
         { transform: 'scale(1.1)', opacity: 0.9, offset: 0.7 },
@@ -1861,7 +1923,7 @@
         duration: getBeaconDuration(700),
         easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
         fill: 'forwards'
-      });
+      }));
 
       for (var j = 0; j < 3; j++) {
         var flickerGlow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -1895,13 +1957,13 @@
           { opacity: 0 }
         ];
 
-        flickerGlow.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
-        flickerCore.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
+        anims.push(flickerGlow.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' }));
+        anims.push(flickerCore.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' }));
       }
 
       paths.forEach(function (p) {
-        p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
-        p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
+        anims.push(p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' }));
+        anims.push(p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' }));
       });
 
     }, travelDuration);
@@ -2182,6 +2244,12 @@
     window.__ocTest.lastSpeedLinesLaneAlphaMax = 0;
     window.__ocTest.lastSpeedLinesElseAlphaMax = 0;
     window.__ocTest.lastSpeedLinesLaneBounds = { top: laneTop, bot: laneBot, matchY: offsetY };
+    // lastSpeedLinesAnchor exposes the same local-canvas anchor (vpCx, offsetY) every
+    // streak/flare/lane computation above is drawn relative to, so a test can grade it
+    // against the match's own independently-observed rendered position (see
+    // test/helpers/effect_anchor.js) rather than only ever checking this effect's
+    // internals for self-consistency (oculist-dvt.7).
+    window.__ocTest.lastSpeedLinesAnchor = { matchX: vpCx, matchY: offsetY };
     window.__ocTest.speedLinesDone = false;
 
     var DUR = getBeaconDuration(760);
@@ -2384,6 +2452,11 @@
     // proves stops growing after cancelBeacons(), and a deterministic completion flag the
     // other tests can wait on instead of racing this rAF loop with a second one.
     window.__ocTest.lastChronoHueRun = { baseHue: baseHue, ringCount: RINGS, hueSamples: [] };
+    // lastChronoAnchor exposes the same local-canvas anchor (vpCx, offsetY) every ring and
+    // the core glow are drawn relative to, so a test can grade it against the match's own
+    // independently-observed rendered position (see test/helpers/effect_anchor.js) rather
+    // than only ever checking this effect's internals for self-consistency (oculist-dvt.7).
+    window.__ocTest.lastChronoAnchor = { matchX: vpCx, matchY: offsetY };
     window.__ocTest.chronoFrameCount = 0;
     window.__ocTest.chronoDone = false;
 
@@ -2432,6 +2505,11 @@
 
       // soft core glow at the match
       var coreHue = hueAt(0, t);
+      // Pushed into the same hueSamples array the ring loop above feeds (oculist-dvt.7):
+      // without this, a regression that hardcoded coreHue to a fixed value instead of
+      // calling hueAt(0, t) would go undetected, since hueSamples would still only ever
+      // reflect the ring hues.
+      window.__ocTest.lastChronoHueRun.hueSamples.push(coreHue);
       var g = ctx.createRadialGradient(vpCx, offsetY, 0, vpCx, offsetY, 70);
       g.addColorStop(0, 'hsla(' + coreHue + ',100%,78%,' + envelope * 0.55 + ')');
       g.addColorStop(1, 'hsla(0,0%,0%,0)');
@@ -2490,6 +2568,19 @@
     var finalYVp = vpCy + mh / 2 + 16;
     var turnXVp = vpCx - 118;
 
+    // Guard against a degenerate connecting segment: for a match low in the viewport,
+    // clamping midYVp to the viewport bottom can land it within a hair of finalYVp,
+    // yielding a near-invisible ~1px stub wall (Math.max(len, 1) below) instead of a
+    // real segment. Push the levels at least MIN_SEG_SEP apart, in whichever direction
+    // midYVp already sits relative to finalYVp, re-clamping to the viewport bound if we
+    // pushed downward.
+    var MIN_SEG_SEP = 12;
+    if (Math.abs(midYVp - finalYVp) < MIN_SEG_SEP) {
+      midYVp = midYVp >= finalYVp
+        ? Math.min(finalYVp + MIN_SEG_SEP, window.innerHeight - 26)
+        : finalYVp - MIN_SEG_SEP;
+    }
+
     var fullPts = [
       { x: entryXVp, y: midYVp },
       { x: turnXVp, y: midYVp },
@@ -2535,7 +2626,11 @@
     document.documentElement.appendChild(container);
 
     var anims = [];
-    var THICK = 3 * scale;
+    // Fixed child size — the container's own transform: scale(scale) (above) already
+    // scales this wall visually. Multiplying here too double-scales it (oculist-dvt.8:
+    // walls rendered ~15px thick at xl instead of ~7px). Matches animateAnimeLaser's
+    // fixed-child-size pattern (content.js:847).
+    var THICK = 3;
 
     var SEG = getBeaconDuration(300);          // per-segment run-in duration
     var BOX_HOLD = getBeaconDuration(250);      // gap between wall completion and de-rez start
@@ -2557,14 +2652,15 @@
 
     var head = document.createElement('div');
     head.className = 'oc-lightcycle-head';
-    var headSize = Math.max(6, 8 * scale);
+    // Fixed size, same reasoning as THICK above — the container transform scales this.
+    var headSize = 8;
     head.style.cssText = [
       'position:absolute',
       'width:' + headSize + 'px', 'height:' + headSize + 'px',
       'margin:' + (-headSize / 2) + 'px 0 0 ' + (-headSize / 2) + 'px',
       'background:#ffffff',
       'border-radius:50%',
-      'box-shadow:0 0 ' + (8 * scale) + 'px #ffffff, 0 0 ' + (18 * scale) + 'px ' + color,
+      'box-shadow:0 0 8px #ffffff, 0 0 18px ' + color,
       'pointer-events:none'
     ].join(';');
     container.appendChild(head);
@@ -2583,7 +2679,7 @@
       wall.style.cssText = [
         'position:absolute',
         'background:' + color,
-        'box-shadow:0 0 ' + (6 * scale) + 'px ' + color + ', 0 0 ' + (16 * scale) + 'px ' + color,
+        'box-shadow:0 0 6px ' + color + ', 0 0 16px ' + color,
         'opacity:0.92',
         'pointer-events:none'
       ].join(';');
@@ -2631,7 +2727,9 @@
 
     // Box outline snaps around the match, expanded a few px past the raw rect so the glow
     // reads outside the text — the same idiom animateTrail's absorption flash uses.
-    var boxPad = 6 * scale;
+    // Fixed pad/border/blur, same reasoning as THICK above — the container transform
+    // scales this box (and its glow) along with everything else inside it.
+    var boxPad = 6;
     var box = document.createElement('div');
     box.className = 'oc-lightcycle-box';
     box.style.cssText = [
@@ -2640,8 +2738,9 @@
       'top:' + (localY(rect.top) - boxPad) + 'px',
       'width:' + (mw + boxPad * 2) + 'px',
       'height:' + (mh + boxPad * 2) + 'px',
-      'border:' + Math.max(1, 2 * scale) + 'px solid ' + color,
-      'box-shadow:0 0 ' + (10 * scale) + 'px ' + color + ', inset 0 0 ' + (8 * scale) + 'px ' + color,
+      'box-sizing:content-box',
+      'border:2px solid ' + color,
+      'box-shadow:0 0 10px ' + color + ', inset 0 0 8px ' + color,
       'pointer-events:none'
     ].join(';');
     container.appendChild(box);
@@ -2799,6 +2898,7 @@
     // border) on its leading (bottom) side.
     var sweep = add('oc-cv-sweep', [
       'position:absolute', 'left:0', 'width:100%', 'height:78px',
+      'box-sizing:content-box',
       'background:linear-gradient(to bottom, transparent,' + hexToRgba(color, 0.32) + ', transparent)',
       'border-bottom:2px solid ' + color
     ].join(';'));
@@ -2854,7 +2954,7 @@
     for (var i = 0; i < corners.length; i++) {
       var cdef = corners[i];
       var bracket = add('oc-cv-bracket', [
-        'position:absolute', 'border:2px solid ' + color, cdef[0],
+        'position:absolute', 'box-sizing:content-box', 'border:2px solid ' + color, cdef[0],
         'left:' + cdef[1] + 'px', 'top:' + cdef[2] + 'px',
         'width:' + L + 'px', 'height:' + L + 'px'
       ].join(';'));
@@ -2936,6 +3036,7 @@
       'position:absolute',
       'left:' + (x - 3) + 'px', 'top:' + (y - 3) + 'px',
       'width:' + (w + 6) + 'px', 'height:' + (h + 6) + 'px',
+      'box-sizing:content-box',
       'border:3px solid ' + color,
       'border-radius:4px',
       'pointer-events:none',
@@ -2976,6 +3077,7 @@
         'position:absolute',
         'left:' + (x - 6) + 'px', 'top:' + (y - 6) + 'px',
         'width:' + (w + 12) + 'px', 'height:' + (h + 12) + 'px',
+        'box-sizing:content-box',
         'background:' + hexToRgba(color, 0.15),
         'border:2.5px solid ' + color,
         'border-radius:4px',
@@ -3026,12 +3128,15 @@
 
       var duration = getBeaconDuration(2500);
 
-      overlay.animate([
+      // overlay/glow/leftArrow/rightArrow are each their own top-level .oc-beacon
+      // element (no shared container) — each needs its own __waapiAnims for
+      // cancelBeacons() to reach.
+      overlay.__waapiAnims = [overlay.animate([
         { opacity: 0 },
         { opacity: 1, offset: 0.15 },
         { opacity: 1, offset: 0.85 },
         { opacity: 0 }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
       var anim = glow.animate([
         { opacity: 0 },
@@ -3039,20 +3144,21 @@
         { opacity: 1, offset: 0.85 },
         { opacity: 0 }
       ], { duration: duration, fill: 'forwards' });
+      glow.__waapiAnims = [anim];
 
-      leftArrow.animate([
+      leftArrow.__waapiAnims = [leftArrow.animate([
         { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
         { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
         { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
         { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
-      rightArrow.animate([
+      rightArrow.__waapiAnims = [rightArrow.animate([
         { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
         { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
         { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
         { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
       anim.finished.then(function () {
         overlay.remove();
@@ -3074,6 +3180,7 @@
       'position:absolute',
       'left:' + (x - 4) + 'px', 'top:' + (y - 4) + 'px',
       'width:' + (w + 8) + 'px', 'height:' + (h + 8) + 'px',
+      'box-sizing:content-box',
       'background:' + hexToRgba(color, 0.25),
       'border:2px solid ' + color,
       'border-radius:4px',
@@ -3093,6 +3200,7 @@
       easing: 'ease-in-out',
       fill: 'forwards'
     });
+    glow.__waapiAnims = [anim];
 
     anim.finished.then(function () {
       glow.remove();
@@ -3123,6 +3231,7 @@
       'position:absolute',
       'left:' + (x - 2) + 'px', 'top:' + (y - 2) + 'px',
       'width:' + (w + 4) + 'px', 'height:' + (h + 4) + 'px',
+      'box-sizing:content-box',
       'border:' + borderWidth + ' solid ' + color,
       'border-radius:4px',
       'pointer-events:none',
@@ -3132,13 +3241,13 @@
     ].join(';');
     document.documentElement.appendChild(borderEl);
 
-    borderEl.animate([
+    borderEl.__waapiAnims = [borderEl.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], {
       duration: 200,
       fill: 'forwards'
-    });
+    })];
   }
 
   function drawActiveMatchShape(rect) {
@@ -3218,13 +3327,13 @@
     label.style.left = lx + 'px';
     label.style.top = ly + 'px';
 
-    label.animate([
+    label.__waapiAnims = [label.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], {
       duration: 250,
       fill: 'forwards'
-    });
+    })];
   }
 
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
@@ -3386,8 +3495,12 @@
       // vision-accessibility product — the magnifier does not get to be the one overlay
       // that ignores the motion settings.
       var fadeDuration = getBeaconDuration(220);
-      card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
-      connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      // connector is a child of card, not itself .oc-beacon — both Animations are hung
+      // off card (the element cancelBeacons() actually selects).
+      card.__waapiAnims = [
+        card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' }),
+        connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' })
+      ];
       return true;
     }
 
@@ -3398,16 +3511,20 @@
     var liftPx = 40;
     var liftDuration = getBeaconDuration(320);
 
-    card.animate([
+    var liftAnim = card.animate([
       { transform: 'translateY(' + liftPx + 'px) scale(' + startScale + ')', opacity: 0 },
       { transform: 'translateY(0px) scale(1)', opacity: 1 }
     ], { duration: liftDuration, easing: 'ease-out', fill: 'forwards' });
 
     var connectorDuration = getBeaconDuration(150);
-    connector.animate([
+    var connectorAnim = connector.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], { duration: connectorDuration, delay: liftDuration, fill: 'forwards' });
+
+    // connector is a child of card, not itself .oc-beacon — both Animations are hung
+    // off card (the element cancelBeacons() actually selects).
+    card.__waapiAnims = [liftAnim, connectorAnim];
 
     return true;
   }
@@ -4777,6 +4894,7 @@
           'position:absolute',
           'left:' + pos.left + 'px', 'top:' + pos.top + 'px',
           'width:8px', 'height:8px',
+          'box-sizing:content-box',
           'border:2px solid ' + markerColor,
           'border-radius:50%',
           'background:transparent',
@@ -6213,6 +6331,19 @@
 
       var t = T();
       var activeTheme = getActiveThemeName();
+      // oculist-6cd: .oc-bar's own rendered height, used below to cap #oc-settings-panel's
+      // max-height to whatever's left of the viewport once the bar is accounted for. Not
+      // measured live off the real `bar` element — the very first injectHighlightStyles()
+      // call of a session runs *before* this same CSS (specifically the '.oc-bar button'
+      // rule below, which pins the bar's tallest child to a fixed 26px) has ever been
+      // attached to the shadow root, so a live getBoundingClientRect() read here would
+      // measure the *unstyled* bar (an unstyled div of default-sized form controls, ~22px)
+      // and bake that too-small number into the stylesheet for the rest of the session.
+      // 44px is a fixed, deterministic upper bound instead: 6px + 6px .oc-bar padding + the
+      // 26px fixed height '.oc-bar button' sets below (font-size/DPI/OS-independent, unlike
+      // the bar's own text/line-height) + :host's own 1px top + 1px bottom border, rounded
+      // up a few px for cross-platform subpixel-rounding safety.
+      var barChromePx = 44;
 
       var dialogCss = [
         ':host {',
@@ -6369,6 +6500,20 @@
         // bar, so the whole popover jumped ~33px.
         '  width: 0;',
         '  min-width: 100%;',
+        // oculist-6cd: the panel's own intrinsic height (header + grid content) had no cap,
+        // so on short viewports the whole host (bar + this panel, both position: fixed with
+        // no scrollable ancestor per :host's overflow: hidden above) grew past the viewport
+        // with no way to reach the clipped end — top-anchored bars (tl/tr) lost the footer,
+        // bottom-anchored bars (bl/br) pushed the header (and the bar itself) above y=0
+        // instead, since a bottom-anchored host grows upward. This predates oculist-dvt's
+        // effect-list growth (oculist-dvt.5 capped .oc-radio-list, one level down, for the
+        // same underlying reason) and is independent of effect-registry size entirely.
+        // Capping this panel at 100vh minus the bar's own chrome (barChromePx, above) keeps
+        // panel + bar together within the viewport regardless of which of the four positions
+        // is active — the same numeric cap applies to all four since the bar's contribution
+        // to total host height does not depend on which edge it is anchored to.
+        '  max-height: calc(100vh - ' + barChromePx + 'px);',
+        '  overflow-y: auto;',
         '}',
         ':host(.is-bottom) #oc-settings-panel {',
         '  border-bottom: 1px solid var(--oc-divider);',
@@ -6383,6 +6528,12 @@
         '  border-bottom: 1px solid var(--oc-divider);',
         '  padding-bottom: 8px;',
         '  margin-bottom: 2px;',
+        // oculist-6cd: #oc-settings-panel is now itself a bounded scroll container (max-
+        // height/overflow-y above). Flex items shrink to fit their container by default
+        // (flex-shrink: 1) — without this the header would get visually squashed instead of
+        // the panel actually overflowing and scrolling, the same failure oculist-dvt.5 found
+        // for .oc-radio-item one level down.
+        '  flex-shrink: 0;',
         '}',
         '.oc-settings-title-container {',
         '  display: flex;',
@@ -6431,6 +6582,10 @@
         '  gap: 12px 18px;',
         '  width: 100%;',
         '  box-sizing: border-box;',
+        // oculist-6cd: same flex-shrink: 0 rationale as .oc-settings-header above — keeps
+        // the grid (and the effect list/footer content inside it) at natural height so the
+        // panel overflows and scrolls instead of squashing this content to fit.
+        '  flex-shrink: 0;',
         '}',
         '.oc-settings-col {',
         '  display: flex;',

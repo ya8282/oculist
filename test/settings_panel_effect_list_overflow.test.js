@@ -194,10 +194,30 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     );
   });
 
-  test('every one of the 13 effect rows is reachable — real rendered geometry stays within the list\'s scrollable bounds once scrolled to', async () => {
+  test('every effect row is reachable — real rendered geometry stays within the list\'s scrollable bounds once scrolled to', async () => {
     await openSettings();
     const keys = await getEffectRowKeys();
-    assert.strictEqual(keys.length, 13, 'sanity: expected 13 rows before checking reachability of each');
+    // Row count is asserted once, in the first test, against the live registry — not
+    // re-asserted here (oculist-dvt.9): the loop below already iterates however many rows
+    // actually exist (keys.length), so a mismatched registry count cannot silently pass
+    // this test either way, and a future 14th entry won't produce a duplicate, misleadingly
+    // -worded failure here on top of the one honest failure in the first test.
+
+    // Second, independent detector of the dvt.5 .oc-radio-list cap (oculist-dvt.9): the
+    // previous test's scrollHeight > clientHeight check is a relative, content-dependent
+    // signal; this pins the list's own rendered clientHeight against the CSS's absolute
+    // 220px cap on .oc-radio-list (content.js), not the separate, panel-level cap one level
+    // up (oculist-6cd, #oc-settings-panel maxheight calc(100vh - 44px)). That distinction
+    // matters: with the panel capped, a reverted *list* cap would make the panel itself
+    // scroll instead of clip, which could otherwise mask the list-level regression — reading
+    // the list's own box (not the panel's) keeps this test sensitive to a list-cap revert
+    // specifically, regardless of what the panel does.
+    const baseline = await getListAndRowGeometry(keys[0]);
+    assert.ok(
+      baseline.clientHeight <= 225,
+      `effect list clientHeight (${baseline.clientHeight}) must stay pinned near the CSS's 220px cap on ` +
+      '.oc-radio-list — a reverted cap would let the list grow to fit all rows instead of scrolling'
+    );
 
     for (const key of keys) {
       // scrollIntoView({block:'nearest'}) only moves the nearest scrollable ancestor
@@ -224,10 +244,12 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     }
   });
 
-  test('keyboard Tab traversal reaches the 13th (last) effect row, and the focused row stays within the visible scroll area', async () => {
+  test('keyboard Tab traversal reaches the last effect row, and the focused row stays within the visible scroll area', async () => {
     await openSettings();
     const keys = await getEffectRowKeys();
-    assert.strictEqual(keys.length, 13, 'sanity: expected 13 rows before tabbing through them');
+    // Row count is asserted once, in the first test, against the live registry — not
+    // re-asserted here (oculist-dvt.9); the Tab loop below already runs keys.length times,
+    // so it exercises however many rows actually exist rather than an assumed count.
 
     // Focus the first row directly (a real DOM focus() call, matching the convention used
     // by settings_panel_rebuild_focus.test.js/overlay_panel_focus_aria.test.js for landing
@@ -236,7 +258,7 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     await waitForActiveElement('[data-oc-key="' + keys[0] + '"]');
 
     // Tab through every remaining row in order — each press must land on the next row in
-    // DOM order (not skip any, not loop back early), ending on the 13th/last one.
+    // DOM order (not skip any, not loop back early), ending on the last one.
     for (let i = 1; i < keys.length; i++) {
       await page.keyboard.press('Tab');
       await waitForCondition(
@@ -268,7 +290,7 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     );
   });
 
-  test('an in-place rebuild (theme change) with the full 13-row registry keeps the focused effect row reachable', async () => {
+  test('an in-place rebuild (theme change) with the full registry keeps the focused effect row reachable', async () => {
     await openSettings();
     const keys = await getEffectRowKeys();
     const lastKey = keys[keys.length - 1];
@@ -298,10 +320,16 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     // Refocus the same last effect row post-rebuild the way a keyboard user actually would
     // (the theme control itself isn't inside the effect list, so this isn't testing
     // rebuildSettingsPanelPreservingFocus()'s own restore target — it's confirming the
-    // *rebuilt* list is still fully reachable at 13 rows after a rebuild, not just on first
-    // paint).
+    // *rebuilt* list is still fully reachable after a rebuild, not just on first paint).
+    // Compared against keys.length (captured pre-rebuild above), not a hardcoded literal
+    // (oculist-dvt.9) — this still catches a rebuild that drops rows, without needing to
+    // know or re-assert the registry's current size.
     const keysAfterRebuild = await getEffectRowKeys();
-    assert.strictEqual(keysAfterRebuild.length, 13, 'the rebuilt panel must still render all 13 effect rows');
+    assert.strictEqual(
+      keysAfterRebuild.length,
+      keys.length,
+      'the rebuilt panel must still render the same number of effect rows as before the rebuild'
+    );
     assert.ok(keysAfterRebuild.includes(lastKey), 'the previously-focused row must still exist post-rebuild');
 
     await page.locator('#oc-wrap >> [data-oc-key="' + lastKey + '"]').focus();
