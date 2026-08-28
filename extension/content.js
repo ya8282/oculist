@@ -6607,6 +6607,15 @@
         '  display: flex;',
         '  flex-direction: column;',
         '  gap: 2px;',
+        // oculist-dvt.5: the effect list grew from 9 to 13 rows and its intrinsic height
+        // (no cap before this) was growing the whole settings panel past short viewports,
+        // with no scroll mechanism anywhere in the panel to reach the clipped rows. Capping
+        // and scrolling just this list (same idiom as #oc-lists-panel's
+        // max-height/overflow-y above) keeps every effect row keyboard- and
+        // scroll-reachable regardless of registry size, without touching selection
+        // semantics or the rebuild path.
+        '  max-height: 220px;',
+        '  overflow-y: auto;',
         '}',
         '.oc-radio-item {',
         '  display: flex;',
@@ -6628,6 +6637,13 @@
         '  box-sizing: border-box;',
         '  box-shadow: none;',
         '  margin: 0;',
+        // oculist-dvt.5: .oc-radio-list is a flex column with a max-height (above). Flex
+        // items shrink to fit their container by default (flex-shrink: 1), so without this
+        // the 13 rows were being visually squashed down to fit inside max-height instead of
+        // overflowing it — no scrollbar ever appeared and every row's own height shrank.
+        // flex-shrink: 0 keeps each row at its natural height so the list can actually
+        // overflow and scroll.
+        '  flex-shrink: 0;',
         '  transition: background-color 120ms, opacity 120ms, color 120ms;',
         '}',
         '.oc-radio-item:hover {',
