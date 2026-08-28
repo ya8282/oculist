@@ -486,6 +486,13 @@
     return 1.0;
   }
 
+  // Chip text/sizing deliberately rides the beacon scale knob above (it is
+  // the only scale hook in this file), but the beacon's 0.7-2.25 range is
+  // far too wide for UI text, so clamp it to a legible band for chips.
+  function getChipScale() {
+    return Math.min(Math.max(getBeaconScale(), 1), 1.5);
+  }
+
   function getBeaconDuration(baseDuration) {
     var speed = (settings.visionSettings && settings.visionSettings.animationSpeed) ? settings.visionSettings.animationSpeed : 'normal';
     if (speed === 'fast') return baseDuration * 0.5;
@@ -5289,7 +5296,7 @@
         '  --oc-btn-active-text: ' + (activeTheme === 'dark' ? '#fafafa' : '#09090b') + ';',
         '  --oc-btn-hover-bg: ' + (activeTheme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') + ';',
         '  --oc-accent-alpha: ' + hexToRgba(colors.beacon, 0.2) + ';',
-        '  --oc-chip-scale: ' + getBeaconScale() + ';',
+        '  --oc-chip-scale: ' + getChipScale() + ';',
         '  font-family: system-ui, -apple-system, sans-serif;',
         '}',
         '.oc-bar {',

@@ -133,6 +133,53 @@ describe('Chip row and working-list state', () => {
       });
   }
 
+  // Arm a probe listener inside the content script's own isolated world *before* writing
+  // a settings change: chrome.storage.onChanged fires every listener registered against
+  // that same document for the same event, in registration order — content.js's own
+  // listener was registered at page load, long before this probe, so observing OUR
+  // listener fire is a direct proxy for content.js's own listener (and its synchronous
+  // injectHighlightStyles() re-render, which is what actually updates --oc-chip-scale)
+  // having already run. Mirrors dispersion_bloom.test.js's own helper of the same name.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before) {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocSettingsEchoes', (v) => v > before, {
+      timeout: POLL_TIMEOUT,
+      message: 'oc-settings change never echoed into the content script',
+    });
+  }
+
+  // Merges `patch` into the nested visionSettings object via chrome.storage.sync.set —
+  // the same underlying write the popup/in-page settings panel makes — and waits for
+  // content.js's own onChanged listener to actually apply it.
+  async function setVisionSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var vs = Object.assign({}, current.visionSettings || {}, ' + JSON.stringify(patch) + ');' +
+        'var next = Object.assign({}, current, { visionSettings: vs });' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
   // Every test starts from a closed overlay and an empty working list, so chips never
   // leak from one test into the next.
   beforeEach(async () => {
@@ -711,5 +758,35 @@ describe('Chip row and working-list state', () => {
     assert.strictEqual(chipRowState.present, true, 'the chip row element should exist in the DOM');
     assert.strictEqual(chipRowState.hidden, true, 'an empty working list must leave the chip row hidden');
     assert.strictEqual(chipRowState.display, 'none', 'a hidden chip row must not affect layout');
+  });
+
+  // oculist-l6m.11: chip text size derives from --oc-chip-scale, which reuses
+  // getBeaconScale() (the vision-profile beacon size knob, range 0.7-2.25) rather than a
+  // dedicated UI-text scale. Left unclamped, an xl beacon would render 27px chip text and
+  // an s beacon 8.4px — both absurd for a chip label. getChipScale() clamps that shared
+  // knob into a legible [1, 1.5] band for chips specifically (s/m -> 1.0, l/xl -> 1.5),
+  // while genuine beacon sizing (every other getBeaconScale() call site) keeps its full
+  // range untouched. Reads the COMPUTED font-size (not the --oc-chip-scale variable text)
+  // so a regression in the CSS calc() itself, not just the JS clamp, would also be caught.
+  test('chip text renders at a sensible, clamped size across all four beacon sizes', async () => {
+    await addTerm('scaletest');
+
+    const EXPECTED = { s: '12px', m: '12px', l: '18px', xl: '18px' };
+    try {
+      for (const size of ['s', 'm', 'l', 'xl']) {
+        await setVisionSettings({ beaconSize: size });
+        const fontSize = await page.locator(CHIP_TERM).first().evaluate((el) => getComputedStyle(el).fontSize);
+        assert.strictEqual(
+          fontSize,
+          EXPECTED[size],
+          `beaconSize="${size}" should render chip text at ${EXPECTED[size]}, got ${fontSize}`
+        );
+      }
+    } finally {
+      // Restore the default so no later test in this file inherits a non-default beacon
+      // size (this file never otherwise touches visionSettings, so the browser context's
+      // persisted 'oc-settings' would otherwise leak this value into subsequent tests).
+      await setVisionSettings({ beaconSize: 'm' });
+    }
   });
 });
