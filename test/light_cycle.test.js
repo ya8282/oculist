@@ -165,6 +165,24 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
     await waitForSettingsEcho(echoBefore);
   }
 
+  // Merges `patch` into the nested visionSettings object (e.g. beaconSize) via
+  // chrome.storage.sync.set, waiting for content.js's own onChanged listener to actually
+  // apply it. Mirrors cyber_vision.test.js / chip_row.test.js's own setVisionSettings.
+  async function setVisionSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var vs = Object.assign({}, current.visionSettings || {}, ' + JSON.stringify(patch) + ');' +
+        'var next = Object.assign({}, current, { visionSettings: vs });' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
   // Clears any leftover .oc-beacon nodes, presses Enter to (re-)fire the active beacon
   // (goToNext()/replay path — the only match on the page, so every Enter re-fires the same
   // active match), and waits for a fresh .oc-beacon container to actually exist. animate()
@@ -188,39 +206,57 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
     });
   }
 
-  test('every wall segment is right-angled: real rendered geometry, never both wide and tall', async () => {
-    await replay();
-    await waitForRunInDone();
+  // Swept across every beaconSize, not just the default 'm': the wall's rendered
+  // thickness rides getBeaconScale() (content.js), and a regression that double-applies
+  // that scale to the wall's own child-element thickness (oculist-dvt.8) only breaches
+  // the "one axis <= 10px" threshold at the larger sizes — 'm' alone stays well inside
+  // it either way, so a test that never varies beaconSize cannot catch that bug. One test
+  // with an internal loop (not one test per size) because chrome.storage.onChanged only
+  // fires on an actual value change: consecutive same-value writes (e.g. a reset to 'm'
+  // immediately followed by a fresh test setting 'm' again) would never echo and the wait
+  // would time out. Mirrors chip_row.test.js's own beaconSize sweep.
+  test('every wall segment is right-angled at every beaconSize: real rendered geometry, never both wide and tall', async () => {
+    try {
+      for (const size of ['s', 'm', 'l', 'xl']) {
+        await setVisionSettings({ beaconSize: size });
+        await replay();
+        await waitForRunInDone();
 
-    // Read the *actual rendered* bounding box of every wall segment directly off the live
-    // DOM (getBoundingClientRect, after the scaleX(1)/scaleY(1) growth keyframe has
-    // resolved) — not a flag content.js sets about itself. A segment mutated to carry both
-    // a real width and a real height (a diagonal) must fail this, regardless of what any
-    // internal bookkeeping claims.
-    const rects = await page.evaluate((sel) => {
-      return Array.from(document.querySelectorAll(sel)).map((el) => {
-        const r = el.getBoundingClientRect();
-        return { width: r.width, height: r.height };
-      });
-    }, WALL);
+        // Read the *actual rendered* bounding box of every wall segment directly off the
+        // live DOM (getBoundingClientRect, after the scaleX(1)/scaleY(1) growth keyframe
+        // has resolved) — not a flag content.js sets about itself. A segment mutated to
+        // carry both a real width and a real height (a diagonal) must fail this,
+        // regardless of what any internal bookkeeping claims.
+        const rects = await page.evaluate((sel) => {
+          return Array.from(document.querySelectorAll(sel)).map((el) => {
+            const r = el.getBoundingClientRect();
+            return { width: r.width, height: r.height };
+          });
+        }, WALL);
 
-    assert.ok(rects.length >= 3, `sanity check: expected at least 3 wall segments in full mode, got ${rects.length}`);
+        assert.ok(rects.length >= 3, `beaconSize="${size}": sanity check: expected at least 3 wall segments in full mode, got ${rects.length}`);
 
-    for (const r of rects) {
-      // Sanity: this must be a real, visible segment, not a collapsed zero-size div —
-      // otherwise "one dimension is thin" would pass vacuously.
-      assert.ok(
-        Math.max(r.width, r.height) > 20,
-        `expected a real segment with meaningful length, got width=${r.width}, height=${r.height}`
-      );
-      // The right-angle assertion itself: one axis must stay thin (the wall's own
-      // thickness), the other carries the segment's length. Both axes measuring large at
-      // once is exactly what a diagonal segment (both a real width and a real height)
-      // would produce.
-      assert.ok(
-        Math.min(r.width, r.height) <= 10,
-        `expected a purely horizontal or purely vertical segment (one axis <= 10px); got width=${r.width}, height=${r.height} — this is what a diagonal segment looks like`
-      );
+        for (const r of rects) {
+          // Sanity: this must be a real, visible segment, not a collapsed zero-size div —
+          // otherwise "one dimension is thin" would pass vacuously.
+          assert.ok(
+            Math.max(r.width, r.height) > 20,
+            `beaconSize="${size}": expected a real segment with meaningful length, got width=${r.width}, height=${r.height}`
+          );
+          // The right-angle assertion itself: one axis must stay thin (the wall's own
+          // thickness), the other carries the segment's length. Both axes measuring large
+          // at once is exactly what a diagonal segment (both a real width and a real
+          // height) would produce — or, at larger beaconSize values, what a wall
+          // thickness scaled twice over would produce.
+          assert.ok(
+            Math.min(r.width, r.height) <= 10,
+            `beaconSize="${size}": expected a purely horizontal or purely vertical segment (one axis <= 10px); got width=${r.width}, height=${r.height}`
+          );
+        }
+      }
+    } finally {
+      // Reset to the shipped default so later tests in this file start from a known size.
+      await setVisionSettings({ beaconSize: 'm' });
     }
   });
 

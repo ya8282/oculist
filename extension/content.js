@@ -2493,6 +2493,19 @@
     var finalYVp = vpCy + mh / 2 + 16;
     var turnXVp = vpCx - 118;
 
+    // Guard against a degenerate connecting segment: for a match low in the viewport,
+    // clamping midYVp to the viewport bottom can land it within a hair of finalYVp,
+    // yielding a near-invisible ~1px stub wall (Math.max(len, 1) below) instead of a
+    // real segment. Push the levels at least MIN_SEG_SEP apart, in whichever direction
+    // midYVp already sits relative to finalYVp, re-clamping to the viewport bound if we
+    // pushed downward.
+    var MIN_SEG_SEP = 12;
+    if (Math.abs(midYVp - finalYVp) < MIN_SEG_SEP) {
+      midYVp = midYVp >= finalYVp
+        ? Math.min(finalYVp + MIN_SEG_SEP, window.innerHeight - 26)
+        : finalYVp - MIN_SEG_SEP;
+    }
+
     var fullPts = [
       { x: entryXVp, y: midYVp },
       { x: turnXVp, y: midYVp },
@@ -2538,7 +2551,11 @@
     document.documentElement.appendChild(container);
 
     var anims = [];
-    var THICK = 3 * scale;
+    // Fixed child size — the container's own transform: scale(scale) (above) already
+    // scales this wall visually. Multiplying here too double-scales it (oculist-dvt.8:
+    // walls rendered ~15px thick at xl instead of ~7px). Matches animateAnimeLaser's
+    // fixed-child-size pattern (content.js:847).
+    var THICK = 3;
 
     var SEG = getBeaconDuration(300);          // per-segment run-in duration
     var BOX_HOLD = getBeaconDuration(250);      // gap between wall completion and de-rez start
@@ -2560,14 +2577,15 @@
 
     var head = document.createElement('div');
     head.className = 'oc-lightcycle-head';
-    var headSize = Math.max(6, 8 * scale);
+    // Fixed size, same reasoning as THICK above — the container transform scales this.
+    var headSize = 8;
     head.style.cssText = [
       'position:absolute',
       'width:' + headSize + 'px', 'height:' + headSize + 'px',
       'margin:' + (-headSize / 2) + 'px 0 0 ' + (-headSize / 2) + 'px',
       'background:#ffffff',
       'border-radius:50%',
-      'box-shadow:0 0 ' + (8 * scale) + 'px #ffffff, 0 0 ' + (18 * scale) + 'px ' + color,
+      'box-shadow:0 0 8px #ffffff, 0 0 18px ' + color,
       'pointer-events:none'
     ].join(';');
     container.appendChild(head);
@@ -2586,7 +2604,7 @@
       wall.style.cssText = [
         'position:absolute',
         'background:' + color,
-        'box-shadow:0 0 ' + (6 * scale) + 'px ' + color + ', 0 0 ' + (16 * scale) + 'px ' + color,
+        'box-shadow:0 0 6px ' + color + ', 0 0 16px ' + color,
         'opacity:0.92',
         'pointer-events:none'
       ].join(';');
@@ -2634,7 +2652,9 @@
 
     // Box outline snaps around the match, expanded a few px past the raw rect so the glow
     // reads outside the text — the same idiom animateTrail's absorption flash uses.
-    var boxPad = 6 * scale;
+    // Fixed pad/border/blur, same reasoning as THICK above — the container transform
+    // scales this box (and its glow) along with everything else inside it.
+    var boxPad = 6;
     var box = document.createElement('div');
     box.className = 'oc-lightcycle-box';
     box.style.cssText = [
@@ -2644,8 +2664,8 @@
       'width:' + (mw + boxPad * 2) + 'px',
       'height:' + (mh + boxPad * 2) + 'px',
       'box-sizing:content-box',
-      'border:' + Math.max(1, 2 * scale) + 'px solid ' + color,
-      'box-shadow:0 0 ' + (10 * scale) + 'px ' + color + ', inset 0 0 ' + (8 * scale) + 'px ' + color,
+      'border:2px solid ' + color,
+      'box-shadow:0 0 10px ' + color + ', inset 0 0 8px ' + color,
       'pointer-events:none'
     ].join(';');
     container.appendChild(box);
