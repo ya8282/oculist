@@ -21,8 +21,14 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { elementCenterInContainer } = require('./helpers/effect_anchor');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+
+// Generous enough to absorb sub-pixel float rounding between the effect's own local-canvas
+// math and a real getBoundingClientRect() read, tight enough that a 150px whole-effect
+// offset (oculist-dvt.7) still fails it by two orders of magnitude.
+const ANCHOR_TOLERANCE = 2;
 
 // #target is the text the finder searches for and the beacon fires on.
 const PAGE = `<!doctype html><meta charset="utf-8">
@@ -31,6 +37,7 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
 const INPUT = '#oc-wrap >> .oc-input';
 const WALL = '.oc-lightcycle-wall';
+const BOX = '.oc-lightcycle-box';
 
 describe('Light Cycle: a right-angle wall of light grows in toward the match, then de-rezzes tail-first', () => {
   let server, ctx, page, client, isolatedContextId, origin;
@@ -258,6 +265,47 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
       // Reset to the shipped default so later tests in this file start from a known size.
       await setVisionSettings({ beaconSize: 'm' });
     }
+  });
+
+  // content.js positions the box's CSS `left`/`top` at (matchEdge - boxPad) and its
+  // (content-box) `width`/`height` at (matchSize + 2*boxPad), then draws a boxBorder-wide
+  // border OUTSIDE that content box. Because `left`/`top` fix the BORDER box's outer edge
+  // (not the content box's), and the border extends the border box's right/bottom edges by
+  // 2*boxBorder without moving the pinned left/top, the rendered border box's own centre
+  // sits exactly boxBorder px past the match's centre in both axes — real, deterministic
+  // box-model geometry, not effect misbehaviour or floating-point noise. Confirmed by
+  // running this exact assertion without the boxBorder correction: it fails ~50% of the
+  // time under load with dx/dy landing right at boxBorder px, since ANCHOR_TOLERANCE alone
+  // sat exactly on that deterministic bias.
+  const BOX_BORDER = 2; // matches content.js's box.style.cssText 'border:2px solid ...'
+
+  // The right-angle test above proves every wall segment's *shape* is correct, but not
+  // that the wall (and the box it grows in toward) actually terminates on the match: a
+  // shared internal anchor bug (e.g. offsetY offset by a constant, oculist-dvt.7) would
+  // move the head, every wall segment and the outline box together, leaving the
+  // right-angle geometry check — which only measures each segment's own width/height —
+  // fully satisfied while the whole effect runs in toward the wrong spot. Unlike Speed
+  // Lines/Chrono Tunnel, this needs no extra content.js hook: the outline box is a real
+  // positioned DOM element already, so its own rendered centre (mapped into the shared
+  // .oc-beacon container's local space, see test/helpers/effect_anchor.js) can be graded
+  // directly against the match's own rendered centre plus the known BOX_BORDER bias above,
+  // mapped the same way — two independent DOM reads, no internal bookkeeping involved on
+  // either side.
+  test('the outline box lands on the match: real rendered geometry, not internal bookkeeping', async () => {
+    await replay();
+    await waitForRunInDone();
+
+    const matchCenter = await elementCenterInContainer(page, '#target', '.oc-beacon');
+    const boxCenter = await elementCenterInContainer(page, BOX, '.oc-beacon');
+
+    assert.ok(matchCenter && boxCenter, 'sanity check: expected both #target and the outline box to resolve to real elements');
+    const dx = Math.abs(matchCenter.x + BOX_BORDER - boxCenter.x);
+    const dy = Math.abs(matchCenter.y + BOX_BORDER - boxCenter.y);
+    assert.ok(
+      dx <= ANCHOR_TOLERANCE && dy <= ANCHOR_TOLERANCE,
+      `expected the outline box to be centred on the match (plus the known ${BOX_BORDER}px border bias) within ${ANCHOR_TOLERANCE}px; ` +
+        `match=${JSON.stringify(matchCenter)}, box=${JSON.stringify(boxCenter)} (dx=${dx}px, dy=${dy}px)`
+    );
   });
 
   test('wall segments de-rez in tail-first order, not simultaneously', async () => {

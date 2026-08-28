@@ -21,8 +21,15 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { elementCenterInContainer } = require('./helpers/effect_anchor');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+
+// Generous enough to absorb sub-pixel float rounding between the effect's own local-canvas
+// math and a real getBoundingClientRect() read, tight enough that the 200px whole-effect
+// offset this test exists to catch (oculist-dvt.7) still fails it by two orders of
+// magnitude.
+const ANCHOR_TOLERANCE = 2;
 
 // #target is the text the finder searches for and the beacon fires on.
 const PAGE = `<!doctype html><meta charset="utf-8">
@@ -227,6 +234,30 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     assert.ok(
       laneMax < elseMax * 0.5,
       `expected the lane to be measurably dimmer than the rest of the field; laneMax=${laneMax}, elseMax=${elseMax}`
+    );
+  });
+
+  // The clear-lane test above pins that lastSpeedLinesLaneBounds brackets the match — but
+  // that assertion, and every other one in this suite, is graded entirely against values
+  // content.js reports about itself. A shared internal anchor bug (e.g. offsetY offset by a
+  // constant, oculist-dvt.7) shifts the lane, the streak field and the flare together,
+  // which leaves every internally-anchored assertion self-consistent while the whole beacon
+  // fires away from the word. This test grades window.__ocTest.lastSpeedLinesAnchor against
+  // an independent source of truth instead: the match's own rendered position, read
+  // straight off the DOM (see test/helpers/effect_anchor.js).
+  test("the effect's own reported anchor matches where the match actually renders", async () => {
+    await replay();
+
+    const anchor = await evalInContentScript('window.__ocTest.lastSpeedLinesAnchor');
+    const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
+
+    assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
+    const dx = Math.abs(anchor.matchX - independent.x);
+    const dy = Math.abs(anchor.matchY - independent.y);
+    assert.ok(
+      dx <= ANCHOR_TOLERANCE && dy <= ANCHOR_TOLERANCE,
+      `expected the effect's own reported anchor to match the match's real rendered position within ${ANCHOR_TOLERANCE}px; ` +
+        `anchor=${JSON.stringify(anchor)}, independent=${JSON.stringify(independent)} (dx=${dx}px, dy=${dy}px)`
     );
   });
 
