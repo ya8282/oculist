@@ -365,6 +365,16 @@
           if (typeof callback === 'function') callback({ ok: false, reason: 'cap' });
           return;
         }
+        // The cap check above and the chrome.storage.sync.set() write below are two
+        // separate round trips, so there is a time-of-check/time-of-use gap between them:
+        // two devices can each call readListIndex(), each see index.count at 49, each pass
+        // this check, and each go on to write a 50th (and, between them, 51st) list. There
+        // is no fix for this within the chrome.storage API — it has no compare-and-swap or
+        // transaction primitive, so nothing short of an external lock (which chrome.storage
+        // doesn't offer) could make this check-then-write atomic across devices. In
+        // practice this means MAX_SAVED_LISTS is a soft cap that concurrent multi-device
+        // saves can push slightly past, not a hard invariant that's enforced everywhere;
+        // the UI should not assume the count can never exceed 50.
         var id = generateListId(index.ids);
         var list = { id: id, name: trimmedName, terms: cleanTerms };
         var setObj = {};
@@ -419,7 +429,7 @@
         setObj[key] = updated;
         chrome.storage.sync.set(setObj, function () {
           if (chrome.runtime.lastError) {
-            showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
+            showNotice("Couldn't rename this list. Try again in a moment.", 'list-rename-failed');
             if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
             return;
           }
@@ -440,7 +450,7 @@
     try {
       chrome.storage.sync.remove(listStorageKey(id), function () {
         if (chrome.runtime.lastError) {
-          showNotice("Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.", 'list-write-failed');
+          showNotice("Couldn't delete this list. Try again in a moment.", 'list-delete-failed');
           if (typeof callback === 'function') callback({ ok: false, reason: 'write-failed' });
           return;
         }
@@ -3286,10 +3296,10 @@
 
   // key identifies which notice CLASS this is (see the call sites for the full list:
   // 'site-override', 'term-cap', 'term-length', 'list-cap', 'list-write-failed',
-  // 'match-scan-cap'). Dismissing a notice only suppresses further showNotice() calls
-  // for that same key, for the rest of this session — never every notice, and never
-  // permanently (oculist-l6m.12). A falsy/unrecognized key lands in a shared 'default'
-  // bucket rather than either extreme.
+  // 'list-rename-failed', 'list-delete-failed', 'match-scan-cap'). Dismissing a notice
+  // only suppresses further showNotice() calls for that same key, for the rest of this
+  // session — never every notice, and never permanently (oculist-l6m.12). A
+  // falsy/unrecognized key lands in a shared 'default' bucket rather than either extreme.
   function showNotice(text, key) {
     var noticeKey = key || 'default';
     if (!wrapRoot || dismissedNotices.has(noticeKey) || noticeEl) return;

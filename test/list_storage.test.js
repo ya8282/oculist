@@ -30,6 +30,8 @@ const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
 
 const CAP_MESSAGE = "You've saved 50 lists, the maximum. Delete one to save a new list.";
 const WRITE_FAILURE_MESSAGE = "Couldn't save this list. Chrome's sync storage is full; delete a saved list and try again.";
+const RENAME_FAILURE_MESSAGE = "Couldn't rename this list. Try again in a moment.";
+const DELETE_FAILURE_MESSAGE = "Couldn't delete this list. Try again in a moment.";
 
 describe('Saved list storage (oc-list-<id>)', () => {
   let server, ctx, page, client, isolatedContextId;
@@ -244,6 +246,46 @@ describe('Saved list storage (oc-list-<id>)', () => {
         };
         window.__ocTest.saveList(${JSON.stringify(name)}, ${JSON.stringify(terms)}, function (result) {
           chrome.storage.sync.set = originalSet;
+          resolve(result);
+        });
+      })`
+    );
+  }
+
+  // Same override-then-restore pattern as callSaveListWithSimulatedWriteFailure above,
+  // applied to renameList()'s write instead — proves the rename path surfaces its own
+  // distinct notice/message rather than reusing saveList()'s.
+  function callRenameListWithSimulatedWriteFailure(id, name) {
+    return evalInContentScript(
+      `new Promise((resolve) => {
+        var originalSet = chrome.storage.sync.set;
+        chrome.storage.sync.set = function (items, cb) {
+          chrome.runtime.lastError = { message: 'simulated write failure' };
+          cb();
+          delete chrome.runtime.lastError;
+        };
+        window.__ocTest.renameList(${JSON.stringify(id)}, ${JSON.stringify(name)}, function (result) {
+          chrome.storage.sync.set = originalSet;
+          resolve(result);
+        });
+      })`
+    );
+  }
+
+  // Same pattern again, applied to deleteList()'s write (chrome.storage.sync.remove
+  // rather than .set) — proves the delete path surfaces its own distinct notice/message
+  // too, and specifically does not tell the user to delete a list to fix a delete failure.
+  function callDeleteListWithSimulatedWriteFailure(id) {
+    return evalInContentScript(
+      `new Promise((resolve) => {
+        var originalRemove = chrome.storage.sync.remove;
+        chrome.storage.sync.remove = function (keys, cb) {
+          chrome.runtime.lastError = { message: 'simulated write failure' };
+          cb();
+          delete chrome.runtime.lastError;
+        };
+        window.__ocTest.deleteList(${JSON.stringify(id)}, function (result) {
+          chrome.storage.sync.remove = originalRemove;
           resolve(result);
         });
       })`
@@ -501,6 +543,30 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.ok(!lists.some((l) => l.name === 'Empty Id'));
   });
 
+  // oculist-l6m.24 item 2: a key that merely contains the prefix (but doesn't start
+  // with it) is neither shown in the panel nor counted toward the cap.
+  test('a key that contains but does not start with the prefix is neither shown nor counted', async () => {
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.sync.set(" +
+      "{'zz-oc-list-decoy': { id: 'decoy', name: 'Decoy', terms: ['a'] }}," +
+      " resolve))"
+    );
+    await seedLists(49);
+
+    // The 50th real list still succeeds — the decoy above isn't counted.
+    const fiftieth = await callSaveList('Fiftieth List', ['y']);
+    assert.strictEqual(fiftieth.ok, true);
+
+    // The 51st real list now hits the real cap.
+    const overflow = await callSaveList('Overflow List', ['z']);
+    assert.strictEqual(overflow.ok, false);
+    assert.strictEqual(overflow.reason, 'cap');
+
+    const lists = await callListSavedLists();
+    assert.strictEqual(lists.length, 50);
+    assert.ok(!lists.some((l) => l.id === 'decoy' || l.name === 'Decoy'));
+  });
+
   // 3. terms: {} — named in the comment above listSavedLists() as an example malformed
   // shape sanitizeListTerms() reduces to zero terms, but nothing exercised it directly.
   test('listSavedLists() treats a non-array object terms value ({}) the same as any other malformed terms — zero terms, no throw', async () => {
@@ -610,4 +676,66 @@ describe('Saved list storage (oc-list-<id>)', () => {
     assert.strictEqual(afterAttempts.length, 0);
     assert.strictEqual(await page.locator(NOTICE_TEXT).count(), 0);
   });
+
+  // oculist-l6m.24: renameList() and deleteList() used to reuse saveList()'s
+  // quota-exceeded write-failure message and notice id verbatim on write failure, even
+  // though neither operation's failure is actually a save (and a failed delete telling
+  // the user to "delete a saved list and try again" advises the exact action that just
+  // failed). Each now has its own message and its own notice id.
+  test('a simulated write failure on renameList() surfaces its own rename-failure message and notice id, not the save one', async () => {
+    const saved = await callSaveList('Rename Target', ['x']);
+    assert.strictEqual(saved.ok, true);
+
+    const result = await callRenameListWithSimulatedWriteFailure(saved.list.id, 'New Name');
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, 'write-failed');
+
+    // Nothing was actually renamed.
+    const raw = await rawGet('oc-list-' + saved.list.id);
+    assert.strictEqual(raw.name, 'Rename Target');
+
+    await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
+    assert.strictEqual((await page.locator(NOTICE_TEXT).textContent()).trim(), RENAME_FAILURE_MESSAGE);
+    assert.notStrictEqual(RENAME_FAILURE_MESSAGE, WRITE_FAILURE_MESSAGE);
+    const noticeKey = await page.locator('#oc-wrap >> .oc-notice').getAttribute('data-oc-notice');
+    assert.strictEqual(noticeKey, 'list-rename-failed');
+  });
+
+  test('a simulated write failure on deleteList() surfaces its own delete-failure message and notice id, not the save one, and never tells the user to delete a list', async () => {
+    const saved = await callSaveList('Delete Target', ['x']);
+    assert.strictEqual(saved.ok, true);
+
+    const result = await callDeleteListWithSimulatedWriteFailure(saved.list.id);
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, 'write-failed');
+
+    // Nothing was actually deleted.
+    const raw = await rawGet('oc-list-' + saved.list.id);
+    assert.strictEqual(raw.name, 'Delete Target');
+
+    await page.waitForSelector(NOTICE_TEXT, { timeout: POLL_TIMEOUT });
+    const noticeText = (await page.locator(NOTICE_TEXT).textContent()).trim();
+    assert.strictEqual(noticeText, DELETE_FAILURE_MESSAGE);
+    assert.notStrictEqual(DELETE_FAILURE_MESSAGE, WRITE_FAILURE_MESSAGE);
+    assert.ok(noticeText.toLowerCase().indexOf('delete a saved list') === -1);
+    const noticeKey = await page.locator('#oc-wrap >> .oc-notice').getAttribute('data-oc-notice');
+    assert.strictEqual(noticeKey, 'list-delete-failed');
+  });
+
+  // oculist-l6m.24 item 2: the bead suspected readListIndex() (cap accounting) and
+  // listSavedLists() (panel rendering) had drifted out of sync on which oc-list-* keys
+  // count as "identifiable" junk, so a corrupted entry could inflate the cap while
+  // staying invisible in the panel. Reading both functions side by side shows their
+  // four guard clauses (prefix match, entry is an object, entry.id is a non-empty
+  // string, entry.name is a string) are already identical (oculist-dzi fixed this
+  // earlier). The "entry is an object" and "entry.id is a non-empty string" guards are
+  // already pinned empirically by 'unidentifiable junk under the prefix does not count
+  // toward the 50-list cap' and the two guard-clause tests directly above it in this
+  // file (seed junk, confirm listSavedLists() hides it AND that a full 50 real lists
+  // can still be saved on top of it, i.e. the junk consumed no slot). A mutation test
+  // found the fourth guard — the prefix match itself — had no coverage isolating it:
+  // weakening readListIndex()'s startsWith-style check to a mere "contains" check left
+  // the suite green, because no existing test seeded a key that contains but does not
+  // start with the prefix. 'a key that contains but does not start with the prefix is
+  // neither shown nor counted' above pins that guard specifically.
 });
