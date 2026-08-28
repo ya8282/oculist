@@ -21,8 +21,14 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { elementCenterInContainer } = require('./helpers/effect_anchor');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
+
+// Generous enough to absorb sub-pixel float rounding between the effect's own local-canvas
+// math and a real getBoundingClientRect() read, tight enough that a 150px whole-effect
+// offset (oculist-dvt.7) still fails it by two orders of magnitude.
+const ANCHOR_TOLERANCE = 2;
 
 // #target is the text the finder searches for and the beacon fires on.
 const PAGE = `<!doctype html><meta charset="utf-8">
@@ -31,6 +37,7 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
 const INPUT = '#oc-wrap >> .oc-input';
 const WALL = '.oc-lightcycle-wall';
+const BOX = '.oc-lightcycle-box';
 
 describe('Light Cycle: a right-angle wall of light grows in toward the match, then de-rezzes tail-first', () => {
   let server, ctx, page, client, isolatedContextId, origin;
@@ -165,6 +172,24 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
     await waitForSettingsEcho(echoBefore);
   }
 
+  // Merges `patch` into the nested visionSettings object (e.g. beaconSize) via
+  // chrome.storage.sync.set, waiting for content.js's own onChanged listener to actually
+  // apply it. Mirrors cyber_vision.test.js / chip_row.test.js's own setVisionSettings.
+  async function setVisionSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var vs = Object.assign({}, current.visionSettings || {}, ' + JSON.stringify(patch) + ');' +
+        'var next = Object.assign({}, current, { visionSettings: vs });' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
   // Clears any leftover .oc-beacon nodes, presses Enter to (re-)fire the active beacon
   // (goToNext()/replay path — the only match on the page, so every Enter re-fires the same
   // active match), and waits for a fresh .oc-beacon container to actually exist. animate()
@@ -188,40 +213,99 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
     });
   }
 
-  test('every wall segment is right-angled: real rendered geometry, never both wide and tall', async () => {
+  // Swept across every beaconSize, not just the default 'm': the wall's rendered
+  // thickness rides getBeaconScale() (content.js), and a regression that double-applies
+  // that scale to the wall's own child-element thickness (oculist-dvt.8) only breaches
+  // the "one axis <= 10px" threshold at the larger sizes — 'm' alone stays well inside
+  // it either way, so a test that never varies beaconSize cannot catch that bug. One test
+  // with an internal loop (not one test per size) because chrome.storage.onChanged only
+  // fires on an actual value change: consecutive same-value writes (e.g. a reset to 'm'
+  // immediately followed by a fresh test setting 'm' again) would never echo and the wait
+  // would time out. Mirrors chip_row.test.js's own beaconSize sweep.
+  test('every wall segment is right-angled at every beaconSize: real rendered geometry, never both wide and tall', async () => {
+    try {
+      for (const size of ['s', 'm', 'l', 'xl']) {
+        await setVisionSettings({ beaconSize: size });
+        await replay();
+        await waitForRunInDone();
+
+        // Read the *actual rendered* bounding box of every wall segment directly off the
+        // live DOM (getBoundingClientRect, after the scaleX(1)/scaleY(1) growth keyframe
+        // has resolved) — not a flag content.js sets about itself. A segment mutated to
+        // carry both a real width and a real height (a diagonal) must fail this,
+        // regardless of what any internal bookkeeping claims.
+        const rects = await page.evaluate((sel) => {
+          return Array.from(document.querySelectorAll(sel)).map((el) => {
+            const r = el.getBoundingClientRect();
+            return { width: r.width, height: r.height };
+          });
+        }, WALL);
+
+        assert.ok(rects.length >= 3, `beaconSize="${size}": sanity check: expected at least 3 wall segments in full mode, got ${rects.length}`);
+
+        for (const r of rects) {
+          // Sanity: this must be a real, visible segment, not a collapsed zero-size div —
+          // otherwise "one dimension is thin" would pass vacuously.
+          assert.ok(
+            Math.max(r.width, r.height) > 20,
+            `beaconSize="${size}": expected a real segment with meaningful length, got width=${r.width}, height=${r.height}`
+          );
+          // The right-angle assertion itself: one axis must stay thin (the wall's own
+          // thickness), the other carries the segment's length. Both axes measuring large
+          // at once is exactly what a diagonal segment (both a real width and a real
+          // height) would produce — or, at larger beaconSize values, what a wall
+          // thickness scaled twice over would produce.
+          assert.ok(
+            Math.min(r.width, r.height) <= 10,
+            `beaconSize="${size}": expected a purely horizontal or purely vertical segment (one axis <= 10px); got width=${r.width}, height=${r.height}`
+          );
+        }
+      }
+    } finally {
+      // Reset to the shipped default so later tests in this file start from a known size.
+      await setVisionSettings({ beaconSize: 'm' });
+    }
+  });
+
+  // content.js positions the box's CSS `left`/`top` at (matchEdge - boxPad) and its
+  // (content-box) `width`/`height` at (matchSize + 2*boxPad), then draws a boxBorder-wide
+  // border OUTSIDE that content box. Because `left`/`top` fix the BORDER box's outer edge
+  // (not the content box's), and the border extends the border box's right/bottom edges by
+  // 2*boxBorder without moving the pinned left/top, the rendered border box's own centre
+  // sits exactly boxBorder px past the match's centre in both axes — real, deterministic
+  // box-model geometry, not effect misbehaviour or floating-point noise. Confirmed by
+  // running this exact assertion without the boxBorder correction: it fails ~50% of the
+  // time under load with dx/dy landing right at boxBorder px, since ANCHOR_TOLERANCE alone
+  // sat exactly on that deterministic bias.
+  const BOX_BORDER = 2; // matches content.js's box.style.cssText 'border:2px solid ...'
+
+  // The right-angle test above proves every wall segment's *shape* is correct, but not
+  // that the wall (and the box it grows in toward) actually terminates on the match: a
+  // shared internal anchor bug (e.g. offsetY offset by a constant, oculist-dvt.7) would
+  // move the head, every wall segment and the outline box together, leaving the
+  // right-angle geometry check — which only measures each segment's own width/height —
+  // fully satisfied while the whole effect runs in toward the wrong spot. Unlike Speed
+  // Lines/Chrono Tunnel, this needs no extra content.js hook: the outline box is a real
+  // positioned DOM element already, so its own rendered centre (mapped into the shared
+  // .oc-beacon container's local space, see test/helpers/effect_anchor.js) can be graded
+  // directly against the match's own rendered centre plus the known BOX_BORDER bias above,
+  // mapped the same way — two independent DOM reads, no internal bookkeeping involved on
+  // either side.
+  test('the outline box lands on the match: real rendered geometry, not internal bookkeeping', async () => {
     await replay();
     await waitForRunInDone();
 
-    // Read the *actual rendered* bounding box of every wall segment directly off the live
-    // DOM (getBoundingClientRect, after the scaleX(1)/scaleY(1) growth keyframe has
-    // resolved) — not a flag content.js sets about itself. A segment mutated to carry both
-    // a real width and a real height (a diagonal) must fail this, regardless of what any
-    // internal bookkeeping claims.
-    const rects = await page.evaluate((sel) => {
-      return Array.from(document.querySelectorAll(sel)).map((el) => {
-        const r = el.getBoundingClientRect();
-        return { width: r.width, height: r.height };
-      });
-    }, WALL);
+    const matchCenter = await elementCenterInContainer(page, '#target', '.oc-beacon');
+    const boxCenter = await elementCenterInContainer(page, BOX, '.oc-beacon');
 
-    assert.ok(rects.length >= 3, `sanity check: expected at least 3 wall segments in full mode, got ${rects.length}`);
-
-    for (const r of rects) {
-      // Sanity: this must be a real, visible segment, not a collapsed zero-size div —
-      // otherwise "one dimension is thin" would pass vacuously.
-      assert.ok(
-        Math.max(r.width, r.height) > 20,
-        `expected a real segment with meaningful length, got width=${r.width}, height=${r.height}`
-      );
-      // The right-angle assertion itself: one axis must stay thin (the wall's own
-      // thickness), the other carries the segment's length. Both axes measuring large at
-      // once is exactly what a diagonal segment (both a real width and a real height)
-      // would produce.
-      assert.ok(
-        Math.min(r.width, r.height) <= 10,
-        `expected a purely horizontal or purely vertical segment (one axis <= 10px); got width=${r.width}, height=${r.height} — this is what a diagonal segment looks like`
-      );
-    }
+    assert.ok(matchCenter && boxCenter, 'sanity check: expected both #target and the outline box to resolve to real elements');
+    const dx = Math.abs(matchCenter.x + BOX_BORDER - boxCenter.x);
+    const dy = Math.abs(matchCenter.y + BOX_BORDER - boxCenter.y);
+    assert.ok(
+      dx <= ANCHOR_TOLERANCE && dy <= ANCHOR_TOLERANCE,
+      `expected the outline box to be centred on the match (plus the known ${BOX_BORDER}px border bias) within ${ANCHOR_TOLERANCE}px; ` +
+        `match=${JSON.stringify(matchCenter)}, box=${JSON.stringify(boxCenter)} (dx=${dx}px, dy=${dy}px)`
+    );
   });
 
   test('wall segments de-rez in tail-first order, not simultaneously', async () => {
