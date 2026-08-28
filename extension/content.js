@@ -186,6 +186,15 @@
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
 
+  // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
+  // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
+  // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
+  // animate() ever runs, so nothing outside this closure can drive settings.effect to a
+  // bogus value at animate()-time anymore (oculist-jq6). This hook writes settings.effect
+  // directly, bypassing every guard, so animate()'s own fallback
+  // (effectsRegistry[effectKey] || effectsRegistry.hud) can still be exercised.
+  window.__ocTest.setEffectKey = function (key) { settings.effect = key; };
+
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
   //
   // Distinct from the working list above: a saved list is a named, user-curated term set
