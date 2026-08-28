@@ -6349,9 +6349,12 @@
       // measure the *unstyled* bar (an unstyled div of default-sized form controls, ~22px)
       // and bake that too-small number into the stylesheet for the rest of the session.
       // 44px is a fixed, deterministic upper bound instead: 6px + 6px .oc-bar padding + the
-      // 26px fixed height '.oc-bar button' sets below (font-size/DPI/OS-independent, unlike
-      // the bar's own text/line-height) + :host's own 1px top + 1px bottom border, rounded
-      // up a few px for cross-platform subpixel-rounding safety.
+      // bar's actual tallest child — not '.oc-bar button' (pinned to a fixed 26px below,
+      // font-size/DPI/OS-independent) but input.oc-input (height: auto, ~27px from its
+      // 4px+4px padding, 14px font's line box, and 1px border) — + :host's own 1px top +
+      // 1px bottom border, for a total of ~41px. 44px rounds that up, leaving ~3px of slack
+      // for cross-platform subpixel rounding rather than the tight margin the original
+      // comment's (wrong) 26px-tallest-child arithmetic implied (oculist-7de review).
       var barChromePx = 44;
 
       var dialogCss = [
@@ -6538,10 +6541,12 @@
         '  padding-bottom: 8px;',
         '  margin-bottom: 2px;',
         // oculist-6cd: #oc-settings-panel is now itself a bounded scroll container (max-
-        // height/overflow-y above). Flex items shrink to fit their container by default
-        // (flex-shrink: 1) — without this the header would get visually squashed instead of
-        // the panel actually overflowing and scrolling, the same failure oculist-dvt.5 found
-        // for .oc-radio-item one level down.
+        // height/overflow-y above). Likely inert in practice — a flex item's default
+        // min-height:auto already resolves to its content's height for a plain block like
+        // this header (nothing here sets its own overflow), which independently stops it
+        // shrinking below that regardless of flex-shrink. Left in as cheap defense should
+        // that stop holding (e.g. if the header ever gains its own overflow) rather than for
+        // the squash-prevention effect the original comment claimed (oculist-7de review).
         '  flex-shrink: 0;',
         '}',
         '.oc-settings-title-container {',
@@ -6591,9 +6596,11 @@
         '  gap: 12px 18px;',
         '  width: 100%;',
         '  box-sizing: border-box;',
-        // oculist-6cd: same flex-shrink: 0 rationale as .oc-settings-header above — keeps
-        // the grid (and the effect list/footer content inside it) at natural height so the
-        // panel overflows and scrolls instead of squashing this content to fit.
+        // oculist-6cd: same flex-shrink: 0 as .oc-settings-header above, and just as likely
+        // inert for the same reason — min-height:auto already pins the grid at its content
+        // height since nothing sets overflow on it either. Left in as the same cheap defense,
+        // not because it's doing the work of keeping this content at natural height
+        // (oculist-7de review corrects the original comment's overstated claim here).
         '  flex-shrink: 0;',
         '}',
         '.oc-settings-col {',
@@ -6978,7 +6985,15 @@
         // whatever width the bar settled on.
         '  width: 0;',
         '  min-width: 100%;',
-        '  max-height: 320px;',
+        // oculist-7de: was a flat 320px, which only bounds the host (bar + this panel, both
+        // position: fixed with no scrollable ancestor per :host's overflow: hidden above) on
+        // viewports taller than roughly 320px + barChromePx — the exact same whole-host-
+        // grows-past-the-viewport failure oculist-6cd fixed for #oc-settings-panel, just
+        // needing a shorter viewport to trigger since a flat cap doesn't shrink to leave room
+        // for the bar the way this one does. Same fix, same cap: bound to whatever's left of
+        // the viewport once the bar (barChromePx, above) is accounted for, so bar + panel
+        // together always fit regardless of which of the four positions is active.
+        '  max-height: calc(100vh - ' + barChromePx + 'px);',
         '  overflow-y: auto;',
         '  box-sizing: border-box;',
         '}',
@@ -6992,6 +7007,12 @@
         '  display: flex;',
         '  gap: 6px;',
         '  align-items: center;',
+        // oculist-7de: same flex-shrink: 0 idiom as .oc-settings-header, and just as likely
+        // inert for the same reason (min-height:auto already pins this row at its content
+        // height since nothing sets overflow on it) — cheap defense now that #oc-lists-panel
+        // is the scroll container, kept honest rather than overstated per the oculist-6cd
+        // review that flagged those comments.
+        '  flex-shrink: 0;',
         '}',
         'input.oc-list-save-input, input.oc-list-rename-input {',
         '  flex: 1;',
@@ -7038,6 +7059,10 @@
         '  display: flex;',
         '  flex-direction: column;',
         '  gap: 4px;',
+        // oculist-7de: same flex-shrink: 0 as .oc-list-save-row above, and .oc-settings-grid's
+        // sibling case in #oc-settings-panel — same likely-inert cheap defense, not the thing
+        // actually keeping this content at natural height while #oc-lists-panel scrolls.
+        '  flex-shrink: 0;',
         '}',
         '.oc-list-empty {',
         '  font-size: 12px;',
