@@ -585,6 +585,7 @@
     effectTrail: 'Trail',
     effectSpeedLines: 'Speed Lines',
     effectChronoTunnel: 'Chrono Tunnel',
+    effectLightCycle: 'Light Cycle',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -691,7 +692,8 @@
     dispersion: { label: i18n.effectBloom, run: animateDispersion },
     trail: { label: i18n.effectTrail, run: animateTrail },
     speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
-    chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel }
+    chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
+    lightcycle: { label: i18n.effectLightCycle, run: animateLightCycle }
   };
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -824,6 +826,17 @@
     var beacons = document.querySelectorAll('.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
       if (beacons[i].__rafId) cancelAnimationFrame(beacons[i].__rafId);
+      // WAAPI animations do NOT stop on their own when their target is detached from the
+      // document — verified empirically: playState stays 'running' and currentTime keeps
+      // advancing on a removed element unless .cancel() is called explicitly. Canvas
+      // effects hang their rAF id off __rafId above; DOM/WAAPI effects (Light Cycle,
+      // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
+      // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
+      if (beacons[i].__waapiAnims) {
+        for (var j = 0; j < beacons[i].__waapiAnims.length; j++) {
+          try { beacons[i].__waapiAnims[j].cancel(); } catch (e) {}
+        }
+      }
       beacons[i].remove();
     }
     activeBeacons = 0;
@@ -2439,6 +2452,233 @@
     setTimeout(function () {
       container.remove();
     }, DUR);
+  }
+
+  // Light Cycle: a cycle head runs in toward the match on right angles only — no curves,
+  // no diagonals, the whole aesthetic — leaving a solid glowing wall behind it, segment by
+  // segment. On arrival the wall holds, a box outline snaps around the match, then the
+  // wall de-rezzes from the tail forward (the segment drawn first fades first). Ported
+  // from the approved beacon-bench.html reference geometry (the four-point right-angle
+  // path, transformOrigin-anchored scaleX/scaleY growth, tail-first de-rez stagger)
+  // verbatim; the departures are the ones every DOM effect in this registry makes: viewport
+  // -relative geometry converted to document space, a container clamped against the page's
+  // own scroll height, and every duration routed through getBeaconDuration(). This ships
+  // alongside animateTrail, not in place of it (operator decision, oculist-dvt epic notes)
+  // — the two do overlap visibly, both tracing an L-shaped path to the match.
+  //
+  // First of the two DOM/WAAPI effects in this batch (Cyber-Vision is the second) — this
+  // establishes the container/__waapiAnims pattern that one follows.
+  function animateLightCycle(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var mw = rect.width;
+    var mh = rect.height;
+    var vpCx = rect.left + mw / 2;               // viewport-relative match centre x
+    var vpCy = rect.top + mh / 2;                // viewport-relative match centre y
+    var my = vpCy + window.scrollY;              // document-coord match centre y
+
+    var color = getEffectiveColors().beacon || '#38bdf8';
+    var scale = getBeaconScale();
+
+    // Right-angle path in viewport space, mirroring the reference geometry: enter from
+    // just off the left edge, turn once to align with the match's own column, turn again
+    // to approach the match. Lite Mode collapses this to a single straight approach.
+    var entryXVp = -20;
+    var midYVp = Math.min(vpCy + 96, window.innerHeight - 26);
+    var finalYVp = vpCy + mh / 2 + 16;
+    var turnXVp = vpCx - 118;
+
+    var fullPts = [
+      { x: entryXVp, y: midYVp },
+      { x: turnXVp, y: midYVp },
+      { x: turnXVp, y: finalYVp },
+      { x: vpCx, y: finalYVp }
+    ];
+    var litePts = [
+      { x: entryXVp, y: finalYVp },
+      { x: vpCx, y: finalYVp }
+    ];
+    var pts = settings.performanceMode ? litePts : fullPts;
+    var numSegments = pts.length - 1;
+
+    // Container spans the full document width — children position with document x
+    // directly, the same idiom animateAnimeLaser uses — and is clamped vertically against
+    // the page's own scroll height (animateAnimeLaser, content.js:840-850) so a tall
+    // container cannot itself extend the page.
+    var vMin = Math.min(midYVp, finalYVp) - 60;
+    var vMax = Math.max(midYVp, finalYVp) + 60;
+    var containerHeight = Math.max(120, vMax - vMin);
+    var scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    var maxTop = Math.max(0, scrollHeight - containerHeight);
+    var targetTop = Math.min(Math.max(0, my - containerHeight / 2), maxTop);
+    var offsetY = my - targetTop; // match centre, local container y
+
+    function localX(xVp) { return xVp + window.scrollX; }
+    function localY(yVp) { return offsetY + (yVp - vpCy); }
+
+    var container = document.createElement('div');
+    container.className = 'oc-beacon';
+    container.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:' + targetTop + 'px',
+      'width:100%', 'height:' + containerHeight + 'px',
+      'pointer-events:none', 'z-index:2147483640',
+      'overflow:visible'
+    ].join(';');
+    container.style.transform = 'scale(' + scale + ')';
+    container.style.transformOrigin = localX(vpCx) + 'px ' + offsetY + 'px';
+    document.documentElement.appendChild(container);
+
+    var anims = [];
+    var THICK = 3 * scale;
+
+    var SEG = getBeaconDuration(300);          // per-segment run-in duration
+    var BOX_HOLD = getBeaconDuration(250);      // gap between wall completion and de-rez start
+    var DEREZ_TOTAL = getBeaconDuration(400);   // total de-rez window, split across segments
+    var HEAD_BURN = getBeaconDuration(150);
+
+    var runIn = SEG * numSegments;
+    var derezStep = DEREZ_TOTAL / numSegments;
+
+    // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
+    // (mirrors speedLinesDone/chronoDone): lightCycleWallsGrown counts real growth
+    // animations that have naturally finished (via their own .finished promise, not a
+    // guessed timeout), and lightCycleRunInDone flips once every segment has — a
+    // deterministic completion signal the right-angle geometry test waits on before
+    // reading real getBoundingClientRect() values, instead of racing a guessed delay
+    // against this run's own WAAPI schedule.
+    window.__ocTest.lightCycleWallsGrown = 0;
+    window.__ocTest.lightCycleRunInDone = false;
+
+    var head = document.createElement('div');
+    head.className = 'oc-lightcycle-head';
+    var headSize = Math.max(6, 8 * scale);
+    head.style.cssText = [
+      'position:absolute',
+      'width:' + headSize + 'px', 'height:' + headSize + 'px',
+      'margin:' + (-headSize / 2) + 'px 0 0 ' + (-headSize / 2) + 'px',
+      'background:#ffffff',
+      'border-radius:50%',
+      'box-shadow:0 0 ' + (8 * scale) + 'px #ffffff, 0 0 ' + (18 * scale) + 'px ' + color,
+      'pointer-events:none'
+    ].join(';');
+    container.appendChild(head);
+
+    var walls = [];
+    var elapsed = 0;
+    for (var i = 0; i < numSegments; i++) {
+      var a = pts[i], b = pts[i + 1];
+      var horiz = a.y === b.y;
+      var aX = localX(a.x), bX = localX(b.x), aY = localY(a.y), bY = localY(b.y);
+      var len = horiz ? Math.abs(bX - aX) : Math.abs(bY - aY);
+
+      var wall = document.createElement('div');
+      wall.className = 'oc-lightcycle-wall';
+      wall.setAttribute('data-oc-lc-index', String(i));
+      wall.style.cssText = [
+        'position:absolute',
+        'background:' + color,
+        'box-shadow:0 0 ' + (6 * scale) + 'px ' + color + ', 0 0 ' + (16 * scale) + 'px ' + color,
+        'opacity:0.92',
+        'pointer-events:none'
+      ].join(';');
+      if (horiz) {
+        wall.style.left = Math.min(aX, bX) + 'px';
+        wall.style.top = (aY - THICK / 2) + 'px';
+        wall.style.height = THICK + 'px';
+        wall.style.width = Math.max(len, 1) + 'px';
+        wall.style.transformOrigin = (bX > aX ? 'left' : 'right') + ' center';
+      } else {
+        wall.style.left = (aX - THICK / 2) + 'px';
+        wall.style.top = Math.min(aY, bY) + 'px';
+        wall.style.width = THICK + 'px';
+        wall.style.height = Math.max(len, 1) + 'px';
+        wall.style.transformOrigin = 'center ' + (bY > aY ? 'top' : 'bottom');
+      }
+      container.appendChild(wall);
+      walls.push(wall);
+
+      var growthAnim = wall.animate([
+        { transform: horiz ? 'scaleX(0)' : 'scaleY(0)' },
+        { transform: horiz ? 'scaleX(1)' : 'scaleY(1)' }
+      ], { duration: SEG, delay: elapsed, easing: 'linear', fill: 'both' });
+      anims.push(growthAnim);
+      growthAnim.finished.then(function () {
+        window.__ocTest.lightCycleWallsGrown++;
+        if (window.__ocTest.lightCycleWallsGrown >= numSegments) {
+          window.__ocTest.lightCycleRunInDone = true;
+        }
+      }).catch(function () {});
+
+      // The head rides this segment's boundary.
+      anims.push(head.animate([
+        { transform: 'translate(' + aX + 'px,' + aY + 'px)' },
+        { transform: 'translate(' + bX + 'px,' + bY + 'px)' }
+      ], { duration: SEG, delay: elapsed, easing: 'linear', fill: 'both' }));
+
+      elapsed += SEG;
+    }
+
+    // Head burns out on arrival.
+    anims.push(head.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: HEAD_BURN, delay: runIn, fill: 'forwards' }));
+
+    // Box outline snaps around the match, expanded a few px past the raw rect so the glow
+    // reads outside the text — the same idiom animateTrail's absorption flash uses.
+    var boxPad = 6 * scale;
+    var box = document.createElement('div');
+    box.className = 'oc-lightcycle-box';
+    box.style.cssText = [
+      'position:absolute',
+      'left:' + (localX(rect.left) - boxPad) + 'px',
+      'top:' + (localY(rect.top) - boxPad) + 'px',
+      'width:' + (mw + boxPad * 2) + 'px',
+      'height:' + (mh + boxPad * 2) + 'px',
+      'border:' + Math.max(1, 2 * scale) + 'px solid ' + color,
+      'box-shadow:0 0 ' + (10 * scale) + 'px ' + color + ', inset 0 0 ' + (8 * scale) + 'px ' + color,
+      'pointer-events:none'
+    ].join(';');
+    container.appendChild(box);
+
+    anims.push(box.animate([
+      { opacity: 0, transform: 'scale(1.3)' },
+      { opacity: 1, transform: 'scale(1)', offset: 0.18 },
+      { opacity: 1, transform: 'scale(1)', offset: 0.7 },
+      { opacity: 0, transform: 'scale(1.06)' }
+    ], { duration: BOX_HOLD + DEREZ_TOTAL, delay: runIn, fill: 'both' }));
+
+    // De-rez from the tail forward: each wall segment fades out in the order it was drawn
+    // (tail first), not all at once. Lite Mode's single segment trivially satisfies this —
+    // there is nothing left to stagger against.
+    for (var k = 0; k < walls.length; k++) {
+      anims.push(walls[k].animate([
+        { opacity: 0.92 }, { opacity: 0 }
+      ], { duration: derezStep, delay: runIn + BOX_HOLD + k * derezStep, fill: 'forwards' }));
+    }
+
+    var total = runIn + BOX_HOLD + DEREZ_TOTAL;
+
+    // See cancelBeacons(): WAAPI animations keep running on a detached element unless
+    // explicitly cancelled, so every Animation this beacon created is hung off the
+    // container for cancelBeacons() to reach.
+    container.__waapiAnims = anims;
+
+    window.__ocTest.lastLightCycleRun = {
+      segmentCount: numSegments,
+      liteMode: !!settings.performanceMode,
+      runIn: runIn,
+      boxHold: BOX_HOLD,
+      derezTotal: DEREZ_TOTAL,
+      derezStep: derezStep
+    };
+
+    setTimeout(function () {
+      container.remove();
+    }, total);
   }
 
   function drawStaticActiveBorder(rect) {
