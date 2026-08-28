@@ -844,6 +844,15 @@
     activeBeacons = 0;
   }
 
+  // Same test-reachability reasoning as window.__ocTest.getDebounceTimer above: a real
+  // second search calls cancelBeacons() from inside an animate() that is itself invoked off
+  // a scroll-settle handler or a setTimeout (highlightActiveRange()), never synchronously
+  // from the keypress that triggered it — a test driving "cancel mid-flight" through
+  // simulated keystrokes alone would be racing that latency instead of testing cancellation
+  // itself. Exposing the real closure directly removes that race without changing
+  // cancelBeacons()'s own behavior at all.
+  window.__ocTest.cancelBeacons = cancelBeacons;
+
   // ── Effects (CSP-Compliant via Web Animations API & Document Root Mount) ───
 
   function animateAnimeLaser(rect) {
@@ -879,6 +888,10 @@
     laserContainer.style.transform = 'scale(' + scale + ')';
     laserContainer.style.transformOrigin = cx + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Primary main core beam (thick outer aura sheath)
     var sheath = document.createElement('div');
     sheath.style.cssText = [
@@ -890,7 +903,7 @@
     ].join(';');
     laserContainer.appendChild(sheath);
 
-    sheath.animate([
+    anims.push(sheath.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(1.5)', opacity: 0.6, offset: 0.1 },
       { transform: 'scaleY(1)', opacity: 0.4, offset: 0.8 },
@@ -899,7 +912,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 2. High-energy inner core beam (sharp white core)
     var core = document.createElement('div');
@@ -913,7 +926,7 @@
     ].join(';');
     laserContainer.appendChild(core);
 
-    core.animate([
+    anims.push(core.animate([
       { transform: 'scaleY(0)', opacity: 0 },
       { transform: 'scaleY(2.2)', opacity: 1, offset: 0.15 },
       { transform: 'scaleY(1.2)', opacity: 0.85, offset: 0.8 },
@@ -922,7 +935,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 3. Central energy sphere/flash over active match
     var flash = document.createElement('div');
@@ -938,7 +951,7 @@
     ].join(';');
     laserContainer.appendChild(flash);
 
-    flash.animate([
+    anims.push(flash.animate([
       { transform: 'scale(0.2)', opacity: 0 },
       { transform: 'scale(1.3)', opacity: 1, offset: 0.15 },
       { transform: 'scale(1)', opacity: 0.9, offset: 0.8 },
@@ -947,7 +960,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
       fill: 'forwards'
-    });
+    }));
 
     // 4. Spark explosion
     var sparkCount = settings.performanceMode ? Math.round(5 * scale) : Math.round(20 * (scale > 1 ? 1.5 : scale));
@@ -970,15 +983,17 @@
       var dx = Math.cos(angle) * distance;
       var dy = Math.sin(angle) * distance;
 
-      spark.animate([
+      anims.push(spark.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(1.5)', opacity: 1 },
         { transform: 'translate(-50%, -50%) translate(' + dx + 'px, ' + dy + 'px) scale(0)', opacity: 0 }
       ], {
         duration: getBeaconDuration(1500 + Math.random() * 500),
         easing: 'cubic-bezier(0.1, 0.8, 0.2, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    laserContainer.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(laserContainer);
@@ -1006,7 +1021,10 @@
     ].join(';');
     document.documentElement.appendChild(overlay);
 
-    overlay.animate([
+    // overlay and ring are each their own top-level .oc-beacon element (no shared
+    // container here), so cancelBeacons() reaches them independently — each needs its
+    // own __waapiAnims, not a shared array.
+    overlay.__waapiAnims = [overlay.animate([
       { opacity: 0 },
       { opacity: 1, offset: 0.15 },
       { opacity: 1, offset: 0.8 },
@@ -1015,7 +1033,7 @@
       duration: getBeaconDuration(2000),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    })];
 
     var color = getEffectiveColors().beacon || '#38bdf8';
 
@@ -1033,7 +1051,7 @@
     ].join(';');
     document.documentElement.appendChild(ring);
 
-    ring.animate([
+    ring.__waapiAnims = [ring.animate([
       { opacity: 0, transform: 'scale(4)' },
       { opacity: 1, transform: 'scale(1)', offset: 0.2 },
       { opacity: 0.85, transform: 'scale(0.95)', offset: 0.8 },
@@ -1042,7 +1060,7 @@
       duration: getBeaconDuration(2000),
       easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
       fill: 'forwards'
-    });
+    })];
 
     setTimeout(function() {
       overlay.remove();
@@ -1102,19 +1120,22 @@
 
     var duration = getBeaconDuration(2000);
 
+    // leftArrow and rightArrow are each their own top-level .oc-beacon element (no
+    // shared container), so each needs its own __waapiAnims for cancelBeacons() to reach.
     var anim = leftArrow.animate([
       { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
       { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
       { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
       { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
     ], { duration: duration, fill: 'forwards' });
+    leftArrow.__waapiAnims = [anim];
 
-    rightArrow.animate([
+    rightArrow.__waapiAnims = [rightArrow.animate([
       { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
       { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
       { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
       { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
-    ], { duration: duration, fill: 'forwards' });
+    ], { duration: duration, fill: 'forwards' })];
 
     anim.finished.then(function () {
       leftArrow.remove();
@@ -1162,6 +1183,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Triple Staggered Expanding Warp Rings
     var ringCount = settings.performanceMode ? 1 : 3;
     for (var r = 0; r < ringCount; r++) {
@@ -1178,7 +1203,7 @@
       ].join(';');
       container.appendChild(ring);
 
-      ring.animate([
+      anims.push(ring.animate([
         { transform: 'scale(0.5)', opacity: 0 },
         { transform: 'scale(1)', opacity: 1, offset: 0.1 },
         { transform: 'scale(15)', opacity: 0 }
@@ -1187,7 +1212,7 @@
         delay: r * getBeaconDuration(150),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
-      });
+      }));
     }
 
     // 2. Warp Speed Radial Star Streaks
@@ -1212,7 +1237,7 @@
       var travel = (Math.random() * 240 + 130) * scale;
       var startDelay = Math.random() * 550;
 
-      streak.animate([
+      anims.push(streak.animate([
         { transform: 'rotate(' + angle + 'rad) translate(10px, 0) scaleX(0.05)', opacity: 0 },
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.25) + 'px, 0) scaleX(3.5)', opacity: 1, offset: 0.15 },
         { transform: 'rotate(' + angle + 'rad) translate(' + (travel * 0.7) + 'px, 0) scaleX(7.0)', opacity: 1, offset: 0.7 },
@@ -1222,8 +1247,10 @@
         delay: getBeaconDuration(startDelay),
         easing: 'cubic-bezier(0.1, 0.8, 0.25, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1279,6 +1306,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // 1. Fiery glowing outline
     var outline = document.createElement('div');
     outline.style.cssText = [
@@ -1291,7 +1322,7 @@
     ].join(';');
     container.appendChild(outline);
 
-    outline.animate([
+    anims.push(outline.animate([
       { opacity: 0, transform: 'scale(1.15)' },
       { opacity: 0.9, transform: 'scale(1)', offset: 0.15 },
       { opacity: 0.8, transform: 'scale(1)', offset: 0.85 },
@@ -1300,7 +1331,7 @@
       duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    }));
 
     // 2. Soft heat glow behind
     var glow = document.createElement('div');
@@ -1314,7 +1345,7 @@
     ].join(';');
     container.appendChild(glow);
 
-    glow.animate([
+    anims.push(glow.animate([
       { opacity: 0, transform: 'scale(0.8)' },
       { opacity: 1, transform: 'scale(1)', offset: 0.2 },
       { opacity: 0.8, transform: 'scale(1.05)', offset: 0.85 },
@@ -1323,7 +1354,7 @@
       duration: getBeaconDuration(1800),
       easing: 'ease-out',
       fill: 'forwards'
-    });
+    }));
 
     // 3. Flame particles rising
     var colors = [colorDeep, color, colorMid, colorWarm, colorTip];
@@ -1350,7 +1381,7 @@
       var swayX = (Math.random() - 0.5) * 100 * scale;
       var randomRotate = Math.random() * 360;
 
-      p.animate([
+      anims.push(p.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) rotate(' + randomRotate + 'deg) scale(0.2)', opacity: 0 },
         { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.3) + 'px, -' + (riseHeight * 0.3) + 'px) rotate(' + (randomRotate + 45) + 'deg) scale(1.2)', opacity: 0.9, offset: 0.2 },
         { transform: 'translate(-50%, -50%) translate(' + (swayX * 0.7) + 'px, -' + (riseHeight * 0.7) + 'px) rotate(' + (randomRotate + 90) + 'deg) scale(0.8)', opacity: 0.6, offset: 0.7 },
@@ -1360,7 +1391,7 @@
         delay: getBeaconDuration(Math.random() * 400),
         easing: 'cubic-bezier(0.21, 0.61, 0.35, 1)',
         fill: 'forwards'
-      });
+      }));
     }
 
     // 4. Gray smoke particles
@@ -1385,7 +1416,7 @@
       var sRise = (Math.random() * 240 + 200) * scale;
       var sSway = (Math.random() - 0.5) * 160 * scale;
 
-      s.animate([
+      anims.push(s.animate([
         { transform: 'translate(-50%, -50%) translate(0, 0) scale(0.5)', opacity: 0 },
         { transform: 'translate(-50%, -50%) translate(' + (sSway * 0.4) + 'px, -' + (sRise * 0.4) + 'px) scale(1.2)', opacity: 0.3, offset: 0.3 },
         { transform: 'translate(-50%, -50%) translate(' + sSway + 'px, -' + sRise + 'px) scale(2)', opacity: 0 }
@@ -1394,8 +1425,10 @@
         delay: getBeaconDuration(Math.random() * 500),
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1459,6 +1492,10 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = offsetX + 'px ' + offsetY + 'px';
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    var anims = [];
+
     // Three concentric, hue-offset rings (channel offsetting). A slightly different end
     // scale per ring plus a small stagger IS the dispersion — the rings recombine bright at
     // the core and split into iridescent bands toward the fringe.
@@ -1494,7 +1531,7 @@
       ].join(';');
       container.appendChild(ring);
 
-      ring.animate([
+      anims.push(ring.animate([
         { transform: 'scale(0.5)', opacity: 0, filter: 'blur(0px)' },
         { transform: 'scale(1)', opacity: 1, filter: 'blur(0px)', offset: 0.1 },
         { transform: 'scale(' + endScale + ')', opacity: 0, filter: 'blur(6px)' }
@@ -1503,8 +1540,10 @@
         delay: r * getBeaconDuration(110),
         easing: 'cubic-bezier(0.1, 0.8, 0.15, 1)',
         fill: 'forwards'
-      });
+      }));
     }
+
+    container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
     document.documentElement.appendChild(container);
@@ -1596,6 +1635,9 @@
         { strokeDashoffset: lineLength },
         { strokeDashoffset: '0' }
       ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+      // linePath is a child of lineSvg, not itself .oc-beacon — the Animation is hung
+      // off lineSvg (the element cancelBeacons() actually selects) instead.
+      lineSvg.__waapiAnims = [lineAnim];
 
       lineAnim.finished.then(function () {
         lineSvg.remove();
@@ -1629,6 +1671,7 @@
       { offsetDistance: '88%', opacity: 1, offset: 0.88 },
       { offsetDistance: '100%', opacity: 0 }
     ], { duration: duration, easing: 'ease-in-out', fill: 'forwards' });
+    arrow.__waapiAnims = [anim];
 
     anim.finished.then(function () {
       arrow.remove();
@@ -1675,6 +1718,7 @@
       { opacity: 1, transform: 'scale(1.15)', offset: 0.35 },
       { opacity: 0, transform: 'scale(1)' }
     ], { duration: flashDuration, delay: duration, easing: 'ease-out', iterations: 1 });
+    flash.__waapiAnims = [flashAnim];
 
     flashAnim.finished.then(function () {
       flash.remove();
@@ -1794,6 +1838,14 @@
 
     var travelDuration = getBeaconDuration(350);
 
+    // See cancelBeacons(): every Animation this beacon creates is hung off the
+    // container so a mid-flight cancel actually stops it (not just detaches its element).
+    // container.__waapiAnims is assigned once, right after this batch — the setTimeout
+    // callback below pushes its own (later-scheduled) animations onto this same array
+    // reference, so a cancelBeacons() that fires either before or after that callback
+    // still sees every animation that exists at the time it runs.
+    var anims = [];
+
     paths.forEach(function (p) {
       var totalLength = 1500;
       try {
@@ -1805,40 +1857,47 @@
       p.core.setAttribute('stroke-dasharray', totalLength);
       p.core.setAttribute('stroke-dashoffset', totalLength);
 
-      p.glow.animate([
+      anims.push(p.glow.animate([
         { strokeDashoffset: totalLength },
         { strokeDashoffset: '0' }
       ], {
         duration: travelDuration,
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
 
-      p.core.animate([
+      anims.push(p.core.animate([
         { strokeDashoffset: totalLength },
         { strokeDashoffset: '0' }
       ], {
         duration: travelDuration,
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
     });
 
+    container.__waapiAnims = anims;
+
     setTimeout(function () {
+      // The container may already have been cancelled/removed (cancelBeacons() ran
+      // mid-flight, before this scheduled callback) — do not create new elements or
+      // animations on a detached container; nothing would ever cancel them.
+      if (!container.isConnected) return;
+
       var flashBg = document.createElement('div');
       flashBg.style.cssText = [
         'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
         'background:#ffffff', 'opacity:0', 'pointer-events:none'
       ].join(';');
       container.appendChild(flashBg);
-      flashBg.animate([
+      anims.push(flashBg.animate([
         { opacity: 0.3 },
         { opacity: 0, offset: 0.8 }
       ], {
         duration: getBeaconDuration(300),
         easing: 'ease-out',
         fill: 'forwards'
-      });
+      }));
 
       var flashCircle = document.createElement('div');
       var fw = rect.width + 60;
@@ -1855,7 +1914,7 @@
       ].join(';');
       container.appendChild(flashCircle);
 
-      flashCircle.animate([
+      anims.push(flashCircle.animate([
         { transform: 'scale(0.5)', opacity: 1 },
         { transform: 'scale(1.4)', opacity: 1, offset: 0.2 },
         { transform: 'scale(1.1)', opacity: 0.9, offset: 0.7 },
@@ -1864,7 +1923,7 @@
         duration: getBeaconDuration(700),
         easing: 'cubic-bezier(0.19, 1, 0.22, 1)',
         fill: 'forwards'
-      });
+      }));
 
       for (var j = 0; j < 3; j++) {
         var flickerGlow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -1898,13 +1957,13 @@
           { opacity: 0 }
         ];
 
-        flickerGlow.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
-        flickerCore.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' });
+        anims.push(flickerGlow.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' }));
+        anims.push(flickerCore.animate(flickAnim, { duration: getBeaconDuration(400), fill: 'forwards' }));
       }
 
       paths.forEach(function (p) {
-        p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
-        p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' });
+        anims.push(p.glow.animate([{ opacity: 0.8 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' }));
+        anims.push(p.core.animate([{ opacity: 1 }, { opacity: 0 }], { duration: getBeaconDuration(150), fill: 'forwards' }));
       });
 
     }, travelDuration);
@@ -3053,12 +3112,15 @@
 
       var duration = getBeaconDuration(2500);
 
-      overlay.animate([
+      // overlay/glow/leftArrow/rightArrow are each their own top-level .oc-beacon
+      // element (no shared container) — each needs its own __waapiAnims for
+      // cancelBeacons() to reach.
+      overlay.__waapiAnims = [overlay.animate([
         { opacity: 0 },
         { opacity: 1, offset: 0.15 },
         { opacity: 1, offset: 0.85 },
         { opacity: 0 }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
       var anim = glow.animate([
         { opacity: 0 },
@@ -3066,20 +3128,21 @@
         { opacity: 1, offset: 0.85 },
         { opacity: 0 }
       ], { duration: duration, fill: 'forwards' });
+      glow.__waapiAnims = [anim];
 
-      leftArrow.animate([
+      leftArrow.__waapiAnims = [leftArrow.animate([
         { opacity: 0, transform: 'translateX(-' + (10 * scale) + 'px)' },
         { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
         { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
         { opacity: 0, transform: 'translateX(-' + (5 * scale) + 'px)' }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
-      rightArrow.animate([
+      rightArrow.__waapiAnims = [rightArrow.animate([
         { opacity: 0, transform: 'translateX(' + (10 * scale) + 'px)' },
         { opacity: 1, transform: 'translateX(0)', offset: 0.15 },
         { opacity: 1, transform: 'translateX(0)', offset: 0.85 },
         { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
-      ], { duration: duration, fill: 'forwards' });
+      ], { duration: duration, fill: 'forwards' })];
 
       anim.finished.then(function () {
         overlay.remove();
@@ -3121,6 +3184,7 @@
       easing: 'ease-in-out',
       fill: 'forwards'
     });
+    glow.__waapiAnims = [anim];
 
     anim.finished.then(function () {
       glow.remove();
@@ -3161,13 +3225,13 @@
     ].join(';');
     document.documentElement.appendChild(borderEl);
 
-    borderEl.animate([
+    borderEl.__waapiAnims = [borderEl.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], {
       duration: 200,
       fill: 'forwards'
-    });
+    })];
   }
 
   function drawActiveMatchShape(rect) {
@@ -3247,13 +3311,13 @@
     label.style.left = lx + 'px';
     label.style.top = ly + 'px';
 
-    label.animate([
+    label.__waapiAnims = [label.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], {
       duration: 250,
       fill: 'forwards'
-    });
+    })];
   }
 
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
@@ -3415,8 +3479,12 @@
       // vision-accessibility product — the magnifier does not get to be the one overlay
       // that ignores the motion settings.
       var fadeDuration = getBeaconDuration(220);
-      card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
-      connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' });
+      // connector is a child of card, not itself .oc-beacon — both Animations are hung
+      // off card (the element cancelBeacons() actually selects).
+      card.__waapiAnims = [
+        card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' }),
+        connector.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fadeDuration, fill: 'forwards' })
+      ];
       return true;
     }
 
@@ -3427,16 +3495,20 @@
     var liftPx = 40;
     var liftDuration = getBeaconDuration(320);
 
-    card.animate([
+    var liftAnim = card.animate([
       { transform: 'translateY(' + liftPx + 'px) scale(' + startScale + ')', opacity: 0 },
       { transform: 'translateY(0px) scale(1)', opacity: 1 }
     ], { duration: liftDuration, easing: 'ease-out', fill: 'forwards' });
 
     var connectorDuration = getBeaconDuration(150);
-    connector.animate([
+    var connectorAnim = connector.animate([
       { opacity: 0 },
       { opacity: 1 }
     ], { duration: connectorDuration, delay: liftDuration, fill: 'forwards' });
+
+    // connector is a child of card, not itself .oc-beacon — both Animations are hung
+    // off card (the element cancelBeacons() actually selects).
+    card.__waapiAnims = [liftAnim, connectorAnim];
 
     return true;
   }
