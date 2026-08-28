@@ -643,33 +643,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function saveProfileAndFinish() {
     const vs = PRESETS[selectedProfile] || PRESETS['none'];
-    
-    // Save to sync storage
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      try {
-        const data = await chrome.storage.sync.get('oc-settings');
-        const settings = (data && data['oc-settings']) || {};
-        
-        settings.visionProfile = selectedProfile === 'none' ? null : selectedProfile;
-        settings.visionSettings = {
-          ...settings.visionSettings,
-          ...vs
-        };
-        settings.setupWizardCompleted = true;
 
-        await chrome.storage.sync.set({ 'oc-settings': settings });
-      } catch (e) {
-        console.error('Failed to save settings:', e);
-      }
-    } else {
-      const settings = JSON.parse(localStorage.getItem('oc-settings') || '{}');
+    // Save to sync storage
+    try {
+      const data = await chrome.storage.sync.get('oc-settings');
+      const settings = (data && data['oc-settings']) || {};
+
       settings.visionProfile = selectedProfile === 'none' ? null : selectedProfile;
       settings.visionSettings = {
-        ...(settings.visionSettings || {}),
+        ...settings.visionSettings,
         ...vs
       };
       settings.setupWizardCompleted = true;
-      localStorage.setItem('oc-settings', JSON.stringify(settings));
+
+      await chrome.storage.sync.set({ 'oc-settings': settings });
+    } catch (e) {
+      console.error('Failed to save settings:', e);
     }
 
     wizardModal.style.display = 'none';
