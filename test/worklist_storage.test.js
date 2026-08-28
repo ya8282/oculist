@@ -30,6 +30,7 @@ const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
 
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+const COUNT = '#oc-wrap >> .oc-count';
 const CLOSED = () => !document.getElementById('oc-wrap');
 
 describe('Working-list session storage (oc-worklist)', () => {
@@ -440,6 +441,123 @@ describe('Working-list session storage (oc-worklist)', () => {
 
       const chipCount = await page.locator(CHIP_TERM).count();
       assert.strictEqual(chipCount, 0);
+    });
+
+    // oculist-l6m.34: the same false "no match" claim .19 fixed in findNext(), reached
+    // through a different entry point. restoreActiveChip() (content.js) does
+    // `searchRanges = termRanges[activeTermIndex] || [];` — coalescing "never scanned"
+    // (undefined) and "scanned, genuinely zero matches" ([]) into the same [] before the
+    // count text is decided, so without a guard captured BEFORE that coalesce, an
+    // unscanned chip and a real zero-match chip become indistinguishable by the time the
+    // count text is chosen. Only reachable via restoreActiveChip(), which only the input's
+    // own debounce (typing a draft, then clearing it) calls — driving it directly would
+    // not prove the bug is fixed on the path that actually hits it, so both tests below
+    // go through page.locator(INPUT).fill() + the real 150ms debounce, never a direct
+    // content-script call.
+    test('typing a draft then clearing it against a restored-but-unscanned active chip leaves the count blank, not "no match"', async () => {
+      await closeOverlay();
+      // activeIndex: 1 -> 'restored-beta' is the active chip, exactly like the mount-restore
+      // fixture above; termRanges[1] is undefined because mount-restore never scans.
+      await setStoredWorkList({ terms: ['restored-alpha', 'restored-beta'], activeIndex: 1 });
+
+      await reopenOverlay();
+      await waitForChipCount(2);
+
+      // Type a draft that genuinely matches the page ('quarklet', from PAGE above) so the
+      // debounce's performDraftSearch() branch moves the count off its post-mount blank
+      // state first — the blank -> real count -> blank transition below is what proves the
+      // debounce actually re-ran restoreActiveChip() on clear, rather than the count simply
+      // never having moved since mount.
+      await page.locator(INPUT).fill('quarklet');
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById('oc-wrap')?.shadowRoot?.querySelector('.oc-count');
+          return !!el && /of \d+$/.test(el.textContent);
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      // Clear the draft — the input's own debounce handler calls restoreActiveChip()
+      // against the still-unscanned 'restored-beta' chip.
+      await page.locator(INPUT).fill('');
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById('oc-wrap')?.shadowRoot?.querySelector('.oc-count');
+          return !!el && el.textContent === '';
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      assert.strictEqual(
+        await page.locator(COUNT).textContent(),
+        '',
+        'restoreActiveChip() must leave the count blank for an unscanned chip, not report "no match"'
+      );
+    });
+
+    // Contrast case: without this, a fix that simply blanks the count unconditionally
+    // (rather than testing termRanges[activeTermIndex] for undefined) would pass the test
+    // above for the wrong reason. A real Enter commit runs an actual scan
+    // (performListSearch()), so termRanges[0] ends up a genuine, empty array — not
+    // undefined — for a term with no matches on the page.
+    test('typing a draft then clearing it against a chip that was actually scanned and has zero matches still shows "no match"', async () => {
+      await closeOverlay();
+      await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
+
+      await reopenOverlay();
+      await waitForChipCount(0);
+
+      const before = await page.locator(CHIP_TERM).count();
+      await page.locator(INPUT).fill('zzzznomatchterm');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        (expected) => {
+          const root = document.getElementById('oc-wrap');
+          const chips = root && root.shadowRoot ? root.shadowRoot.querySelectorAll('.oc-chip-term') : [];
+          return chips.length === expected;
+        },
+        before + 1,
+        { timeout: POLL_TIMEOUT }
+      );
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById('oc-wrap')?.shadowRoot?.querySelector('.oc-count');
+          return !!el && el.textContent === 'no match';
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      // Type a draft that genuinely matches, moving ownership off the committed chip.
+      await page.locator(INPUT).fill('quarklet');
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById('oc-wrap')?.shadowRoot?.querySelector('.oc-count');
+          return !!el && /of \d+$/.test(el.textContent);
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      // Clear the draft — restoreActiveChip() runs against the SCANNED, genuinely
+      // zero-match chip.
+      await page.locator(INPUT).fill('');
+      await page.waitForFunction(
+        () => {
+          const el = document.getElementById('oc-wrap')?.shadowRoot?.querySelector('.oc-count');
+          return !!el && el.textContent === 'no match';
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      assert.strictEqual(
+        await page.locator(COUNT).textContent(),
+        'no match',
+        'a chip that was actually scanned and genuinely has zero matches must still report "no match"'
+      );
     });
   });
 });

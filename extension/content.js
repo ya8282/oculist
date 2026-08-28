@@ -3178,6 +3178,13 @@
     firstEnter = false;
     clearViewportMarkers();
 
+    // termRanges[activeTermIndex] === undefined means this chip has never been scanned
+    // (restored-but-unscanned carry-over); an empty array means it HAS been scanned and
+    // genuinely has zero matches. The || [] below coalesces both to [], so this has to be
+    // captured before that assignment or the distinction is lost (oculist-l6m.19's
+    // undefined-vs-empty-array rule, reused verbatim from findNext()'s guard).
+    var chipUnscanned = typeof termRanges[activeTermIndex] === 'undefined';
+
     searchRanges = termRanges[activeTermIndex] || [];
 
     if (!settings.performanceMode) {
@@ -3196,7 +3203,7 @@
     setNavEnabled(searchRanges.length > 1);
     countEl.textContent = searchRanges.length > 0
       ? '0 ' + i18n.of + ' ' + searchRanges.length
-      : i18n.noMatch;
+      : (chipUnscanned ? '' : i18n.noMatch);
   }
 
   // ── Dynamic content re-scan (infinite scroll / DOM mutation) ───────────────────
