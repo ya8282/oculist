@@ -88,7 +88,7 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
   // proxy for "the mount's own in-flight load has already landed": by the time this
   // resolves, the earlier call it was queued behind must have already resolved too.
   async function waitForWorkListLoad() {
-    await evalInContentScript("new Promise(function (resolve) { window.__ocLoadWorkList(resolve); })");
+    await evalInContentScript("new Promise(function (resolve) { window.__ocTest.loadWorkList(resolve); })");
   }
 
   before(async () => {
