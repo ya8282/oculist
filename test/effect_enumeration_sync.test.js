@@ -137,7 +137,17 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
   );
   const proseSlice = welcomeHtml.slice(proseListStart, proseListEnd);
   assertLabelsInOrder(proseSlice, registryLabels, proseSiteDescription);
-  assertNoOrphanLabels(extractDelimitedNames(proseSlice), registryLabels, proseSiteDescription);
+
+  // The effect list is one sentence ending in a period. Bound the orphan-name
+  // slice there instead of at </p>, so an ordinary sentence appended after the
+  // list inside the same <p> (e.g. "...and Cyber-Vision. All are GPU-friendly.")
+  // isn't parsed as a bogus trailing "label".
+  const proseSentenceEnd = welcomeHtml.indexOf('.', proseListStart);
+  const proseNamesSlice =
+    proseSentenceEnd !== -1 && proseSentenceEnd < proseListEnd
+      ? welcomeHtml.slice(proseListStart, proseSentenceEnd)
+      : proseSlice;
+  assertNoOrphanLabels(extractDelimitedNames(proseNamesSlice), registryLabels, proseSiteDescription);
 
   // Site 2: welcome.html's settings-panel mockup <select> (Step 4 live
   // preview) — a separate, independently-maintained <option> list that names
@@ -191,7 +201,19 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
   );
   const introSlice = docsIndexHtml.slice(introListStartTag + '<p>'.length, introEnd);
   assertLabelsInOrder(introSlice, registryLabels, introSiteDescription);
-  assertNoOrphanLabels(extractDelimitedNames(introSlice), registryLabels, introSiteDescription);
+
+  // Bound the orphan-name slice at the list's first label rather than at <p>,
+  // so a lead-in clause added before the list (still inside the same <p>)
+  // isn't parsed as a bogus leading "label".
+  const introListStart = docsIndexHtml.indexOf(registryLabels[0], introListStartTag);
+  assert.notStrictEqual(
+    introListStart,
+    -1,
+    `docs/index.html: could not find the first effect label "${registryLabels[0]}" inside the ` +
+      '"Make it yours" intro paragraph'
+  );
+  const introNamesSlice = docsIndexHtml.slice(introListStart, introEnd);
+  assertNoOrphanLabels(extractDelimitedNames(introNamesSlice), registryLabels, introSiteDescription);
 
   const showingSiteDescription = 'docs/index.html ("Showing / Also included" Effects section line, near line 578)';
   const showingMarker = 'Showing: Anime Laser (default)';
