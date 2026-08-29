@@ -2594,13 +2594,23 @@
     // clamping midYVp to the viewport bottom can land it within a hair of finalYVp,
     // yielding a near-invisible ~1px stub wall (Math.max(len, 1) below) instead of a
     // real segment. Push the levels at least MIN_SEG_SEP apart, in whichever direction
-    // midYVp already sits relative to finalYVp, re-clamping to the viewport bound if we
-    // pushed downward.
+    // midYVp already sits relative to finalYVp. When midYVp needs to move down but the
+    // viewport-bottom clamp is the very thing that produced the near-zero gap, pushing
+    // down further is a no-op — fall back to placing midYVp above finalYVp instead.
+    // finalYVp is always close to the viewport bottom whenever that fallback is needed,
+    // so finalYVp - MIN_SEG_SEP stays well clear of the viewport top; the Math.max(0, ...)
+    // is a defensive floor for that case, not one this sweep of inputs ever reaches.
     var MIN_SEG_SEP = 12;
     if (Math.abs(midYVp - finalYVp) < MIN_SEG_SEP) {
-      midYVp = midYVp >= finalYVp
-        ? Math.min(finalYVp + MIN_SEG_SEP, window.innerHeight - 26)
-        : finalYVp - MIN_SEG_SEP;
+      if (midYVp >= finalYVp) {
+        var pushedDownYVp = finalYVp + MIN_SEG_SEP;
+        var vpBottomBound = window.innerHeight - 26;
+        midYVp = pushedDownYVp <= vpBottomBound
+          ? pushedDownYVp
+          : Math.max(finalYVp - MIN_SEG_SEP, 0);
+      } else {
+        midYVp = finalYVp - MIN_SEG_SEP;
+      }
     }
 
     var fullPts = [
