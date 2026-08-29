@@ -1,6 +1,11 @@
 // popup.js - Handles enabling/disabling Oculist and vision accessibility settings
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const versionTextEl = document.getElementById('version-text');
+  if (versionTextEl) {
+    versionTextEl.textContent = `v${chrome.runtime.getManifest().version}`;
+  }
+
   const domainEl = document.getElementById('domain-name');
   const statusDot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
