@@ -101,12 +101,25 @@
   // it — a stored index that is NaN, negative (other than the -1 sentinel), or >= the
   // term count would otherwise round-trip unchecked into UI state that indexes terms[].
   function normalizeWorkList(stored) {
-    var terms = Array.isArray(stored && stored.terms) ? stored.terms : [];
+    var rawTerms = Array.isArray(stored && stored.terms) ? stored.terms : [];
     var idx = (stored && typeof stored.activeIndex === 'number' && !isNaN(stored.activeIndex))
       ? stored.activeIndex
       : -1;
-    if (idx !== -1 && (idx < 0 || idx >= terms.length)) idx = -1;
-    return { terms: terms, activeIndex: idx };
+    if (idx !== -1 && (idx < 0 || idx >= rawTerms.length)) idx = -1;
+    // addChipTerm() only ever pushes a term after checking workListTerms.indexOf(trimmed)
+    // === -1, i.e. exact-string dedupe. A stored payload (crafted or from an older build)
+    // can still carry duplicates, and updateDimHighlight() skips the active term by index
+    // rather than text — a duplicate would otherwise put the active term's own ranges into
+    // the dim set. Mirror addChipTerm's exact-match comparison here, keep the first
+    // occurrence of each term, and remap activeIndex to that surviving index so it still
+    // points at the term it pointed at before dedupe.
+    var activeTerm = idx !== -1 ? rawTerms[idx] : undefined;
+    var terms = [];
+    for (var i = 0; i < rawTerms.length; i++) {
+      if (terms.indexOf(rawTerms[i]) === -1) terms.push(rawTerms[i]);
+    }
+    var newIdx = idx === -1 ? -1 : terms.indexOf(activeTerm);
+    return { terms: terms, activeIndex: newIdx };
   }
 
   function loadWorkList(callback) {
@@ -185,6 +198,15 @@
   // is asserted on the DOM instead (count text and the oculist-match highlight
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
+
+  // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
+  // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
+  // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
+  // animate() ever runs, so nothing outside this closure can drive settings.effect to a
+  // bogus value at animate()-time anymore (oculist-jq6). This hook writes settings.effect
+  // directly, bypassing every guard, so animate()'s own fallback
+  // (effectsRegistry[effectKey] || effectsRegistry.hud) can still be exercised.
+  window.__ocTest.setEffectKey = function (key) { settings.effect = key; };
 
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
   //
@@ -2572,13 +2594,23 @@
     // clamping midYVp to the viewport bottom can land it within a hair of finalYVp,
     // yielding a near-invisible ~1px stub wall (Math.max(len, 1) below) instead of a
     // real segment. Push the levels at least MIN_SEG_SEP apart, in whichever direction
-    // midYVp already sits relative to finalYVp, re-clamping to the viewport bound if we
-    // pushed downward.
+    // midYVp already sits relative to finalYVp. When midYVp needs to move down but the
+    // viewport-bottom clamp is the very thing that produced the near-zero gap, pushing
+    // down further is a no-op — fall back to placing midYVp above finalYVp instead.
+    // finalYVp is always close to the viewport bottom whenever that fallback is needed,
+    // so finalYVp - MIN_SEG_SEP stays well clear of the viewport top; the Math.max(0, ...)
+    // is a defensive floor for that case, not one this sweep of inputs ever reaches.
     var MIN_SEG_SEP = 12;
     if (Math.abs(midYVp - finalYVp) < MIN_SEG_SEP) {
-      midYVp = midYVp >= finalYVp
-        ? Math.min(finalYVp + MIN_SEG_SEP, window.innerHeight - 26)
-        : finalYVp - MIN_SEG_SEP;
+      if (midYVp >= finalYVp) {
+        var pushedDownYVp = finalYVp + MIN_SEG_SEP;
+        var vpBottomBound = window.innerHeight - 26;
+        midYVp = pushedDownYVp <= vpBottomBound
+          ? pushedDownYVp
+          : Math.max(finalYVp - MIN_SEG_SEP, 0);
+      } else {
+        midYVp = finalYVp - MIN_SEG_SEP;
+      }
     }
 
     var fullPts = [
@@ -4391,14 +4423,12 @@
 
     var hasActiveChip = activeTermIndex >= 0 && activeTermIndex < workListTerms.length;
 
-    if (!term) {
-      if (!hasActiveChip) {
-        // Nothing is or was being searched: no draft in the input, no chip to fall back
-        // on. Matches performSearch('')'s own blank (not "no match") count text.
-        countEl.textContent = '';
-        setNavEnabled(false);
-        return;
-      }
+    if (!term && !hasActiveChip) {
+      // Nothing is or was being searched: no draft in the input, no chip to fall back
+      // on. Matches performSearch('')'s own blank (not "no match") count text.
+      countEl.textContent = '';
+      setNavEnabled(false);
+      return;
     }
 
     if (searchRanges.length === 0) {
@@ -5021,18 +5051,18 @@
             debounceTimer = null;
           }
           lastTerm = input.value;
-          // Land on match 0 (or the last match, backwards) via the existing firstEnter
-          // flag — performListSearch() already set it when the fresh scan found matches,
-          // exactly like a lone performSearch() always has.
+          // Land on match 0 (or the last match, backwards) — firstEnter is guaranteed true
+          // here (oculist-l6m.18): commitResult.committed is only true when addChipTerm()
+          // ran performListSearch() synchronously just above (via the push path or
+          // activateChip()), and performListSearch() itself unconditionally sets
+          // firstEnter = true whenever searchRanges.length > 0. Nothing runs between that
+          // call and here that could flip it back, so the old "else" branch that carried
+          // activeIndex forward from a previous scan was dead code; verified by reading
+          // performListSearch()/maybeAddChipFromInput()/addChipTerm()/activateChip(), which
+          // are synchronous end-to-end with no path that resets firstEnter in between.
           if (searchRanges.length > 0) {
-            if (firstEnter) {
-              firstEnter = false;
-              activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
-            } else {
-              activeIndex = e.shiftKey
-                ? (activeIndex <= 0 ? searchRanges.length - 1 : activeIndex - 1)
-                : (activeIndex >= searchRanges.length - 1 ? 0 : activeIndex + 1);
-            }
+            firstEnter = false;
+            activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
             highlightActiveRange(true);
           }
         } else {
@@ -5246,7 +5276,15 @@
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
     resetBtn.setAttribute('data-oc-key', 'reset');
-    resetBtn.appendChild(document.createTextNode('↺ ' + i18n.resetBtn));
+    // The ↺ glyph is decorative. Left as a bare text node, it becomes part of the
+    // button's accessible name (a screen reader would announce something like "circled
+    // anticlockwise arrow Reset") — wrap it in its own aria-hidden span so the accessible
+    // name is just "Reset", matching i18n.resetBtn.
+    var resetBtnGlyph = document.createElement('span');
+    resetBtnGlyph.setAttribute('aria-hidden', 'true');
+    resetBtnGlyph.textContent = '↺ ';
+    resetBtn.appendChild(resetBtnGlyph);
+    resetBtn.appendChild(document.createTextNode(i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
       settings.position = 'tr';
@@ -6340,9 +6378,12 @@
       // measure the *unstyled* bar (an unstyled div of default-sized form controls, ~22px)
       // and bake that too-small number into the stylesheet for the rest of the session.
       // 44px is a fixed, deterministic upper bound instead: 6px + 6px .oc-bar padding + the
-      // 26px fixed height '.oc-bar button' sets below (font-size/DPI/OS-independent, unlike
-      // the bar's own text/line-height) + :host's own 1px top + 1px bottom border, rounded
-      // up a few px for cross-platform subpixel-rounding safety.
+      // bar's actual tallest child — not '.oc-bar button' (pinned to a fixed 26px below,
+      // font-size/DPI/OS-independent) but input.oc-input (height: auto, ~27px from its
+      // 4px+4px padding, 14px font's line box, and 1px border) — + :host's own 1px top +
+      // 1px bottom border, for a total of ~41px. 44px rounds that up, leaving ~3px of slack
+      // for cross-platform subpixel rounding rather than the tight margin the original
+      // comment's (wrong) 26px-tallest-child arithmetic implied (oculist-7de review).
       var barChromePx = 44;
 
       var dialogCss = [
@@ -6529,10 +6570,12 @@
         '  padding-bottom: 8px;',
         '  margin-bottom: 2px;',
         // oculist-6cd: #oc-settings-panel is now itself a bounded scroll container (max-
-        // height/overflow-y above). Flex items shrink to fit their container by default
-        // (flex-shrink: 1) — without this the header would get visually squashed instead of
-        // the panel actually overflowing and scrolling, the same failure oculist-dvt.5 found
-        // for .oc-radio-item one level down.
+        // height/overflow-y above). Likely inert in practice — a flex item's default
+        // min-height:auto already resolves to its content's height for a plain block like
+        // this header (nothing here sets its own overflow), which independently stops it
+        // shrinking below that regardless of flex-shrink. Left in as cheap defense should
+        // that stop holding (e.g. if the header ever gains its own overflow) rather than for
+        // the squash-prevention effect the original comment claimed (oculist-7de review).
         '  flex-shrink: 0;',
         '}',
         '.oc-settings-title-container {',
@@ -6582,9 +6625,11 @@
         '  gap: 12px 18px;',
         '  width: 100%;',
         '  box-sizing: border-box;',
-        // oculist-6cd: same flex-shrink: 0 rationale as .oc-settings-header above — keeps
-        // the grid (and the effect list/footer content inside it) at natural height so the
-        // panel overflows and scrolls instead of squashing this content to fit.
+        // oculist-6cd: same flex-shrink: 0 as .oc-settings-header above, and just as likely
+        // inert for the same reason — min-height:auto already pins the grid at its content
+        // height since nothing sets overflow on it either. Left in as the same cheap defense,
+        // not because it's doing the work of keeping this content at natural height
+        // (oculist-7de review corrects the original comment's overstated claim here).
         '  flex-shrink: 0;',
         '}',
         '.oc-settings-col {',
@@ -6969,7 +7014,15 @@
         // whatever width the bar settled on.
         '  width: 0;',
         '  min-width: 100%;',
-        '  max-height: 320px;',
+        // oculist-7de: was a flat 320px, which only bounds the host (bar + this panel, both
+        // position: fixed with no scrollable ancestor per :host's overflow: hidden above) on
+        // viewports taller than roughly 320px + barChromePx — the exact same whole-host-
+        // grows-past-the-viewport failure oculist-6cd fixed for #oc-settings-panel, just
+        // needing a shorter viewport to trigger since a flat cap doesn't shrink to leave room
+        // for the bar the way this one does. Same fix, same cap: bound to whatever's left of
+        // the viewport once the bar (barChromePx, above) is accounted for, so bar + panel
+        // together always fit regardless of which of the four positions is active.
+        '  max-height: calc(100vh - ' + barChromePx + 'px);',
         '  overflow-y: auto;',
         '  box-sizing: border-box;',
         '}',
@@ -6983,6 +7036,12 @@
         '  display: flex;',
         '  gap: 6px;',
         '  align-items: center;',
+        // oculist-7de: same flex-shrink: 0 idiom as .oc-settings-header, and just as likely
+        // inert for the same reason (min-height:auto already pins this row at its content
+        // height since nothing sets overflow on it) — cheap defense now that #oc-lists-panel
+        // is the scroll container, kept honest rather than overstated per the oculist-6cd
+        // review that flagged those comments.
+        '  flex-shrink: 0;',
         '}',
         'input.oc-list-save-input, input.oc-list-rename-input {',
         '  flex: 1;',
@@ -7029,6 +7088,10 @@
         '  display: flex;',
         '  flex-direction: column;',
         '  gap: 4px;',
+        // oculist-7de: same flex-shrink: 0 as .oc-list-save-row above, and .oc-settings-grid's
+        // sibling case in #oc-settings-panel — same likely-inert cheap defense, not the thing
+        // actually keeping this content at natural height while #oc-lists-panel scrolls.
+        '  flex-shrink: 0;',
         '}',
         '.oc-list-empty {',
         '  font-size: 12px;',
@@ -7183,12 +7246,20 @@
       var overlaysAffected = false;
       SETTINGS_KEYS.forEach(function(k) {
         if (!(k in nv)) return;
-        if (stableStringify(nv[k]) !== stableStringify(settings[k])) {
+        // Compare the normalised value, not the raw stored one: a stale/removed effect
+        // key (e.g. 'lens' from an old build) always normalises to the same 'hud' that
+        // is already in memory, so treating it as "changed" would force a rebuild on
+        // every echo of that stale sync value forever (oculist-ais). Normalising before
+        // the comparison makes that echo a no-op while a genuine change (a different
+        // valid effect, or a stale value landing while memory holds something else)
+        // still compares unequal and rebuilds as before.
+        var incoming = k === 'effect' && !effectsRegistry[nv[k]] ? 'hud' : nv[k];
+        if (stableStringify(incoming) !== stableStringify(settings[k])) {
           changed = true;
           if (k === 'performanceMode') performanceModeChanged = true;
           if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
         }
-        settings[k] = nv[k];
+        settings[k] = incoming;
       });
       if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
@@ -7225,8 +7296,12 @@
         // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
         // that is already on screen has to be rescanned immediately, or its dim
         // highlights/counts stay stuck showing the mode that was active when it was last
-        // scanned instead of the one now in effect.
-        if (performanceModeChanged && workListTerms.length > 0) {
+        // scanned instead of the one now in effect. Gated on wrap (oculist-l6m.18): with
+        // the bar closed there is no chip row/count on screen to go stale, so paying a
+        // full buildPageIndex() rescan here bought nothing. The guard is also redundant in
+        // practice: __ocDestroy resets workListTerms, so wrap === null implies the length
+        // check below already fails. settings[...] above is updated regardless of this guard.
+        if (wrap && performanceModeChanged && workListTerms.length > 0) {
           performListSearch();
         }
       }
