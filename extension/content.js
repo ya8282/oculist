@@ -7246,12 +7246,20 @@
       var overlaysAffected = false;
       SETTINGS_KEYS.forEach(function(k) {
         if (!(k in nv)) return;
-        if (stableStringify(nv[k]) !== stableStringify(settings[k])) {
+        // Compare the normalised value, not the raw stored one: a stale/removed effect
+        // key (e.g. 'lens' from an old build) always normalises to the same 'hud' that
+        // is already in memory, so treating it as "changed" would force a rebuild on
+        // every echo of that stale sync value forever (oculist-ais). Normalising before
+        // the comparison makes that echo a no-op while a genuine change (a different
+        // valid effect, or a stale value landing while memory holds something else)
+        // still compares unequal and rebuilds as before.
+        var incoming = k === 'effect' && !effectsRegistry[nv[k]] ? 'hud' : nv[k];
+        if (stableStringify(incoming) !== stableStringify(settings[k])) {
           changed = true;
           if (k === 'performanceMode') performanceModeChanged = true;
           if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
         }
-        settings[k] = nv[k];
+        settings[k] = incoming;
       });
       if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
