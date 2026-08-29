@@ -103,6 +103,19 @@ describe('Saved list storage (oc-list-<id>)', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  // Races a possibly-hanging content-script call against a budget so a callback that
+  // never fires (rejected write, thrown error, or a genuine hang) can never leave a
+  // test's node-side await stuck forever. The loser (if the original promise settles
+  // later, after we've moved on) is given a no-op catch so it can't surface as an
+  // unhandled rejection.
+  function withTimeout(promise, ms, message) {
+    promise.catch(() => {});
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    ]);
+  }
+
   function evalInContentScript(expression) {
     return client
       .send('Runtime.evaluate', {
@@ -352,12 +365,19 @@ describe('Saved list storage (oc-list-<id>)', () => {
   // attempt would produce, and let Math.random return a real value on every attempt
   // after the first so the loop can actually terminate on a fresh id.
   test('generateListId() regenerates on a forced collision with an existing id instead of returning it', async () => {
-    const outcome = await evalInContentScript(
+    // The freeze is installed here, in the page context, and its originals are stashed
+    // on window.__ocFreezeState (not just captured in a local closure) so a *separate*,
+    // later evaluate — one that doesn't depend on this call's own promise ever settling
+    // — can still find and restore them. The callback path below still restores inline
+    // as the fast/common case; the node-side finally block after this call is the
+    // backstop for when it doesn't (rejected write, thrown error, or a genuine hang).
+    const freezeAndSave = evalInContentScript(
       `new Promise((resolve) => {
         var fixedNow = 1700000000000;
         var originalNow = Date.now;
         var originalRandom = Math.random;
         var callCount = 0;
+        window.__ocFreezeState = { originalNow: originalNow, originalRandom: originalRandom, restored: false };
         Date.now = function () { return fixedNow; };
         Math.random = function () {
           callCount++;
@@ -369,18 +389,84 @@ describe('Saved list storage (oc-list-<id>)', () => {
         var seed = {};
         seed['oc-list-' + takenId] = { id: takenId, name: 'Taken', terms: ['x'] };
         chrome.storage.sync.set(seed, function () {
+          // Snapshot callCount right at the boundary before generateListId can
+          // possibly run. This is the actual vacuity guard: a plain "id !== takenId"
+          // check alone can't tell a genuine collision-then-retry apart from some
+          // unrelated Math.random() call sneaking in here and consuming the frozen
+          // 0.123456789 before generateListId ever gets to it — that consumption
+          // would silently make generateListId's own first attempt land on real
+          // (non-colliding) randomness, never enter the retry branch, yet still
+          // report ok:true with an id that (trivially) isn't takenId. Catching that
+          // needs to check *before* this point, not just the final outcome.
+          var callCountBeforeSave = callCount;
           window.__ocTest.saveList('Collision Test', ['y'], function (result) {
-            Date.now = originalNow;
-            Math.random = originalRandom;
-            resolve({ result: result, takenId: takenId });
+            var f = window.__ocFreezeState;
+            if (f && !f.restored) {
+              Date.now = f.originalNow;
+              Math.random = f.originalRandom;
+              f.restored = true;
+            }
+            resolve({
+              result: result,
+              takenId: takenId,
+              fixedNow: fixedNow,
+              callCount: callCount,
+              callCountBeforeSave: callCountBeforeSave,
+            });
           });
         });
       })`
     );
+
+    let outcome;
+    try {
+      outcome = await withTimeout(
+        freezeAndSave,
+        POLL_TIMEOUT,
+        'generateListId collision eval never resolved — saveList callback likely never fired'
+      );
+    } finally {
+      // Idempotent restore, safe to run whether the call above resolved, rejected, or
+      // timed out, and safe to run twice (guarded by the same restored flag the
+      // in-callback restore above sets). This is what keeps a stuck callback from
+      // leaking the frozen Date.now/Math.random into every later test in this file.
+      await evalInContentScript(
+        `(function () {
+          var f = window.__ocFreezeState;
+          if (f && !f.restored) {
+            Date.now = f.originalNow;
+            Math.random = f.originalRandom;
+            f.restored = true;
+          }
+          return true;
+        })()`
+      );
+    }
+
     assert.strictEqual(outcome.result.ok, true);
     // A generateListId that ignores existingIds would return takenId itself on its very
     // first (frozen) attempt — this is the assertion that actually catches that bug.
     assert.notStrictEqual(outcome.result.list.id, outcome.takenId);
+    // Prove the id actually derives from the frozen values instead of passing
+    // vacuously (e.g. because unrelated page code consumed the frozen Math.random
+    // before generateListId ever ran, so the collision branch was never exercised).
+    // Date.now() is frozen for the whole call, so the id's timestamp component is
+    // fully deterministic; assert it's embedded rather than trusting notStrictEqual
+    // alone, which would also pass on two merely-different real timestamps.
+    assert.strictEqual(outcome.result.list.id.indexOf(outcome.fixedNow.toString(36)), 0);
+    // Nothing consumed the frozen Math.random before generateListId got a chance to —
+    // the actual vacuity guard (see the comment at the snapshot site above). Without
+    // this, a stray Math.random() call landing between the freeze and generateListId
+    // would silently absorb the frozen 0.123456789, generateListId's own first attempt
+    // would land on real (non-colliding) randomness, and the loop below (and every
+    // assertion above it) would still report success without ever touching the
+    // collision branch this test exists to exercise.
+    assert.strictEqual(outcome.callCountBeforeSave, 0);
+    // And the collision loop must have actually run twice — once to hit the frozen,
+    // pre-seeded takenId (the collision) and once more to land on the id that won —
+    // not once, which is what a generateListId that skipped the existingIds check
+    // would also produce.
+    assert.strictEqual(outcome.callCount, 2);
     // The pre-seeded colliding entry itself must survive untouched, confirming the
     // second list landed under a genuinely different key rather than overwriting it.
     const rawTaken = await rawGet('oc-list-' + outcome.takenId);
