@@ -288,14 +288,24 @@
             <div style="margin-top: auto;">
               <label for="preview-effect" class="form-label" style="font-size: 12px; margin-bottom: 4px; display: block; color: #a1a1aa;">Preview Beacon Effect:</label>
               <select id="preview-effect" class="select-control" style="background:#27272a; border-color:#3f3f46; color:#fafafa; font-size:12px; width: 100%; border-radius: 6px; padding: 6px;" aria-label="Preview beacon effect">
-                <option value="laser">Anime Laser</option>
-                <option value="hud">Spotlight</option>
-                <option value="warp">Warp Drive</option>
+                <!-- Values are the real extension/content.js effectsRegistry keys
+                     (hud/iris/sweep/... — see the registry-declaration order this
+                     list must track). welcome.js keys its dedicated preview
+                     branches (laser/warp beam+ring, flame, lightning, electron,
+                     arrows) to these same values; any value without a dedicated
+                     branch falls through to the generic spotlight-ring preview.
+                     This selection is preview-only and is never persisted to
+                     settings.effect (see saveProfileAndFinish). Labels are
+                     enforced against the registry by
+                     test/effect_enumeration_sync.test.js. -->
+                <option value="hud">Anime Laser</option>
+                <option value="iris">Spotlight</option>
+                <option value="sweep">Warp Drive</option>
                 <option value="flame">Inferno Flame</option>
                 <option value="lightning">Lightning</option>
                 <option value="electron">Electron Cloud</option>
                 <option value="arrows">Pointing Arrows</option>
-                <option value="bloom">Bloom</option>
+                <option value="dispersion">Bloom</option>
                 <option value="trail">Trail</option>
                 <option value="speedlines">Speed Lines</option>
                 <option value="chrono">Chrono Tunnel</option>
