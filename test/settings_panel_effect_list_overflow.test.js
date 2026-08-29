@@ -1,6 +1,7 @@
 // Regression for oculist-dvt.5: the effect picker (makeRadioList, content.js) renders one
 // row per effectsRegistry entry with no cap. The registry grew from 9 to 13 entries across
-// the oculist-dvt epic (speedlines/chrono/lightcycle/cybervision added), and with no scroll
+// the oculist-dvt epic (speedlines/chrono/lightcycle/cybervision added), then dropped to 12
+// after Light Cycle was removed (oculist-3rc, operator decision). With no scroll
 // container anywhere on #oc-radio-list or the settings panel itself, the picker's own
 // height simply tracked registry size. A real-browser investigation (not a CSS read) found
 // this genuinely regressed the picker specifically: at 1280x800 the list still fit before
@@ -13,7 +14,7 @@
 // The fix (content.js, .oc-radio-list CSS): max-height + overflow-y: auto on the effect
 // list only, mirroring the existing #oc-lists-panel idiom elsewhere in the same file. That
 // decouples the picker's height from effectsRegistry size going forward — this file pins
-// that at the *current* full registry length (13) so a future 14th entry cannot silently
+// that at the *current* full registry length (12) so a future 13th entry cannot silently
 // regress picker reachability again. It deliberately does not assert every other field in
 // the settings panel fits every viewport height — the whole-panel-doesn't-fit-a-600px
 // -viewport condition predates this epic (verified against the pre-epic 9-effect registry
@@ -46,10 +47,10 @@ const THEME_LIGHT_BTN = '#oc-wrap >> [data-oc-key="theme:light"]';
 // alphabetical-by-label and derived from the live DOM, not assumed here).
 const EXPECTED_EFFECT_KEYS = [
   'hud', 'iris', 'sweep', 'flame', 'lightning', 'electron', 'arrows',
-  'dispersion', 'trail', 'speedlines', 'chrono', 'lightcycle', 'cybervision',
+  'dispersion', 'trail', 'speedlines', 'chrono', 'cybervision',
 ];
 
-describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', () => {
+describe('Settings panel effect picker at 12 registry entries (oculist-dvt.5)', () => {
   let server, ctx, page;
 
   async function waitForOverlayClosed() {
@@ -169,7 +170,7 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     await openFinder();
   });
 
-  test('all 13 registry entries render as effect rows in the picker', async () => {
+  test('all 12 registry entries render as effect rows in the picker', async () => {
     await openSettings();
     const keys = await getEffectRowKeys();
     assert.strictEqual(keys.length, EXPECTED_EFFECT_KEYS.length, 'every effectsRegistry entry must render exactly one row');
@@ -179,7 +180,7 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     assert.deepStrictEqual(gotValues, expectedValues, 'the rendered row keys must match the full current registry, no more and no fewer');
   });
 
-  test('the effect list is a bounded scroll container (not simply grown to fit all 13 rows)', async () => {
+  test('the effect list is a bounded scroll container (not simply grown to fit all 12 rows)', async () => {
     await openSettings();
     const keys = await getEffectRowKeys();
     const geo = await getListAndRowGeometry(keys[0]);
@@ -189,7 +190,7 @@ describe('Settings panel effect picker at 13 registry entries (oculist-dvt.5)', 
     // needed scrolling in the first place.
     assert.ok(
       geo.scrollHeight > geo.clientHeight + 1,
-      `effect list content (scrollHeight=${geo.scrollHeight}) must exceed its visible box (clientHeight=${geo.clientHeight}) at 13 rows — ` +
+      `effect list content (scrollHeight=${geo.scrollHeight}) must exceed its visible box (clientHeight=${geo.clientHeight}) at 12 rows — ` +
       'otherwise this test cannot tell a real scroll container from an accidentally-oversized one'
     );
   });
