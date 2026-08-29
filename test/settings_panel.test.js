@@ -511,5 +511,64 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(activeRows[0].getAttribute('data-oc-key'), 'effect:hud', 'The active effect row should be HUD, since settings.effect must be normalised back to "hud" for the removed "lens" key');
     });
 
+    test('Repeated stale-effect storage.onChanged echoes that normalise to the current in-memory value do not rebuild the settings panel (oculist-ais)', async () => {
+      const dom = createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+
+      // Boot already normalised to 'hud', mirroring a device where the in-memory value is
+      // already current — the scenario oculist-ais is about is a *second* device's stale
+      // sync value re-arriving and re-normalising to the same effective value forever.
+      global.chrome.storage.sync.get = (key, cb) => cb({
+        'oc-settings': { effect: 'hud' }
+      });
+
+      let onChangedListener;
+      global.chrome.storage.onChanged.addListener = (fn) => { onChangedListener = fn; };
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const wrapRoot = wrap.shadowRoot;
+
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+      const settingsPanelBefore = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanelBefore, 'Settings panel should be open before the storage echoes land');
+
+      assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
+
+      // Two+ echoes of a stale-but-different raw value that both normalise to the same
+      // 'hud' already in memory (e.g. two builds disagreeing on the removed effect's key).
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'foo' } } });
+
+      // rebuildSettingsPanelPreservingFocus() replaces the panel node wholesale
+      // (settingsPanel.remove(); buildSettingsPanel()), so node identity survives iff no
+      // rebuild happened. A rebuild is synchronous within the onChanged call, so no wait
+      // is needed here (same reasoning as the oculist-7z3 test above).
+      const settingsPanelAfter = wrapRoot.querySelector('#oc-settings-panel');
+      assert.strictEqual(settingsPanelAfter, settingsPanelBefore, 'A stale effect echo that normalises to the same in-memory value should not rebuild the settings panel');
+
+      const effectRowsAfter = Array.from(settingsPanelAfter.querySelectorAll('.oc-radio-item[data-oc-key^="effect:"]'));
+      const activeRowsAfter = effectRowsAfter.filter(row => row.classList.contains('active'));
+      assert.strictEqual(activeRowsAfter.length, 1, 'Exactly one effect row should remain marked active after the inert echoes');
+      assert.strictEqual(activeRowsAfter[0].getAttribute('data-oc-key'), 'effect:hud', 'The active effect row should remain HUD');
+
+      // Control case: a genuine effect change (a different, valid effect) must still
+      // rebuild the panel — the suppression must not swallow real changes.
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'trail' } } });
+      const settingsPanelAfterRealChange = wrapRoot.querySelector('#oc-settings-panel');
+      assert.notStrictEqual(settingsPanelAfterRealChange, settingsPanelBefore, 'A genuine effect change should still rebuild the settings panel');
+
+      const activeRowsRealChange = Array.from(settingsPanelAfterRealChange.querySelectorAll('.oc-radio-item[data-oc-key^="effect:"]'))
+        .filter(row => row.classList.contains('active'));
+      assert.strictEqual(activeRowsRealChange.length, 1, 'Exactly one effect row should be marked active after the real change');
+      assert.strictEqual(activeRowsRealChange[0].getAttribute('data-oc-key'), 'effect:trail', 'The active effect row should reflect the genuine change to trail');
+    });
+
   });
 });
