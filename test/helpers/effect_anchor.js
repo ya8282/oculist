@@ -1,5 +1,5 @@
-// Independent source-of-truth positional check, shared by the four new beacon-effect
-// suites (Speed Lines, Chrono Tunnel, Light Cycle, Cyber-Vision).
+// Independent source-of-truth positional check, shared by the new beacon-effect
+// suites (Speed Lines, Chrono Tunnel, Cyber-Vision).
 //
 // Every one of those effects positions a shared .oc-beacon container from the match's own
 // getBoundingClientRect() and then draws (or positions) everything else — streaks, rings,
@@ -26,17 +26,16 @@
 //      elementCenterInContainer(page, targetSelector, '.oc-beacon') — this is what Speed
 //      Lines and Chrono Tunnel need, since neither draws a separate positioned DOM element
 //      whose own rect would otherwise stand in for that anchor.
-//   2. Compare two elements' local centres directly with no effect-side hook at all — e.g.
-//      Light Cycle's outline box already carries its own real position
-//      (elementCenterInContainer(page, '.oc-lightcycle-box', '.oc-beacon')) that can be
-//      graded straight against the match's (elementCenterInContainer(page, '#target',
+//   2. Compare two elements' local centres directly with no effect-side hook at all — for an
+//      effect whose own positioned DOM element already carries its own real position, that
+//      can be graded straight against the match's (elementCenterInContainer(page, '#target',
 //      '.oc-beacon')) without content.js reporting anything extra.
 //
 // Only meaningful while beaconSize (getBeaconScale()) is 1 — the container's own
 // transform: scale(...) is anchored at the effect's own internal anchor (transformOrigin),
 // not at (0,0), so the container's post-transform getBoundingClientRect() only equals its
 // pre-transform local coordinate space when that scale is exactly 1. Suites that sweep
-// beaconSize (cyber_vision.test.js, light_cycle.test.js's right-angle test) already grade a
+// beaconSize (cyber_vision.test.js) already grade a
 // scaled expectation directly against the match's viewport rect, which is the correct
 // approach at non-1 scale; this helper is for the default-size case the other assertions
 // exercise.

@@ -8,12 +8,11 @@
 // animateLightning, and drawActiveMatchMagnifier (a companion overlay, not an
 // effectsRegistry entry — see content.js).
 //
-// Needs a real browser for the same reasons as light_cycle.test.js: real layout, real
-// WAAPI, and effect/vision-settings selection can only be toggled for real through
-// chrome.storage.sync.
+// Needs a real browser: real layout, real WAAPI, and effect/vision-settings selection can
+// only be toggled for real through chrome.storage.sync.
 //
-// One context, one finder session kept open across all tests (mirrors light_cycle.test.js):
-// each test selects an effect via chrome.storage.sync, fires the beacon once, snapshots its
+// One context, one finder session kept open across all tests: each test selects an effect
+// via chrome.storage.sync, fires the beacon once, snapshots its
 // live Animation objects *before* any cancellation (document.getAnimations() would not
 // necessarily include animations on already-detached elements — capturing the references
 // while the beacon is still live and holding onto them is what lets the assertions read
@@ -35,7 +34,7 @@ const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, TIMEOUT_SCALE
 const EXTENSION = path.resolve(__dirname, '../extension');
 
 // #target is the text the finder searches for and the beacon fires on. Single match only —
-// Enter always re-fires the same match (mirrors light_cycle.test.js's replay() pattern).
+// Enter always re-fires the same match (the page has only one occurrence of the search term).
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; background:#06080D; color:#ccc; }</style>
 <p>${'filler words to fill the page and give every beacon effect room to run. '.repeat(30)} <span id="target">quarklet</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
@@ -45,10 +44,9 @@ const INPUT = '#oc-wrap >> .oc-input';
 // Every effectsRegistry key that drives at least one WAAPI .animate() call (content.js).
 // electron/speedlines/chrono are canvas + requestAnimationFrame driven (cancelBeacons()
 // reaches those via __rafId instead) and are deliberately excluded — they are a different
-// leak class from the one this bug covers. lightcycle/cybervision were already fixed by
-// oculist-dvt.3 and are included here as regression coverage alongside the newly-fixed
-// effects, not because they were broken.
-const WAAPI_EFFECTS = ['hud', 'iris', 'sweep', 'flame', 'lightning', 'arrows', 'dispersion', 'trail', 'lightcycle', 'cybervision'];
+// leak class from the one this bug covers. cybervision was already fixed by oculist-dvt.3
+// and is included here as regression coverage alongside the newly-fixed effects.
+const WAAPI_EFFECTS = ['hud', 'iris', 'sweep', 'flame', 'lightning', 'arrows', 'dispersion', 'trail', 'cybervision'];
 
 describe('WAAPI beacon animations are genuinely cancelled (not just detached) on every effect', () => {
   let server, ctx, page, client, isolatedContextId, origin;
@@ -139,10 +137,9 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
       });
   }
 
-  // Same reasoning as light_cycle.test.js's armSettingsEcho/waitForSettingsEcho/setSettings
-  // trio: chrome.storage.onChanged fires listeners in registration order, so observing our
-  // own probe listener fire is a direct proxy for content.js's own listener (registered
-  // earlier, at page load) having already applied the change.
+  // chrome.storage.onChanged fires listeners in registration order, so observing our own
+  // probe listener fire is a direct proxy for content.js's own listener (registered earlier,
+  // at page load) having already applied the change.
   async function armSettingsEcho() {
     return evalInContentScript(`
       (function () {
@@ -180,8 +177,7 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
   }
 
   // Merges `patch` into the nested visionSettings object (e.g. magnifier) via
-  // chrome.storage.sync.set, waiting for content.js's own onChanged listener to actually
-  // apply it. Mirrors light_cycle.test.js / cyber_vision.test.js's own setVisionSettings.
+  // chrome.storage.sync.set, waiting for content.js's own onChanged listener to actually apply it.
   async function setVisionSettings(patch) {
     const echoBefore = await armSettingsEcho();
     await evalInContentScript(
