@@ -13,8 +13,6 @@ below the 1.5.0 heading is what landed across that span.
   match; the streak hue rides your beacon colour.
 * **Chrono Tunnel.** A new effect with kaleidoscopic rings rushing outward in a slit-scan smear;
   hue rides your beacon colour within a bounded sweep.
-* **Light Cycle.** A new effect where a cycle runs in on right angles, leaving a glowing wall
-  that holds, boxes the match, then de-rezzes.
 * **Cyber-Vision.** A new effect with scanlines, a sweeping bar, and thermal blocks over the
   match, plus targeting brackets and a readout showing the real match index and count.
 

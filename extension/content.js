@@ -607,7 +607,6 @@
     effectTrail: 'Trail',
     effectSpeedLines: 'Speed Lines',
     effectChronoTunnel: 'Chrono Tunnel',
-    effectLightCycle: 'Light Cycle',
     effectCyberVision: 'Cyber-Vision',
 
     // Saved-list popover (oculist-l6m.9)
@@ -716,7 +715,6 @@
     trail: { label: i18n.effectTrail, run: animateTrail },
     speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
-    lightcycle: { label: i18n.effectLightCycle, run: animateLightCycle },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision }
   };
 
@@ -853,7 +851,7 @@
       // WAAPI animations do NOT stop on their own when their target is detached from the
       // document — verified empirically: playState stays 'running' and currentTime keeps
       // advancing on a removed element unless .cancel() is called explicitly. Canvas
-      // effects hang their rAF id off __rafId above; DOM/WAAPI effects (Light Cycle,
+      // effects hang their rAF id off __rafId above; DOM/WAAPI effects (e.g.
       // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
       // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
       if (beacons[i].__waapiAnims) {
@@ -2272,6 +2270,11 @@
     // test/helpers/effect_anchor.js) rather than only ever checking this effect's
     // internals for self-consistency (oculist-dvt.7).
     window.__ocTest.lastSpeedLinesAnchor = { matchX: vpCx, matchY: offsetY };
+    // Set again every frame below at the exact point the centre-line highlight is actually
+    // drawn (so a mutation to that draw call's y is caught), but initialised here too so it
+    // is never momentarily undefined before the first rAF callback runs.
+    window.__ocTest.lastSpeedLinesHighlightY = offsetY;
+    window.__ocTest.speedLinesHighlightDrawCount = 0;
     window.__ocTest.speedLinesDone = false;
 
     var DUR = getBeaconDuration(760);
@@ -2341,6 +2344,35 @@
           ctx.fillRect(x0, L.y - L.thick * 2.2, x1 - x0, L.thick * 4.4);
         }
       }
+
+      // Persistent centre-line: a thin bright horizontal beam at the match's own vertical
+      // centre, spanning the full canvas width — an accessibility locator so the eye always
+      // has one fixed thing to land on while the streak field rushes past. Unlike everything
+      // above, it does not ride `env` (the burst impulse envelope): it draws at a constant
+      // alpha every frame from the effect's first frame to its last, the same full duration
+      // the frame loop itself runs for, rather than spiking and decaying with the burst.
+      // Evokes animateAnimeLaser's sheath/core beam pair, just calmer and full-width so it
+      // reads as a through-line rather than another burst. `highlightY` is a single local
+      // variable feeding both the actual draw calls below and the lastSpeedLinesHighlightY
+      // test hook, so the two can never drift apart the way a hook copied from a different
+      // expression could — a test can grade this against the match's own
+      // independently-observed rendered position the same way lastSpeedLinesAnchor already
+      // is (test/helpers/effect_anchor.js, oculist-dvt.7). speedLinesHighlightDrawCount
+      // increments unconditionally alongside it, every frame in both Lite and full mode, so
+      // a test can prove the line keeps drawing for the run's full length rather than only
+      // at the start, without racing the canvas for a pixel sample.
+      var highlightThick = 2;
+      var highlightY = offsetY;
+      window.__ocTest.lastSpeedLinesHighlightY = highlightY;
+      window.__ocTest.speedLinesHighlightDrawCount++;
+      // Lite Mode drops the soft glow pass (same call as the streak bloom halos above) but
+      // keeps the core line itself — it IS the accessibility aid, not decoration.
+      if (!settings.performanceMode) {
+        ctx.fillStyle = hexToRgba(color, 0.14);
+        ctx.fillRect(0, highlightY - highlightThick * 4, W, highlightThick * 8);
+      }
+      ctx.fillStyle = hexToRgba(color, 0.6);
+      ctx.fillRect(0, highlightY - highlightThick / 2, W, highlightThick);
 
       // flare at the source
       var fl = env * 0.9;
@@ -2556,264 +2588,6 @@
     }, DUR);
   }
 
-  // Light Cycle: a cycle head runs in toward the match on right angles only — no curves,
-  // no diagonals, the whole aesthetic — leaving a solid glowing wall behind it, segment by
-  // segment. On arrival the wall holds, a box outline snaps around the match, then the
-  // wall de-rezzes from the tail forward (the segment drawn first fades first). Ported
-  // from the approved beacon-bench.html reference geometry (the four-point right-angle
-  // path, transformOrigin-anchored scaleX/scaleY growth, tail-first de-rez stagger)
-  // verbatim; the departures are the ones every DOM effect in this registry makes: viewport
-  // -relative geometry converted to document space, a container clamped against the page's
-  // own scroll height, and every duration routed through getBeaconDuration(). This ships
-  // alongside animateTrail, not in place of it (operator decision, oculist-dvt epic notes)
-  // — the two do overlap visibly, both tracing an L-shaped path to the match.
-  //
-  // First of the two DOM/WAAPI effects in this batch (Cyber-Vision is the second) — this
-  // establishes the container/__waapiAnims pattern that one follows.
-  function animateLightCycle(rect) {
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-
-    var mw = rect.width;
-    var mh = rect.height;
-    var vpCx = rect.left + mw / 2;               // viewport-relative match centre x
-    var vpCy = rect.top + mh / 2;                // viewport-relative match centre y
-    var my = vpCy + window.scrollY;              // document-coord match centre y
-
-    var color = getEffectiveColors().beacon || '#38bdf8';
-    var scale = getBeaconScale();
-
-    // Right-angle path in viewport space, mirroring the reference geometry: enter from
-    // just off the left edge, turn once to align with the match's own column, turn again
-    // to approach the match. Lite Mode collapses this to a single straight approach.
-    var entryXVp = -20;
-    var midYVp = Math.min(vpCy + 96, window.innerHeight - 26);
-    var finalYVp = vpCy + mh / 2 + 16;
-    var turnXVp = vpCx - 118;
-
-    // Guard against a degenerate connecting segment: for a match low in the viewport,
-    // clamping midYVp to the viewport bottom can land it within a hair of finalYVp,
-    // yielding a near-invisible ~1px stub wall (Math.max(len, 1) below) instead of a
-    // real segment. Push the levels at least MIN_SEG_SEP apart, in whichever direction
-    // midYVp already sits relative to finalYVp. When midYVp needs to move down but the
-    // viewport-bottom clamp is the very thing that produced the near-zero gap, pushing
-    // down further is a no-op — fall back to placing midYVp above finalYVp instead.
-    // finalYVp is always close to the viewport bottom whenever that fallback is needed,
-    // so finalYVp - MIN_SEG_SEP stays well clear of the viewport top; the Math.max(0, ...)
-    // is a defensive floor for that case, not one this sweep of inputs ever reaches.
-    var MIN_SEG_SEP = 12;
-    if (Math.abs(midYVp - finalYVp) < MIN_SEG_SEP) {
-      if (midYVp >= finalYVp) {
-        var pushedDownYVp = finalYVp + MIN_SEG_SEP;
-        var vpBottomBound = window.innerHeight - 26;
-        midYVp = pushedDownYVp <= vpBottomBound
-          ? pushedDownYVp
-          : Math.max(finalYVp - MIN_SEG_SEP, 0);
-      } else {
-        midYVp = finalYVp - MIN_SEG_SEP;
-      }
-    }
-
-    var fullPts = [
-      { x: entryXVp, y: midYVp },
-      { x: turnXVp, y: midYVp },
-      { x: turnXVp, y: finalYVp },
-      { x: vpCx, y: finalYVp }
-    ];
-    var litePts = [
-      { x: entryXVp, y: finalYVp },
-      { x: vpCx, y: finalYVp }
-    ];
-    var pts = settings.performanceMode ? litePts : fullPts;
-    var numSegments = pts.length - 1;
-
-    // Container spans the full document width — children position with document x
-    // directly, the same idiom animateAnimeLaser uses — and is clamped vertically against
-    // the page's own scroll height (animateAnimeLaser, content.js:840-850) so a tall
-    // container cannot itself extend the page.
-    var vMin = Math.min(midYVp, finalYVp) - 60;
-    var vMax = Math.max(midYVp, finalYVp) + 60;
-    var containerHeight = Math.max(120, vMax - vMin);
-    var scrollHeight = Math.max(
-      document.documentElement.scrollHeight,
-      document.body ? document.body.scrollHeight : 0
-    );
-    var maxTop = Math.max(0, scrollHeight - containerHeight);
-    var targetTop = Math.min(Math.max(0, my - containerHeight / 2), maxTop);
-    var offsetY = my - targetTop; // match centre, local container y
-
-    function localX(xVp) { return xVp + window.scrollX; }
-    function localY(yVp) { return offsetY + (yVp - vpCy); }
-
-    var container = document.createElement('div');
-    container.className = 'oc-beacon';
-    container.style.cssText = [
-      'position:absolute',
-      'left:0', 'top:' + targetTop + 'px',
-      'width:100%', 'height:' + containerHeight + 'px',
-      'pointer-events:none', 'z-index:2147483640',
-      'overflow:visible'
-    ].join(';');
-    container.style.transform = 'scale(' + scale + ')';
-    container.style.transformOrigin = localX(vpCx) + 'px ' + offsetY + 'px';
-    document.documentElement.appendChild(container);
-
-    var anims = [];
-    // Fixed child size — the container's own transform: scale(scale) (above) already
-    // scales this wall visually. Multiplying here too double-scales it (oculist-dvt.8:
-    // walls rendered ~15px thick at xl instead of ~7px). Matches animateAnimeLaser's
-    // fixed-child-size pattern (content.js:847).
-    var THICK = 3;
-
-    var SEG = getBeaconDuration(300);          // per-segment run-in duration
-    var BOX_HOLD = getBeaconDuration(250);      // gap between wall completion and de-rez start
-    var DEREZ_TOTAL = getBeaconDuration(400);   // total de-rez window, split across segments
-    var HEAD_BURN = getBeaconDuration(150);
-
-    var runIn = SEG * numSegments;
-    var derezStep = DEREZ_TOTAL / numSegments;
-
-    // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
-    // (mirrors speedLinesDone/chronoDone): lightCycleWallsGrown counts real growth
-    // animations that have naturally finished (via their own .finished promise, not a
-    // guessed timeout), and lightCycleRunInDone flips once every segment has — a
-    // deterministic completion signal the right-angle geometry test waits on before
-    // reading real getBoundingClientRect() values, instead of racing a guessed delay
-    // against this run's own WAAPI schedule.
-    window.__ocTest.lightCycleWallsGrown = 0;
-    window.__ocTest.lightCycleRunInDone = false;
-
-    var head = document.createElement('div');
-    head.className = 'oc-lightcycle-head';
-    // Fixed size, same reasoning as THICK above — the container transform scales this.
-    var headSize = 8;
-    head.style.cssText = [
-      'position:absolute',
-      'width:' + headSize + 'px', 'height:' + headSize + 'px',
-      'margin:' + (-headSize / 2) + 'px 0 0 ' + (-headSize / 2) + 'px',
-      'background:#ffffff',
-      'border-radius:50%',
-      'box-shadow:0 0 8px #ffffff, 0 0 18px ' + color,
-      'pointer-events:none'
-    ].join(';');
-    container.appendChild(head);
-
-    var walls = [];
-    var elapsed = 0;
-    for (var i = 0; i < numSegments; i++) {
-      var a = pts[i], b = pts[i + 1];
-      var horiz = a.y === b.y;
-      var aX = localX(a.x), bX = localX(b.x), aY = localY(a.y), bY = localY(b.y);
-      var len = horiz ? Math.abs(bX - aX) : Math.abs(bY - aY);
-
-      var wall = document.createElement('div');
-      wall.className = 'oc-lightcycle-wall';
-      wall.setAttribute('data-oc-lc-index', String(i));
-      wall.style.cssText = [
-        'position:absolute',
-        'background:' + color,
-        'box-shadow:0 0 6px ' + color + ', 0 0 16px ' + color,
-        'opacity:0.92',
-        'pointer-events:none'
-      ].join(';');
-      if (horiz) {
-        wall.style.left = Math.min(aX, bX) + 'px';
-        wall.style.top = (aY - THICK / 2) + 'px';
-        wall.style.height = THICK + 'px';
-        wall.style.width = Math.max(len, 1) + 'px';
-        wall.style.transformOrigin = (bX > aX ? 'left' : 'right') + ' center';
-      } else {
-        wall.style.left = (aX - THICK / 2) + 'px';
-        wall.style.top = Math.min(aY, bY) + 'px';
-        wall.style.width = THICK + 'px';
-        wall.style.height = Math.max(len, 1) + 'px';
-        wall.style.transformOrigin = 'center ' + (bY > aY ? 'top' : 'bottom');
-      }
-      container.appendChild(wall);
-      walls.push(wall);
-
-      var growthAnim = wall.animate([
-        { transform: horiz ? 'scaleX(0)' : 'scaleY(0)' },
-        { transform: horiz ? 'scaleX(1)' : 'scaleY(1)' }
-      ], { duration: SEG, delay: elapsed, easing: 'linear', fill: 'both' });
-      anims.push(growthAnim);
-      growthAnim.finished.then(function () {
-        window.__ocTest.lightCycleWallsGrown++;
-        if (window.__ocTest.lightCycleWallsGrown >= numSegments) {
-          window.__ocTest.lightCycleRunInDone = true;
-        }
-      }).catch(function () {});
-
-      // The head rides this segment's boundary.
-      anims.push(head.animate([
-        { transform: 'translate(' + aX + 'px,' + aY + 'px)' },
-        { transform: 'translate(' + bX + 'px,' + bY + 'px)' }
-      ], { duration: SEG, delay: elapsed, easing: 'linear', fill: 'both' }));
-
-      elapsed += SEG;
-    }
-
-    // Head burns out on arrival.
-    anims.push(head.animate([
-      { opacity: 1 }, { opacity: 0 }
-    ], { duration: HEAD_BURN, delay: runIn, fill: 'forwards' }));
-
-    // Box outline snaps around the match, expanded a few px past the raw rect so the glow
-    // reads outside the text — the same idiom animateTrail's absorption flash uses.
-    // Fixed pad/border/blur, same reasoning as THICK above — the container transform
-    // scales this box (and its glow) along with everything else inside it.
-    var boxPad = 6;
-    var box = document.createElement('div');
-    box.className = 'oc-lightcycle-box';
-    box.style.cssText = [
-      'position:absolute',
-      'left:' + (localX(rect.left) - boxPad) + 'px',
-      'top:' + (localY(rect.top) - boxPad) + 'px',
-      'width:' + (mw + boxPad * 2) + 'px',
-      'height:' + (mh + boxPad * 2) + 'px',
-      'box-sizing:content-box',
-      'border:2px solid ' + color,
-      'box-shadow:0 0 10px ' + color + ', inset 0 0 8px ' + color,
-      'pointer-events:none'
-    ].join(';');
-    container.appendChild(box);
-
-    anims.push(box.animate([
-      { opacity: 0, transform: 'scale(1.3)' },
-      { opacity: 1, transform: 'scale(1)', offset: 0.18 },
-      { opacity: 1, transform: 'scale(1)', offset: 0.7 },
-      { opacity: 0, transform: 'scale(1.06)' }
-    ], { duration: BOX_HOLD + DEREZ_TOTAL, delay: runIn, fill: 'both' }));
-
-    // De-rez from the tail forward: each wall segment fades out in the order it was drawn
-    // (tail first), not all at once. Lite Mode's single segment trivially satisfies this —
-    // there is nothing left to stagger against.
-    for (var k = 0; k < walls.length; k++) {
-      anims.push(walls[k].animate([
-        { opacity: 0.92 }, { opacity: 0 }
-      ], { duration: derezStep, delay: runIn + BOX_HOLD + k * derezStep, fill: 'forwards' }));
-    }
-
-    var total = runIn + BOX_HOLD + DEREZ_TOTAL;
-
-    // See cancelBeacons(): WAAPI animations keep running on a detached element unless
-    // explicitly cancelled, so every Animation this beacon created is hung off the
-    // container for cancelBeacons() to reach.
-    container.__waapiAnims = anims;
-
-    window.__ocTest.lastLightCycleRun = {
-      segmentCount: numSegments,
-      liteMode: !!settings.performanceMode,
-      runIn: runIn,
-      boxHold: BOX_HOLD,
-      derezTotal: DEREZ_TOTAL,
-      derezStep: derezStep
-    };
-
-    setTimeout(function () {
-      container.remove();
-    }, total);
-  }
-
   // Cyber-Vision: a targeting-HUD sweep over the viewport, resolving down onto the match.
   // Ported from the approved beacon-bench.html reference geometry (the scanline/tint wash,
   // the single downward sweep bar with its hard bright leading edge, the per-column
@@ -2821,15 +2595,15 @@
   // then holding, and the readout beside them) verbatim, with the same departures every DOM
   // effect in this registry makes: viewport-relative geometry converted to document space, a
   // container clamped against the page's own scroll height, and every duration routed
-  // through getBeaconDuration(). Second of the two DOM/WAAPI effects in this batch (Light
-  // Cycle was the first, at content.js:2471) — reuses its container/__waapiAnims pattern.
+  // through getBeaconDuration(). One of the DOM/WAAPI effects in this batch — uses the
+  // container/__waapiAnims pattern the other DOM/WAAPI effects in this registry also use.
   //
-  // Scaling follows animateAnimeLaser (content.js:847), NOT Light Cycle: getBeaconScale()
+  // Scaling follows animateAnimeLaser (content.js:847): getBeaconScale()
   // is applied exactly once, as the container's own transform, anchored on the match centre
   // so the targeting geometry (brackets, thermal grid) grows/shrinks around the match the
   // way AnimeLaser's beam grows/shrinks around it. Every child element below therefore uses
   // a FIXED pixel size — multiplying an already-scaled container's children by scale again
-  // is the double-scaling defect filed separately against Light Cycle (oculist-dvt.8).
+  // is a double-scaling defect (oculist-dvt.8).
   //
   // The four thermal heat colours are the approved mockup's fixed false-colour palette, not
   // derived from getEffectiveColors().beacon — a thermal camera's whole visual point is
@@ -2851,7 +2625,7 @@
     var lite = !!settings.performanceMode;
 
     // The container spans the full document width (left:0, width:100% — the same idiom
-    // animateAnimeLaser and Light Cycle use) and the CURRENT viewport height, so the sweep
+    // animateAnimeLaser uses) and the CURRENT viewport height, so the sweep
     // bar has a full viewport to travel — clamped vertically against the page's own scroll
     // extent exactly like animateAnimeLaser (content.js:859-866), so a viewport-tall
     // container can never itself extend the page.
@@ -3002,11 +2776,11 @@
     }
 
     // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
-    // (mirrors lightCycleRunInDone). The brackets' own keyframes (above) reach translate(0,0)
+    // (mirrors speedLinesDone/chronoDone). The brackets' own keyframes (above) reach translate(0,0)
     // — fully snapped in — at offset 0.3 of their delay+duration and hold there until the
     // fade-out; that offset is exact real math derived from this run's own BRACKET_DELAY/
     // BRACKET_DUR, not a guess, so a timeout keyed to it is a genuine completion signal
-    // (mirrors why Light Cycle instead uses .finished — there, "done" IS the animation's
+    // (other DOM/WAAPI effects in this registry instead use .finished — there, "done" IS the animation's
     // end; here "settled" is a mid-animation point .finished cannot express, since waiting
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
