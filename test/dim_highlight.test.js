@@ -360,7 +360,13 @@ describe('Dim highlight registry for inactive terms', () => {
     await page.keyboard.press('F3');
 
     const priorities = await registryPriorities();
-    assert.strictEqual(priorities.dim, 0, 'oculist-dim-match must have priority 0');
+    // No assertion on priorities.dim here (oculist-l6m.18): Highlight.priority defaults to
+    // 0 per the CSS Custom Highlight API spec, which is exactly the value
+    // updateDimHighlight() assigns oculist-dim-match, so deleting that assignment produces
+    // an identical priorities.dim reading and can never fail a check on its value. Verified
+    // by mutation: removing `dimHighlight.priority = 0;` from content.js left this whole
+    // test suite green. The real invariant — that the active match renders above the dim
+    // wash — is what the overlap check below exercises instead.
     assert.strictEqual(priorities.match, 1, 'oculist-match must have priority 1');
     assert.strictEqual(priorities.active, 2, 'oculist-active-match must have priority 2 — the highest of the three');
 

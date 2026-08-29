@@ -420,6 +420,38 @@ describe('Working-list session storage (oc-worklist)', () => {
       }
     });
 
+    // oculist-l6m.18: normalizeWorkList() dedupes on exact-string match, the same
+    // comparison addChipTerm() already uses via workListTerms.indexOf(trimmed) before
+    // pushing a new chip. Unreachable through the UI (addChipTerm dedupes on add), but a
+    // crafted/legacy session payload can still carry a duplicate; updateDimHighlight()
+    // skips the active term by index, not text, so an undeduped list would put the active
+    // term's own ranges into the dim set. activeIndex here (2) points at the SECOND 'dup'
+    // — the duplicate — so a correct remap must land on the surviving first occurrence
+    // (index 0), not just clamp/reset to -1.
+    test('a stored working list with a duplicate term round-trips deduped, with activeIndex remapped to the surviving occurrence', async () => {
+      await closeOverlay();
+      await setStoredWorkList({ terms: ['dup', 'other', 'dup'], activeIndex: 2 });
+
+      await reopenOverlay();
+      await waitForChipCount(2);
+
+      const chips = await page.evaluate(() => {
+        const root = document.getElementById('oc-wrap').shadowRoot;
+        return Array.from(root.querySelectorAll('.oc-chip-term')).map((btn) => ({
+          text: btn.textContent,
+          active: btn.classList.contains('active'),
+        }));
+      });
+
+      assert.deepStrictEqual(
+        chips.map((c) => c.text),
+        ['dup', 'other'],
+        'the duplicate "dup" term must be deduped down to its first occurrence'
+      );
+      assert.strictEqual(chips[0].active, true, 'activeIndex must remap to the surviving "dup" chip');
+      assert.strictEqual(chips[1].active, false);
+    });
+
     test('an empty stored working list is unaffected: chip row stays hidden on mount', async () => {
       await closeOverlay();
       await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");

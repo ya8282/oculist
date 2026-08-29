@@ -101,12 +101,25 @@
   // it — a stored index that is NaN, negative (other than the -1 sentinel), or >= the
   // term count would otherwise round-trip unchecked into UI state that indexes terms[].
   function normalizeWorkList(stored) {
-    var terms = Array.isArray(stored && stored.terms) ? stored.terms : [];
+    var rawTerms = Array.isArray(stored && stored.terms) ? stored.terms : [];
     var idx = (stored && typeof stored.activeIndex === 'number' && !isNaN(stored.activeIndex))
       ? stored.activeIndex
       : -1;
-    if (idx !== -1 && (idx < 0 || idx >= terms.length)) idx = -1;
-    return { terms: terms, activeIndex: idx };
+    if (idx !== -1 && (idx < 0 || idx >= rawTerms.length)) idx = -1;
+    // addChipTerm() only ever pushes a term after checking workListTerms.indexOf(trimmed)
+    // === -1, i.e. exact-string dedupe. A stored payload (crafted or from an older build)
+    // can still carry duplicates, and updateDimHighlight() skips the active term by index
+    // rather than text — a duplicate would otherwise put the active term's own ranges into
+    // the dim set. Mirror addChipTerm's exact-match comparison here, keep the first
+    // occurrence of each term, and remap activeIndex to that surviving index so it still
+    // points at the term it pointed at before dedupe.
+    var activeTerm = idx !== -1 ? rawTerms[idx] : undefined;
+    var terms = [];
+    for (var i = 0; i < rawTerms.length; i++) {
+      if (terms.indexOf(rawTerms[i]) === -1) terms.push(rawTerms[i]);
+    }
+    var newIdx = idx === -1 ? -1 : terms.indexOf(activeTerm);
+    return { terms: terms, activeIndex: newIdx };
   }
 
   function loadWorkList(callback) {
@@ -4400,14 +4413,12 @@
 
     var hasActiveChip = activeTermIndex >= 0 && activeTermIndex < workListTerms.length;
 
-    if (!term) {
-      if (!hasActiveChip) {
-        // Nothing is or was being searched: no draft in the input, no chip to fall back
-        // on. Matches performSearch('')'s own blank (not "no match") count text.
-        countEl.textContent = '';
-        setNavEnabled(false);
-        return;
-      }
+    if (!term && !hasActiveChip) {
+      // Nothing is or was being searched: no draft in the input, no chip to fall back
+      // on. Matches performSearch('')'s own blank (not "no match") count text.
+      countEl.textContent = '';
+      setNavEnabled(false);
+      return;
     }
 
     if (searchRanges.length === 0) {
@@ -5030,18 +5041,18 @@
             debounceTimer = null;
           }
           lastTerm = input.value;
-          // Land on match 0 (or the last match, backwards) via the existing firstEnter
-          // flag — performListSearch() already set it when the fresh scan found matches,
-          // exactly like a lone performSearch() always has.
+          // Land on match 0 (or the last match, backwards) — firstEnter is guaranteed true
+          // here (oculist-l6m.18): commitResult.committed is only true when addChipTerm()
+          // ran performListSearch() synchronously just above (via the push path or
+          // activateChip()), and performListSearch() itself unconditionally sets
+          // firstEnter = true whenever searchRanges.length > 0. Nothing runs between that
+          // call and here that could flip it back, so the old "else" branch that carried
+          // activeIndex forward from a previous scan was dead code; verified by reading
+          // performListSearch()/maybeAddChipFromInput()/addChipTerm()/activateChip(), which
+          // are synchronous end-to-end with no path that resets firstEnter in between.
           if (searchRanges.length > 0) {
-            if (firstEnter) {
-              firstEnter = false;
-              activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
-            } else {
-              activeIndex = e.shiftKey
-                ? (activeIndex <= 0 ? searchRanges.length - 1 : activeIndex - 1)
-                : (activeIndex >= searchRanges.length - 1 ? 0 : activeIndex + 1);
-            }
+            firstEnter = false;
+            activeIndex = e.shiftKey ? searchRanges.length - 1 : 0;
             highlightActiveRange(true);
           }
         } else {
@@ -5255,7 +5266,15 @@
     var resetBtn = document.createElement('button');
     resetBtn.className = 'oc-settings-reset-btn';
     resetBtn.setAttribute('data-oc-key', 'reset');
-    resetBtn.appendChild(document.createTextNode('↺ ' + i18n.resetBtn));
+    // The ↺ glyph is decorative. Left as a bare text node, it becomes part of the
+    // button's accessible name (a screen reader would announce something like "circled
+    // anticlockwise arrow Reset") — wrap it in its own aria-hidden span so the accessible
+    // name is just "Reset", matching i18n.resetBtn.
+    var resetBtnGlyph = document.createElement('span');
+    resetBtnGlyph.setAttribute('aria-hidden', 'true');
+    resetBtnGlyph.textContent = '↺ ';
+    resetBtn.appendChild(resetBtnGlyph);
+    resetBtn.appendChild(document.createTextNode(i18n.resetBtn));
     resetBtn.addEventListener('click', function () {
       settings.effect = 'hud';
       settings.position = 'tr';
@@ -7259,8 +7278,12 @@
         // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
         // that is already on screen has to be rescanned immediately, or its dim
         // highlights/counts stay stuck showing the mode that was active when it was last
-        // scanned instead of the one now in effect.
-        if (performanceModeChanged && workListTerms.length > 0) {
+        // scanned instead of the one now in effect. Gated on wrap (oculist-l6m.18): with
+        // the bar closed there is no chip row/count on screen to go stale, so paying a
+        // full buildPageIndex() rescan here bought nothing. The guard is also redundant in
+        // practice: __ocDestroy resets workListTerms, so wrap === null implies the length
+        // check below already fails. settings[...] above is updated regardless of this guard.
+        if (wrap && performanceModeChanged && workListTerms.length > 0) {
           performListSearch();
         }
       }
