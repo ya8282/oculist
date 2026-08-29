@@ -387,6 +387,62 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     }
   });
 
+  test('full mode renders all 3 ring hue offsets in DOM order, each paired with its matching WAAPI end scale', async () => {
+    // 'default' palette passes settings.beaconColor straight through unchanged
+    // (getEffectiveColors()) — read the real persisted value rather than hardcoding it.
+    const before = await getPersistedSettings();
+    const baseBeacon = before.beaconColor || '#fbbf24';
+    assert.strictEqual(
+      (before.visionSettings && before.visionSettings.colorPalette) || 'default',
+      'default',
+      'sanity check: this test must start from the default palette'
+    );
+
+    // Establish full mode explicitly instead of assuming it from execution order: this
+    // test must stand on its own even if a future reorder or filtered run means it's no
+    // longer the first thing in the file to touch performanceMode.
+    const wasLiteMode = !!before.performanceMode;
+    if (wasLiteMode) {
+      await setSettings({ performanceMode: false });
+    }
+
+    try {
+      await replay();
+      assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 3, 'full mode must render all 3 rings');
+
+      // Full mode must still render exactly the three -22/0/+22 offsets (not a collapsed
+      // subset) so the Lite Mode fix in the next test can't silently regress the non-Lite
+      // path. Compared in DOM order (not sorted): sorting would hide a swap in ring append
+      // order, which is exactly the blind spot the paired end-scale assertion below is
+      // designed to catch.
+      const fullOffsets = (await ringHueOffsets()).map(Number);
+      assert.deepStrictEqual(
+        fullOffsets,
+        [-22, 0, 22],
+        `full mode must render the three hue offsets in DOM order, got ${JSON.stringify(fullOffsets)}`
+      );
+      assertColorsMatch(await ringColors(), expectedRingHexes(baseBeacon));
+
+      // Pair each hue offset with its ring's WAAPI end scale, in DOM order. Comparing the
+      // zipped (offset, endScale) pairs — rather than asserting the two arrays separately —
+      // is deliberate: it is the only assertion that catches a ring whose hue offset and end
+      // scale came from mismatched positions in content.js's source arrays (e.g. -22 paired
+      // with 24.5 instead of 18, as happens if ringHueOffsets and ringEndScales are both
+      // reversed) while every individual offset and every individual end scale still exists
+      // somewhere on the page.
+      const fullEndScales = await ringEndScales();
+      assert.deepStrictEqual(
+        fullOffsets.map((offset, i) => [offset, fullEndScales[i]]),
+        [[-22, 18], [0, 21], [22, 24.5]],
+        `full mode must pair each hue offset with its matching end scale in DOM order, got offsets=${JSON.stringify(fullOffsets)} endScales=${JSON.stringify(fullEndScales)}`
+      );
+    } finally {
+      if (wasLiteMode) {
+        await setSettings({ performanceMode: true });
+      }
+    }
+  });
+
   test('Lite Mode drops the ring count from 3 to 1, and the surviving ring sits on the base (0) hue', async () => {
     // 'default' palette passes settings.beaconColor straight through unchanged
     // (getEffectiveColors()) — read the real persisted value rather than hardcoding it.
@@ -400,32 +456,6 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
 
     await replay();
     assert.strictEqual(await page.locator('.oc-dispersion-ring').count(), 3, 'full mode must render all 3 rings');
-
-    // Full mode must still render exactly the three -22/0/+22 offsets (not a collapsed
-    // subset) so the Lite Mode fix below can't silently regress the non-Lite path. Compared
-    // in DOM order (not sorted): sorting would hide a swap in ring append order, which is
-    // exactly the blind spot the paired end-scale assertion below is designed to catch.
-    const fullOffsets = (await ringHueOffsets()).map(Number);
-    assert.deepStrictEqual(
-      fullOffsets,
-      [-22, 0, 22],
-      `full mode must render the three hue offsets in DOM order, got ${JSON.stringify(fullOffsets)}`
-    );
-    assertColorsMatch(await ringColors(), expectedRingHexes(baseBeacon));
-
-    // Pair each hue offset with its ring's WAAPI end scale, in DOM order. Comparing the
-    // zipped (offset, endScale) pairs — rather than asserting the two arrays separately —
-    // is deliberate: it is the only assertion that catches a ring whose hue offset and end
-    // scale came from mismatched positions in content.js's source arrays (e.g. -22 paired
-    // with 24.5 instead of 18, as happens if ringHueOffsets and ringEndScales are both
-    // reversed) while every individual offset and every individual end scale still exists
-    // somewhere on the page.
-    const fullEndScales = await ringEndScales();
-    assert.deepStrictEqual(
-      fullOffsets.map((offset, i) => [offset, fullEndScales[i]]),
-      [[-22, 18], [0, 21], [22, 24.5]],
-      `full mode must pair each hue offset with its matching end scale in DOM order, got offsets=${JSON.stringify(fullOffsets)} endScales=${JSON.stringify(fullEndScales)}`
-    );
 
     try {
       await setSettings({ performanceMode: true });
