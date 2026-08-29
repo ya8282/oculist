@@ -100,3 +100,4 @@
 {"id":"int-c2c19a041f16cecaa2e6e91e3bf340e7","kind":"field_change","created_at":"2026-08-29T02:17:19.960613Z","actor":"ya8282","issue_id":"oculist-0d2","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-e7c4237ed1bccfae3225ed59b7a735d8","kind":"field_change","created_at":"2026-08-29T04:17:26.025115Z","actor":"ya8282","issue_id":"oculist-aoz","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-f4503483305759f92d03a3c02947f6a8","kind":"field_change","created_at":"2026-08-29T04:27:14.454993Z","actor":"ya8282","issue_id":"oculist-ewf","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-56fc2adf3faa477af632ab6e0a585427","kind":"field_change","created_at":"2026-08-29T06:11:59.885167Z","actor":"ya8282","issue_id":"oculist-l6m.13","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
