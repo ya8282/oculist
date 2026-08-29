@@ -746,6 +746,15 @@
   var termRanges       = [];
   var termStarved      = [];
   var chipRow          = null;
+  // Bumped once per buildUI() call (oculist-3z6): loadWorkList()'s async callback there
+  // closes over the mount id it was issued for, so a callback that is still in flight when
+  // the overlay closes AND reopens (its own chrome.storage.session.get() outrun by the
+  // close/reopen cycle under load) can tell it belongs to a torn-down mount even though
+  // wrapRoot/chipRow are non-null again (pointing at the NEW mount) by the time it fires.
+  // Without this, that stale callback's `if (!wrapRoot || !chipRow) return;` guard alone
+  // passes and it overwrites the new mount's just-restored workListTerms/termRanges with
+  // its own stale data.
+  var mountGeneration  = 0;
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
@@ -5775,6 +5784,9 @@
   }
 
   function buildUI() {
+    mountGeneration += 1;
+    var ownMountGeneration = mountGeneration;
+
     wrap = document.createElement('div');
     wrap.id = 'oc-wrap';
     wrapRoot = wrap.attachShadow({ mode: 'open' });
@@ -5883,7 +5895,11 @@
     loadWorkList(function (list) {
       // A rapid close before this callback lands would have already torn wrapRoot/chipRow
       // down; __ocDestroy() also resets workListTerms/activeTermIndex, so skip stale data.
-      if (!wrapRoot || !chipRow) return;
+      // The mountGeneration check catches the further case (oculist-3z6) where the overlay
+      // was ALSO reopened before this call landed: wrapRoot/chipRow are non-null again by
+      // then, but they belong to a newer mount whose own loadWorkList() call already
+      // restored the real list — this stale one must not clobber it.
+      if (!wrapRoot || !chipRow || ownMountGeneration !== mountGeneration) return;
       workListTerms = list.terms;
       activeTermIndex = list.activeIndex;
       // No scan has run against this term set yet, so termRanges must not carry over any

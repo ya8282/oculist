@@ -95,6 +95,8 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     for (let attempt = 0; attempt < 20; attempt++) {
       await pg.keyboard.press('Control+f');
       try {
+        // Intentional unscaled sub-poll: the scaled waitForSelector below surfaces
+        // the real timeout error if all 20 attempts fail.
         await pg.waitForSelector(INPUT, { timeout: 250 });
         return;
       } catch (e) {

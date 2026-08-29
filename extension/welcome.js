@@ -419,7 +419,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 4. Full effects
-    if (effect === 'laser') {
+    // `effect` is the value of #preview-effect, which uses the real
+    // extension/content.js effectsRegistry keys (hud/iris/sweep/...). Only a
+    // subset of keys have a dedicated preview branch below; any other key
+    // (including real registry keys like iris/dispersion/trail/speedlines/
+    // chrono/cybervision that have no bespoke preview yet) falls through to
+    // the generic spotlight-ring preview in the `else` branch. This preview
+    // is never persisted to settings.effect (see saveProfileAndFinish).
+    if (effect === 'hud') {
       const container = document.createElement('div');
       container.className = 'oc-mockup-beacon';
       container.style.cssText = `
@@ -447,7 +454,7 @@ document.addEventListener('DOMContentLoaded', () => {
         { transform: 'scaleX(1)', opacity: 1, offset: 0.85 },
         { transform: 'scaleX(0)', opacity: 0 }
       ], { duration: duration(1000), fill: 'forwards' });
-    } else if (effect === 'warp') {
+    } else if (effect === 'sweep') {
       const container = document.createElement('div');
       container.className = 'oc-mockup-beacon';
       container.style.cssText = `

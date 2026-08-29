@@ -107,6 +107,8 @@ describe('List menu popover (saved lists UI)', () => {
     for (let attempt = 0; attempt < 20; attempt++) {
       await page.keyboard.press('Control+f');
       try {
+        // Intentional unscaled sub-poll: the scaled waitForSelector below surfaces
+        // the real timeout error if all 20 attempts fail.
         await page.waitForSelector(INPUT, { timeout: 250 });
         return;
       } catch (e) {
