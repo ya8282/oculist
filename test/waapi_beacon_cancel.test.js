@@ -368,6 +368,17 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
     try {
       await setSettings({ effect: 'hud' });
       await setVisionSettings({ magnifier: true });
+      // visionSettings is one of content.js's OVERLAY_AFFECTING_KEYS, so with an active
+      // match already selected (this suite's shared before() plus every WAAPI_EFFECTS test
+      // ahead of this one), turning the magnifier on above synchronously redraws it via
+      // repositionActiveOverlays() right there in the onChanged handler - before fireBeacon()
+      // below ever presses Enter. Left in place, that incidental draw is enough to satisfy
+      // fireBeacon()'s own `.oc-beacon` wait, and the test proceeds to cancel while Enter's
+      // own (deliberately setTimeout-delayed, see fireBeacon()'s comment) redraw is still
+      // pending - which then fires after cancelBeacons() below and resurrects the card.
+      // Clearing it here guarantees the beacon fireBeacon() waits for is the one Enter
+      // itself produces, not this unrelated settings-change side effect.
+      await cancelBeaconsMidFlight();
       await fireBeacon();
       await page.waitForSelector('#oc-active-match-magnifier', { timeout: POLL_TIMEOUT });
 
