@@ -2,13 +2,12 @@
 // a tint/scanline wash, a bright bar sweeping the full viewport height, a per-column
 // staggered thermal false-colour grid over the match, and four corner brackets snapping
 // inward onto the match then holding and fading, with a decorative readout beside them.
-// Second of the two DOM/WAAPI effects in the oculist-dvt epic (Light Cycle was the first —
-// see light_cycle.test.js, which this file mirrors structurally: one context, one finder
+// One of the DOM/WAAPI effects in the oculist-dvt epic: one context, one finder
 // session kept open across all tests, settings changed via direct chrome.storage.sync
 // writes, and no test-side requestAnimationFrame poller ever competing with the effect's
 // own WAAPI schedule.
 //
-// Needs a real browser for the same reasons as light_cycle.test.js / trail_effect.test.js:
+// Needs a real browser for the same reasons as trail_effect.test.js:
 // real layout, real WAAPI, real Accessibility tree, and Lite Mode can only be toggled for
 // real through chrome.storage.sync.
 
@@ -151,10 +150,9 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       });
   }
 
-  // Same reasoning as light_cycle.test.js's armSettingsEcho/waitForSettingsEcho/setSettings
-  // trio: chrome.storage.onChanged fires listeners in registration order, so observing our
-  // own probe listener fire is a direct proxy for content.js's own listener (registered
-  // earlier, at page load) having already applied the change.
+  // chrome.storage.onChanged fires listeners in registration order, so observing our own
+  // probe listener fire is a direct proxy for content.js's own listener (registered earlier,
+  // at page load) having already applied the change.
   async function armSettingsEcho() {
     return evalInContentScript(`
       (function () {
@@ -225,9 +223,9 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   // exact moment each bracket's own keyframes (offset: 0.3) reach translate(0,0), i.e. fully
   // snapped in and holding, before their later fade-out. Not a guessed timeout: it is real
   // math derived from this run's own scheduled durations, so it cannot race the WAAPI
-  // schedule it is reporting on. This is a completion signal only (mirrors
-  // lightCycleRunInDone); it says nothing about whether the geometry itself is correct,
-  // which the caller must still verify independently.
+  // schedule it is reporting on. This is a completion signal only; it says nothing
+  // about whether the geometry itself is correct, which the caller must still verify
+  // independently.
   async function waitForBracketsSettled() {
     await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === true, {
       timeout: POLL_TIMEOUT,
@@ -412,9 +410,9 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     assert.strictEqual(axNode.name, undefined, `expected the readout to carry no computed accessible name, got ${JSON.stringify(axNode.name)}`);
   });
 
-  // Deliberately does not press Escape (unlike light_cycle.test.js's cancellation test) —
-  // no test after this one needs the finder to stay open, and replay()'s own beacon-clear
-  // step already exercises the ordinary self-removal path this test is verifying.
+  // Deliberately does not press Escape — no test after this one needs the finder to stay
+  // open, and replay()'s own beacon-clear step already exercises the ordinary self-removal
+  // path this test is verifying.
   test('every .oc-beacon element is removed once the effect finishes (no leak)', async () => {
     await replay();
     const initialCount = await page.locator('.oc-beacon').count();

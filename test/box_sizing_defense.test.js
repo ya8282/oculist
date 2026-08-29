@@ -10,29 +10,19 @@
 // The fix pins an explicit 'box-sizing:content-box' in the cssText of every beacon element
 // whose geometry depends on it (see content.js's per-element comments), so host-page CSS can
 // never re-interpret their box model regardless of what the host page does. This test proves
-// that fix by rendering the SAME beacons on two otherwise-identical fixture pages — one with
+// that fix by rendering the SAME beacon on two otherwise-identical fixture pages — one with
 // a realistic (no !important) border-box reset, one without — and asserting the rendered
 // geometry is identical either way. It must fail on unfixed code (verified by temporarily
-// reverting the content.js fix and re-running this file alone: both the brackets and the
-// Light Cycle box render up to 2 * (number of border sides) px smaller/differently-positioned
-// under the reset without the fix).
+// reverting the content.js fix and re-running this file alone: the brackets render up to
+// 2 * (number of border sides) px smaller/differently-positioned under the reset without the
+// fix).
 //
-// Two beacon effects are exercised, both independently selectable via settings.effect and
-// both audited to need the fix:
-//   - Cyber-Vision's four targeting brackets (content.js:2856-2863): the exact geometry
-//     reported by the oculist-dvt.4 re-reviewer. Checked via getBoundingClientRect() once
-//     content.js's own cyberVisionBracketsSettled flag confirms each bracket has finished its
-//     snap-in keyframe and is holding at transform: translate(0,0) — mirrors cyber_vision.
-//     test.js's own waitForBracketsSettled() timing, which is not a guess: it is real math
-//     derived from this run's own scheduled BRACKET_DELAY/BRACKET_DUR.
-//   - Light Cycle's snap-around box (content.js:2635-2647, '.oc-lightcycle-box'): a second,
-//     independently-selectable effect that also sets width/height alongside a border. Its own
-//     WAAPI animation drives an opacity/scale keyframe on top of the static box model (so its
-//     getBoundingClientRect is not a stable read at an arbitrary instant), but offsetWidth/
-//     offsetHeight/offsetLeft/offsetTop reflect the *layout box* the browser computed before
-//     any transform is applied and are unaffected by that animation — exactly the box-model
-//     quantity box-sizing changes, and available synchronously the moment the element exists,
-//     with no settle-wait required.
+// Cyber-Vision's four targeting brackets (content.js:2856-2863) are exercised: the exact
+// geometry reported by the oculist-dvt.4 re-reviewer. Checked via getBoundingClientRect() once
+// content.js's own cyberVisionBracketsSettled flag confirms each bracket has finished its
+// snap-in keyframe and is holding at transform: translate(0,0) — mirrors cyber_vision.
+// test.js's own waitForBracketsSettled() timing, which is not a guess: it is real math
+// derived from this run's own scheduled BRACKET_DELAY/BRACKET_DUR.
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -43,7 +33,7 @@ const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('.
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
-// #target is the text the finder searches for and both beacons fire on.
+// #target is the text the finder searches for and the beacon fires on.
 function buildPage(withBorderBoxReset) {
   const reset = withBorderBoxReset
     ? '<style>html, body, *, *::before, *::after { box-sizing: border-box; }</style>'
@@ -51,12 +41,11 @@ function buildPage(withBorderBoxReset) {
   return `<!doctype html><meta charset="utf-8">
 ${reset}
 <style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; background:#06080D; color:#ccc; }</style>
-<p>${'filler words to fill the page and give both beacons room to render. '.repeat(30)} <span id="target">trapezohedron</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
+<p>${'filler words to fill the page and give the beacon room to render. '.repeat(30)} <span id="target">trapezohedron</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
 }
 
 const INPUT = '#oc-wrap >> .oc-input';
 const BRACKET = '.oc-cv-bracket';
-const LIGHTCYCLE_BOX = '.oc-lightcycle-box';
 const SEARCH_TERM = 'trapezohedron';
 
 describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)', () => {
@@ -78,8 +67,8 @@ describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)'
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
-  // Renders both audited beacons on a fresh, isolated persistent context navigated to `url`,
-  // and returns their real rendered geometry. Each call gets its own browser context (not
+  // Renders the audited beacon on a fresh, isolated persistent context navigated to `url`,
+  // and returns its real rendered geometry. Each call gets its own browser context (not
   // shared across the two fixture pages) so nothing about one page's chrome.storage.sync
   // state, DOM, or timing can bleed into the other's measurement.
   async function measureGeometry(url) {
@@ -210,7 +199,6 @@ describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)'
         { timeout: POLL_TIMEOUT }
       );
 
-      // 1. Cyber-Vision brackets.
       await replay();
       await page.waitForSelector(BRACKET, { timeout: POLL_TIMEOUT });
       await waitForBracketsSettled();
@@ -231,32 +219,13 @@ describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)'
         `sanity check: expected exactly 4 corner brackets, got ${bracketGeometry.brackets.length}`
       );
 
-      // 2. Light Cycle box — a second, independently-selectable effect (settings.effect =
-      // 'lightcycle') that also needs the fix. offsetWidth/offsetHeight/offsetLeft/offsetTop
-      // read the static layout box (unaffected by the element's own WAAPI transform
-      // animation), so no settle-wait is needed: they are correct the instant the element
-      // exists.
-      await setSettings({ effect: 'lightcycle' });
-      await replay();
-      await page.waitForSelector(LIGHTCYCLE_BOX, { timeout: POLL_TIMEOUT });
-
-      const boxGeometry = await page.evaluate((sel) => {
-        const el = document.querySelector(sel);
-        return {
-          offsetWidth: el.offsetWidth,
-          offsetHeight: el.offsetHeight,
-          offsetLeft: el.offsetLeft,
-          offsetTop: el.offsetTop,
-        };
-      }, LIGHTCYCLE_BOX);
-
-      return { bracketGeometry, boxGeometry };
+      return { bracketGeometry };
     } finally {
       await ctx.close();
     }
   }
 
-  test('Cyber-Vision bracket and Light Cycle box geometry is identical with and without a host-page box-sizing:border-box reset', async () => {
+  test('Cyber-Vision bracket geometry is identical with and without a host-page box-sizing:border-box reset', async () => {
     // Sequential, not parallel: two full browser contexts + extensions competing for the
     // same CPU is exactly the kind of contention the oculist-li8 flake note warns about, and
     // this test has no need to race them against each other.
@@ -289,17 +258,6 @@ describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)'
             `box-sizing (bracket ${i} full rects: without-reset=${JSON.stringify(b1)}, with-reset=${JSON.stringify(b2)})`
         );
       }
-    }
-
-    for (const key of ['offsetWidth', 'offsetHeight', 'offsetLeft', 'offsetTop']) {
-      assert.strictEqual(
-        withoutReset.boxGeometry[key],
-        withReset.boxGeometry[key],
-        `Light Cycle box's ${key} differs between the plain fixture (${withoutReset.boxGeometry[key]}) and the ` +
-          `border-box-reset fixture (${withReset.boxGeometry[key]}) — its geometry must be identical regardless of ` +
-          `host-page box-sizing (full: without-reset=${JSON.stringify(withoutReset.boxGeometry)}, ` +
-          `with-reset=${JSON.stringify(withReset.boxGeometry)})`
-      );
     }
   });
 });
