@@ -261,6 +261,107 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     );
   });
 
+  // Centre-line highlight (oculist-s0t): a persistent horizontal locator at the match's own
+  // vertical centre, on top for the effect's full duration. Same independent-truth approach
+  // as the anchor test above — content.js's own lastSpeedLinesHighlightY hook is graded
+  // against the match's real rendered position via elementCenterInContainer, not against
+  // any other value content.js reports about itself.
+  test("the centre-line highlight renders at the match's vertical centre, verified independently", async () => {
+    await replay();
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
+      timeout: POLL_TIMEOUT,
+      message: 'speed lines never rendered its first frames',
+    });
+
+    const highlightY = await evalInContentScript('window.__ocTest.lastSpeedLinesHighlightY');
+    const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
+
+    assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
+    const dy = Math.abs(highlightY - independent.y);
+    assert.ok(
+      dy <= ANCHOR_TOLERANCE,
+      `expected the centre-line highlight to sit at the match's real rendered vertical centre within ${ANCHOR_TOLERANCE}px; ` +
+        `highlightY=${highlightY}, independent=${JSON.stringify(independent)} (dy=${dy}px)`
+    );
+  });
+
+  // Persistence: the highlight must be part of every single frame from the effect's start to
+  // its finish, not just an early flourish that fades with the burst. speedLinesFrameCount
+  // and speedLinesHighlightDrawCount are incremented together, once per real frame, from the
+  // same frame() call in content.js — so if they still match at both an early sample and the
+  // final (speedLinesDone) sample, the highlight drew on literally every frame in between,
+  // with no separate rAF race or pixel sample needed. Both counters in a sample are read with
+  // a single evalInContentScript round trip (not two) so the effect's own rAF loop cannot
+  // advance a frame in between the two reads and manufacture a false mismatch.
+  async function readFrameAndDrawCounts() {
+    return evalInContentScript(
+      '({ frames: window.__ocTest.speedLinesFrameCount, draws: window.__ocTest.speedLinesHighlightDrawCount })'
+    );
+  }
+
+  test('the centre-line highlight persists for the full effect duration, not just a moment', async () => {
+    await replay();
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
+      timeout: POLL_TIMEOUT,
+      message: 'speed lines never rendered its first frames',
+    });
+    const early = await readFrameAndDrawCounts();
+    assert.strictEqual(
+      early.draws,
+      early.frames,
+      `expected the highlight to have drawn on every frame so far; frames=${early.frames}, highlightDraws=${early.draws}`
+    );
+
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesDone', (v) => v === true, {
+      timeout: LONG_TIMEOUT,
+      message: 'speed lines beacon never reached its final frame',
+    });
+    const late = await readFrameAndDrawCounts();
+    assert.ok(
+      late.frames > early.frames,
+      `sanity check: expected more frames to have run by completion than at the early sample; early=${early.frames}, late=${late.frames}`
+    );
+    assert.strictEqual(
+      late.draws,
+      late.frames,
+      `expected the highlight to still be drawing on every frame through to completion, not fading out early; frames=${late.frames}, highlightDraws=${late.draws}`
+    );
+  });
+
+  // Lite Mode drops the streak count and the tier-2 bloom halos, but the centre-line
+  // highlight is the accessibility locator itself, not decoration — it must stay, just
+  // without its own soft-glow pass.
+  test('Lite Mode still draws the centre-line highlight on every frame', async () => {
+    try {
+      await setSettings({ performanceMode: true });
+      await replay();
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesDone', (v) => v === true, {
+        timeout: LONG_TIMEOUT,
+        message: 'speed lines beacon never reached its final frame in Lite Mode',
+      });
+      const frames = await evalInContentScript('window.__ocTest.speedLinesFrameCount');
+      const draws = await evalInContentScript('window.__ocTest.speedLinesHighlightDrawCount');
+      assert.ok(frames > 0, 'sanity check: expected at least one frame to have rendered in Lite Mode');
+      assert.strictEqual(
+        draws,
+        frames,
+        `expected the highlight to draw on every frame in Lite Mode too; frames=${frames}, highlightDraws=${draws}`
+      );
+
+      const highlightY = await evalInContentScript('window.__ocTest.lastSpeedLinesHighlightY');
+      const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
+      assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
+      const dy = Math.abs(highlightY - independent.y);
+      assert.ok(
+        dy <= ANCHOR_TOLERANCE,
+        `expected the Lite Mode highlight to still sit at the match's real vertical centre within ${ANCHOR_TOLERANCE}px; ` +
+          `highlightY=${highlightY}, independent=${JSON.stringify(independent)} (dy=${dy}px)`
+      );
+    } finally {
+      await setSettings({ performanceMode: false });
+    }
+  });
+
   test('Lite Mode draws materially fewer streaks than full mode', async () => {
     await replay();
     const fullCount = await evalInContentScript('window.__ocTest.lastSpeedLinesStreakCount');

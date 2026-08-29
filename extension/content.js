@@ -2270,6 +2270,11 @@
     // test/helpers/effect_anchor.js) rather than only ever checking this effect's
     // internals for self-consistency (oculist-dvt.7).
     window.__ocTest.lastSpeedLinesAnchor = { matchX: vpCx, matchY: offsetY };
+    // Set again every frame below at the exact point the centre-line highlight is actually
+    // drawn (so a mutation to that draw call's y is caught), but initialised here too so it
+    // is never momentarily undefined before the first rAF callback runs.
+    window.__ocTest.lastSpeedLinesHighlightY = offsetY;
+    window.__ocTest.speedLinesHighlightDrawCount = 0;
     window.__ocTest.speedLinesDone = false;
 
     var DUR = getBeaconDuration(760);
@@ -2339,6 +2344,35 @@
           ctx.fillRect(x0, L.y - L.thick * 2.2, x1 - x0, L.thick * 4.4);
         }
       }
+
+      // Persistent centre-line: a thin bright horizontal beam at the match's own vertical
+      // centre, spanning the full canvas width — an accessibility locator so the eye always
+      // has one fixed thing to land on while the streak field rushes past. Unlike everything
+      // above, it does not ride `env` (the burst impulse envelope): it draws at a constant
+      // alpha every frame from the effect's first frame to its last, the same full duration
+      // the frame loop itself runs for, rather than spiking and decaying with the burst.
+      // Evokes animateAnimeLaser's sheath/core beam pair, just calmer and full-width so it
+      // reads as a through-line rather than another burst. `highlightY` is a single local
+      // variable feeding both the actual draw calls below and the lastSpeedLinesHighlightY
+      // test hook, so the two can never drift apart the way a hook copied from a different
+      // expression could — a test can grade this against the match's own
+      // independently-observed rendered position the same way lastSpeedLinesAnchor already
+      // is (test/helpers/effect_anchor.js, oculist-dvt.7). speedLinesHighlightDrawCount
+      // increments unconditionally alongside it, every frame in both Lite and full mode, so
+      // a test can prove the line keeps drawing for the run's full length rather than only
+      // at the start, without racing the canvas for a pixel sample.
+      var highlightThick = 2;
+      var highlightY = offsetY;
+      window.__ocTest.lastSpeedLinesHighlightY = highlightY;
+      window.__ocTest.speedLinesHighlightDrawCount++;
+      // Lite Mode drops the soft glow pass (same call as the streak bloom halos above) but
+      // keeps the core line itself — it IS the accessibility aid, not decoration.
+      if (!settings.performanceMode) {
+        ctx.fillStyle = hexToRgba(color, 0.14);
+        ctx.fillRect(0, highlightY - highlightThick * 4, W, highlightThick * 8);
+      }
+      ctx.fillStyle = hexToRgba(color, 0.6);
+      ctx.fillRect(0, highlightY - highlightThick / 2, W, highlightThick);
 
       // flare at the source
       var fl = env * 0.9;
