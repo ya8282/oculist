@@ -170,6 +170,47 @@ describe('Oculist Preference Panel Tests', () => {
       assert.ok(colorsFieldDesc.includes('Interactive effect colors'), 'Should describe section as Interactive effect colors');
     });
 
+    // oculist-l6m.18: the reset button's decorative '↺' glyph must not leak into its
+    // accessible name. There is no full accessible-name computation available under
+    // JSDOM, so this approximates the browser algorithm just enough for this case:
+    // concatenate text content while skipping any descendant marked aria-hidden="true" —
+    // exactly the exclusion a screen reader itself applies.
+    function accessibleNameExcludingHidden(el) {
+      var text = '';
+      el.childNodes.forEach((node) => {
+        if (node.nodeType === 3) {
+          text += node.textContent;
+        } else if (node.nodeType === 1 && node.getAttribute('aria-hidden') !== 'true') {
+          text += accessibleNameExcludingHidden(node);
+        }
+      });
+      return text;
+    }
+
+    test('Reset button accessible name excludes the decorative glyph', () => {
+      createDOMEnvironment();
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrapRoot = global.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+
+      const resetBtn = wrapRoot.querySelector('.oc-settings-reset-btn');
+      assert.ok(resetBtn, 'Reset button should exist in the settings panel');
+      assert.ok(resetBtn.textContent.includes('↺'), 'the glyph should still render visually');
+
+      const accessibleName = accessibleNameExcludingHidden(resetBtn).trim();
+      assert.strictEqual(accessibleName, 'Reset', 'the glyph must not leak into the button\'s accessible name');
+      assert.ok(
+        !resetBtn.hasAttribute('aria-label') || !resetBtn.getAttribute('aria-label').includes('↺'),
+        'if an aria-label is used instead, it must not include the glyph either'
+      );
+    });
+
     test('Should intercept Cmd+G, Ctrl+G, and F3 to prevent browser find and trigger findNext in content.js', () => {
       createDOMEnvironment();
 
