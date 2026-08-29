@@ -45,7 +45,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -172,7 +172,7 @@ describe('Settings panel at a 600px viewport (oculist-6cd): the whole panel, not
     for (let attempts = 0; attempts < 5 && (await page.locator('#oc-wrap').count()) > 0; attempts++) {
       await page.keyboard.press('Escape').catch(() => {});
       await page
-        .waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 300 })
+        .waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 300 * TIMEOUT_SCALE })
         .catch(() => {});
     }
     await waitForOverlayClosed();
