@@ -30,10 +30,14 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 // offset (oculist-dvt.7) still fails it by two orders of magnitude.
 const ANCHOR_TOLERANCE = 2;
 
-// #target is the text the finder searches for and the beacon fires on.
+// #target is the text the finder searches for and the beacon fires on. The "before" filler
+// is repeated well past what the original geometry tests needed (30) so the match sits deep
+// enough in the document (docCenterY ~1000px+) that the oculist-3ak degenerate-geometry test
+// below can scroll it down to a viewport-relative position near the bottom of an 800px-tall
+// viewport — impossible with a page barely taller than the viewport itself.
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; background:#06080D; color:#ccc; }</style>
-<p>${'filler words to fill the page and give the light cycle room to run. '.repeat(30)} <span id="target">quarklet</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
+<p>${'filler words to fill the page and give the light cycle room to run. '.repeat(100)} <span id="target">quarklet</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
 
 const INPUT = '#oc-wrap >> .oc-input';
 const WALL = '.oc-lightcycle-wall';
@@ -264,6 +268,83 @@ describe('Light Cycle: a right-angle wall of light grows in toward the match, th
     } finally {
       // Reset to the shipped default so later tests in this file start from a known size.
       await setVisionSettings({ beaconSize: 'm' });
+    }
+  });
+
+  // Regression test for oculist-3ak (found reviewing oculist-dvt.8): the MIN_SEG_SEP guard
+  // around midYVp/finalYVp used to re-clamp its downward push back to window.innerHeight -
+  // 26 — exactly the bound that produced the near-zero gap — so for a match low enough in
+  // the viewport that midYVp is pinned there too, the push was a no-op and the connecting
+  // (middle, vertical) wall segment collapsed to a ~1px stub (Math.max(len, 1) below).
+  //
+  // The exact boundary (vpCy landing precisely where finalYVp === window.innerHeight - 26)
+  // is a knife-edge: Chrome's actual scrollY lands on an integer, so the realized vpCy is
+  // off by a fraction of a pixel from the target, and which side of the boundary it falls on
+  // determines whether the buggy branch even triggers (oculist-3ak review: -42 measured as
+  // vpCy=749.34 with scrollY=368, landing just outside the buggy window and passing
+  // vacuously against the unfixed guard). Target a vpCy a few px inside the buggy window
+  // instead of exactly on its edge, so sub-pixel scroll rounding can't push it out: solving
+  // vpCy + mh / 2 + 16 === window.innerHeight - 26 gives the boundary at -42; -46 lands ~4px
+  // further into the window with margin to spare in both directions.
+  test('a match low in the viewport does not collapse the middle wall segment into a stub', async () => {
+    const originalScrollY = await page.evaluate(() => window.scrollY);
+    try {
+      const desiredScrollY = await page.evaluate(() => {
+        const r = document.getElementById('target').getBoundingClientRect();
+        const mh = r.height;
+        const docCenterY = r.top + window.scrollY + mh / 2;
+        // -46 (rather than the -42 boundary) lands a few px inside the buggy window so
+        // integer scrollY rounding can't land the realized vpCy outside it either way.
+        const desiredVpCy = window.innerHeight - 46 - mh / 2;
+        return docCenterY - desiredVpCy;
+      });
+      await page.evaluate((y) => window.scrollTo(0, y), desiredScrollY);
+      await waitForCondition(
+        () => page.evaluate((y) => Math.abs(window.scrollY - y) < 1, desiredScrollY),
+        (landed) => landed,
+        { timeout: POLL_TIMEOUT, message: 'page never actually scrolled to the degenerate-geometry position' }
+      );
+
+      await replay();
+      await waitForRunInDone();
+
+      const rects = await page.evaluate((sel) => {
+        return Array.from(document.querySelectorAll(sel)).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { index: Number(el.getAttribute('data-oc-lc-index')), width: r.width, height: r.height };
+        });
+      }, WALL);
+
+      assert.ok(rects.length >= 3, `sanity check: expected at least 3 wall segments in full mode, got ${rects.length}`);
+
+      // MIN_SEG_SEP is 12px; the fixed guard should land the connecting segment at (or very
+      // near) that floor for this degenerate config, comfortably above the ~1px stub the old
+      // no-op guard produced. 8px leaves headroom for pixel rounding while still failing hard
+      // against the old stub.
+      const MIN_MEANINGFUL_LEN = 8;
+      for (const r of rects) {
+        const len = Math.max(r.width, r.height);
+        assert.ok(
+          len >= MIN_MEANINGFUL_LEN,
+          `expected every wall segment to have a real length (>= ${MIN_MEANINGFUL_LEN}px) even for a match low in the viewport; got width=${r.width}, height=${r.height}`
+        );
+      }
+
+      // fullPts is [ (entryXVp,midYVp), (turnXVp,midYVp), (turnXVp,finalYVp), (vpCx,finalYVp) ],
+      // so segment index 1 — (turnXVp,midYVp) to (turnXVp,finalYVp) — is the vertical
+      // connecting segment between midYVp and finalYVp that the old guard's no-op re-clamp
+      // collapsed to a stub. Identify it directly by its data-oc-lc-index rather than relying
+      // on the all-segments loop above alone, so a regression in exactly this segment can't
+      // hide behind other segments' lengths.
+      const middleSegment = rects.find((r) => r.index === 1);
+      assert.ok(middleSegment, `expected a wall segment with data-oc-lc-index="1" (the middle connecting segment); got indices ${rects.map((r) => r.index)}`);
+      const middleLen = Math.max(middleSegment.width, middleSegment.height);
+      assert.ok(
+        middleLen >= MIN_MEANINGFUL_LEN,
+        `expected the middle connecting wall segment (index 1) to have a real length (>= ${MIN_MEANINGFUL_LEN}px); got width=${middleSegment.width}, height=${middleSegment.height}`
+      );
+    } finally {
+      await page.evaluate((y) => window.scrollTo(0, y), originalScrollY);
     }
   });
 

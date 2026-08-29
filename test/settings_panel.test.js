@@ -170,6 +170,47 @@ describe('Oculist Preference Panel Tests', () => {
       assert.ok(colorsFieldDesc.includes('Interactive effect colors'), 'Should describe section as Interactive effect colors');
     });
 
+    // oculist-l6m.18: the reset button's decorative '↺' glyph must not leak into its
+    // accessible name. There is no full accessible-name computation available under
+    // JSDOM, so this approximates the browser algorithm just enough for this case:
+    // concatenate text content while skipping any descendant marked aria-hidden="true" —
+    // exactly the exclusion a screen reader itself applies.
+    function accessibleNameExcludingHidden(el) {
+      var text = '';
+      el.childNodes.forEach((node) => {
+        if (node.nodeType === 3) {
+          text += node.textContent;
+        } else if (node.nodeType === 1 && node.getAttribute('aria-hidden') !== 'true') {
+          text += accessibleNameExcludingHidden(node);
+        }
+      });
+      return text;
+    }
+
+    test('Reset button accessible name excludes the decorative glyph', () => {
+      createDOMEnvironment();
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrapRoot = global.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+
+      const resetBtn = wrapRoot.querySelector('.oc-settings-reset-btn');
+      assert.ok(resetBtn, 'Reset button should exist in the settings panel');
+      assert.ok(resetBtn.textContent.includes('↺'), 'the glyph should still render visually');
+
+      const accessibleName = accessibleNameExcludingHidden(resetBtn).trim();
+      assert.strictEqual(accessibleName, 'Reset', 'the glyph must not leak into the button\'s accessible name');
+      assert.ok(
+        !resetBtn.hasAttribute('aria-label') || !resetBtn.getAttribute('aria-label').includes('↺'),
+        'if an aria-label is used instead, it must not include the glyph either'
+      );
+    });
+
     test('Should intercept Cmd+G, Ctrl+G, and F3 to prevent browser find and trigger findNext in content.js', () => {
       createDOMEnvironment();
 
@@ -372,7 +413,7 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(markersAfterClear.length, 0, 'Viewport shape markers should be cleared once the search is emptied');
     });
 
-    test('A settings.effect value for a removed effect (e.g. the deleted Lens) still renders a working beacon via the post-boot storage.onChanged sync path (oculist-e9u)', async () => {
+    test('A settings.effect value for a removed effect (e.g. the deleted Lens) still renders a working beacon via animate()\'s own fallback (oculist-e9u)', async () => {
       const dom = createDOMEnvironment();
       const document = global.document;
       document.body.innerHTML = '';
@@ -381,23 +422,17 @@ describe('Oculist Preference Panel Tests', () => {
       p1.textContent = 'orphan beacon target';
       document.body.appendChild(p1);
 
-      // Boot with a *valid* effect. The boot-time coercion
-      // (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`, content.js:6122)
-      // would silently rewrite a stale key like 'lens' before boot() ever runs, so booting
-      // with one here means that coercion cannot be what's carrying this test.
+      // Boot with a valid effect. Both the boot-time coercion
+      // (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
+      // storage.onChanged guard added by oculist-7z3 normalise a stale/removed key back to
+      // 'hud' before animate() ever sees it, so there is no longer a route from outside this
+      // closure that leaves settings.effect holding a bogus key at animate()-time. Reaching
+      // animate()'s own fallback (effectsRegistry[effectKey] || effectsRegistry.hud) now
+      // requires writing settings.effect directly via the window.__ocTest.setEffectKey hook,
+      // after boot, bypassing every guard on purpose (see that hook's comment for why).
       global.chrome.storage.sync.get = (key, cb) => cb({
         'oc-settings': { effect: 'hud' }
       });
-
-      // Capture the listener content.js registers via chrome.storage.onChanged.addListener
-      // so it can be fired manually below, after boot. That listener's SETTINGS_KEYS.forEach
-      // (content.js:6062-6069) applies `settings[k] = nv[k]` for every key, including
-      // `effect`, with no registry guard — it is the only route by which settings.effect can
-      // actually hold a stale/removed key like 'lens' at animate()-time, which is what makes
-      // the animate()-time fallback (effectsRegistry[effectKey] || effectsRegistry.hud,
-      // content.js:2589) the thing this test pins.
-      let onChangedListener;
-      global.chrome.storage.onChanged.addListener = (fn) => { onChangedListener = fn; };
 
       const codePath = path.join(__dirname, '../extension/content.js');
       const code = fs.readFileSync(codePath, 'utf8');
@@ -415,10 +450,10 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(countEl.textContent.trim(), '1 of 1', 'Should find the single match in content.js');
 
       // Simulate a settings payload persisted before an effect was removed from the
-      // registry (e.g. Lens, oculist-e9u) landing post-boot from elsewhere (popup, another
-      // tab, or a direct chrome.storage.sync.set()) via chrome.storage.onChanged.
-      assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
-      onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
+      // registry (e.g. Lens, oculist-e9u) still being in memory at animate()-time, bypassing
+      // the onChanged guard the way a bug in some other future call site might.
+      assert.strictEqual(typeof global.window.__ocTest.setEffectKey, 'function', 'content.js should expose the setEffectKey test hook');
+      global.window.__ocTest.setEffectKey('lens');
 
       // The beacon only fires on an explicit navigation (findNext), not on the initial
       // search — mirrors how trail_effect.test.js's replay() drives it via Enter too.
@@ -457,7 +492,8 @@ describe('Oculist Preference Panel Tests', () => {
       assert.ok(wrapRoot.querySelector('#oc-settings-panel'), 'Settings panel should be open before the storage change lands');
 
       // Simulate a stale/removed effect key (e.g. the deleted Lens, oculist-e9u) arriving
-      // post-boot via chrome.storage.onChanged, same mechanism as the test above.
+      // post-boot via chrome.storage.onChanged — the guard this test targets, unlike the
+      // oculist-e9u test above which now bypasses this path via __ocTest.setEffectKey.
       assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
       onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
 
@@ -473,6 +509,65 @@ describe('Oculist Preference Panel Tests', () => {
       const activeRows = effectRows.filter(row => row.classList.contains('active'));
       assert.strictEqual(activeRows.length, 1, 'Exactly one effect row should be marked active; without the onChanged registry guard an unknown effect value matches nothing and every row loses its selection');
       assert.strictEqual(activeRows[0].getAttribute('data-oc-key'), 'effect:hud', 'The active effect row should be HUD, since settings.effect must be normalised back to "hud" for the removed "lens" key');
+    });
+
+    test('Repeated stale-effect storage.onChanged echoes that normalise to the current in-memory value do not rebuild the settings panel (oculist-ais)', async () => {
+      const dom = createDOMEnvironment();
+      const document = global.document;
+      document.body.innerHTML = '';
+
+      // Boot already normalised to 'hud', mirroring a device where the in-memory value is
+      // already current — the scenario oculist-ais is about is a *second* device's stale
+      // sync value re-arriving and re-normalising to the same effective value forever.
+      global.chrome.storage.sync.get = (key, cb) => cb({
+        'oc-settings': { effect: 'hud' }
+      });
+
+      let onChangedListener;
+      global.chrome.storage.onChanged.addListener = (fn) => { onChangedListener = fn; };
+
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      global.window.__ocToggle();
+      const wrap = document.getElementById('oc-wrap');
+      const wrapRoot = wrap.shadowRoot;
+
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+      const settingsPanelBefore = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanelBefore, 'Settings panel should be open before the storage echoes land');
+
+      assert.strictEqual(typeof onChangedListener, 'function', 'content.js should have registered a chrome.storage.onChanged listener');
+
+      // Two+ echoes of a stale-but-different raw value that both normalise to the same
+      // 'hud' already in memory (e.g. two builds disagreeing on the removed effect's key).
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'lens' } } });
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'foo' } } });
+
+      // rebuildSettingsPanelPreservingFocus() replaces the panel node wholesale
+      // (settingsPanel.remove(); buildSettingsPanel()), so node identity survives iff no
+      // rebuild happened. A rebuild is synchronous within the onChanged call, so no wait
+      // is needed here (same reasoning as the oculist-7z3 test above).
+      const settingsPanelAfter = wrapRoot.querySelector('#oc-settings-panel');
+      assert.strictEqual(settingsPanelAfter, settingsPanelBefore, 'A stale effect echo that normalises to the same in-memory value should not rebuild the settings panel');
+
+      const effectRowsAfter = Array.from(settingsPanelAfter.querySelectorAll('.oc-radio-item[data-oc-key^="effect:"]'));
+      const activeRowsAfter = effectRowsAfter.filter(row => row.classList.contains('active'));
+      assert.strictEqual(activeRowsAfter.length, 1, 'Exactly one effect row should remain marked active after the inert echoes');
+      assert.strictEqual(activeRowsAfter[0].getAttribute('data-oc-key'), 'effect:hud', 'The active effect row should remain HUD');
+
+      // Control case: a genuine effect change (a different, valid effect) must still
+      // rebuild the panel — the suppression must not swallow real changes.
+      onChangedListener({ 'oc-settings': { newValue: { effect: 'trail' } } });
+      const settingsPanelAfterRealChange = wrapRoot.querySelector('#oc-settings-panel');
+      assert.notStrictEqual(settingsPanelAfterRealChange, settingsPanelBefore, 'A genuine effect change should still rebuild the settings panel');
+
+      const activeRowsRealChange = Array.from(settingsPanelAfterRealChange.querySelectorAll('.oc-radio-item[data-oc-key^="effect:"]'))
+        .filter(row => row.classList.contains('active'));
+      assert.strictEqual(activeRowsRealChange.length, 1, 'Exactly one effect row should be marked active after the real change');
+      assert.strictEqual(activeRowsRealChange[0].getAttribute('data-oc-key'), 'effect:trail', 'The active effect row should reflect the genuine change to trail');
     });
 
   });

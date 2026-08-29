@@ -30,7 +30,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -265,6 +265,102 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
     });
   }
 
+  // animateLightning (content.js) schedules a second setTimeout-driven phase (flash/flicker)
+  // that guards itself with `if (!container.isConnected) return;` (oculist-kqv) so a container
+  // already cancelled/removed by cancelBeacons() before that timer fires never gets new
+  // elements or animations appended to it. The generic loop above only asserts on animations
+  // that already existed *before* cancellation, so it would still pass even if that guard were
+  // deleted -- this closes that gap. document.getAnimations() does not reliably include
+  // animations targeting an element that is (or becomes) detached from the document (verified
+  // empirically: a freshly-created animation on an already-detached element's descendant does
+  // not appear in document.getAnimations() even while genuinely 'running'), so, like
+  // snapshotBeaconAnimations()/readSnapshotStates() above, the real check reads the container's
+  // own live state directly (its __waapiAnims array length and descendant element count)
+  // rather than relying on document.getAnimations() to reflect it.
+  function captureLightningContainer() {
+    return evalInContentScript(`
+      (function () {
+        var container = document.querySelector('.oc-beacon');
+        window.__ocLightningContainer = container;
+        return {
+          animCount: (container && container.__waapiAnims) ? container.__waapiAnims.length : 0,
+          childCount: container ? container.querySelectorAll('*').length : 0,
+        };
+      })()
+    `);
+  }
+
+  function readLightningContainerState() {
+    return evalInContentScript(`
+      (function () {
+        var container = window.__ocLightningContainer;
+        return {
+          isConnected: container ? container.isConnected : null,
+          animCount: (container && container.__waapiAnims) ? container.__waapiAnims.length : 0,
+          childCount: container ? container.querySelectorAll('*').length : 0,
+        };
+      })()
+    `);
+  }
+
+  test('effect "lightning": cancelBeacons() before the async second phase fires stops it from ever creating new animations on the detached container', async () => {
+    try {
+      await setSettings({ effect: 'lightning' });
+      // 'slow' scales animateLightning's travelDuration (getBeaconDuration(350)) to ~612ms,
+      // giving the early cancel below (which happens right after fireBeacon() returns) a wide,
+      // deterministic margin ahead of the scheduled second-phase setTimeout in content.js.
+      await setVisionSettings({ animationSpeed: 'slow' });
+      await fireBeacon();
+
+      // fireBeacon() only waits for .oc-beacon to appear in the DOM, which happens
+      // synchronously when the container is first created -- long before the ~612ms
+      // second-phase timer elapses -- so capturing state right here is still well inside
+      // travelDuration.
+      const before = await captureLightningContainer();
+      assert.ok(before.animCount > 0, 'sanity check: expected first-phase strike animations to exist before cancellation');
+
+      await cancelBeaconsMidFlight();
+
+      assert.strictEqual(
+        await page.locator('.oc-beacon').count(),
+        0,
+        'expected cancelBeacons() to remove the lightning beacon container immediately'
+      );
+
+      // Wait past the scheduled second-phase timeout (travelDuration, ~612ms under 'slow')
+      // with headroom, scaled by OCULIST_TEST_TIMEOUT_SCALE (test/helpers/wait.js) so a
+      // contended CI box does not read state before that timer would have fired.
+      const travelDurationSlowMs = 350 * 1.75; // getBeaconDuration(350) under animationSpeed: 'slow'
+      await new Promise((resolve) => setTimeout(resolve, (travelDurationSlowMs + 500) * TIMEOUT_SCALE));
+
+      const after = await readLightningContainerState();
+      assert.strictEqual(after.isConnected, false, 'sanity check: the container should remain detached after cancellation');
+      assert.strictEqual(
+        after.animCount,
+        before.animCount,
+        `expected no new animations to be created by the async second phase on a cancelled/detached container, got ${before.animCount} -> ${after.animCount}`
+      );
+      assert.strictEqual(
+        after.childCount,
+        before.childCount,
+        `expected no new elements (flash/flicker) to be appended by the async second phase to a cancelled/detached container, got ${before.childCount} -> ${after.childCount}`
+      );
+
+      assert.strictEqual(
+        await page.evaluate(() =>
+          document
+            .getAnimations()
+            .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest('.oc-beacon')).length
+        ),
+        0,
+        'expected no beacon-related animations left in document.getAnimations()'
+      );
+      assert.strictEqual(await page.locator('.oc-beacon').count(), 0, 'expected no .oc-beacon element to exist after the wait');
+    } finally {
+      await setVisionSettings({ animationSpeed: 'normal' });
+    }
+  });
+
   // drawActiveMatchMagnifier (content.js) is a companion overlay drawn by drawActiveOverlays()
   // alongside whichever effect is selected, not an effectsRegistry entry itself — it needs
   // its own coverage, gated on visionSettings.magnifier rather than settings.effect.
@@ -272,6 +368,17 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
     try {
       await setSettings({ effect: 'hud' });
       await setVisionSettings({ magnifier: true });
+      // visionSettings is one of content.js's OVERLAY_AFFECTING_KEYS, so with an active
+      // match already selected (this suite's shared before() plus every WAAPI_EFFECTS test
+      // ahead of this one), turning the magnifier on above synchronously redraws it via
+      // repositionActiveOverlays() right there in the onChanged handler - before fireBeacon()
+      // below ever presses Enter. Left in place, that incidental draw is enough to satisfy
+      // fireBeacon()'s own `.oc-beacon` wait, and the test proceeds to cancel while Enter's
+      // own (deliberately setTimeout-delayed, see fireBeacon()'s comment) redraw is still
+      // pending - which then fires after cancelBeacons() below and resurrects the card.
+      // Clearing it here guarantees the beacon fireBeacon() waits for is the one Enter
+      // itself produces, not this unrelated settings-change side effect.
+      await cancelBeaconsMidFlight();
       await fireBeacon();
       await page.waitForSelector('#oc-active-match-magnifier', { timeout: POLL_TIMEOUT });
 
