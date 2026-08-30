@@ -106,6 +106,14 @@
     .wizard-step {
       display: none;
     }
+    /* Author-origin display rules on .wizard-options (flex) would otherwise beat the
+       UA [hidden] { display: none } rule, since both are the same specificity and this
+       stylesheet's rule comes later in source order. The sample panel at #step1-panel-sample
+       relies on the `hidden` attribute alone to be excluded from layout AND the tab order,
+       so this must win unconditionally. */
+    [hidden] {
+      display: none !important;
+    }
     .wizard-step.active {
       display: flex;
       flex-direction: column;
@@ -151,6 +159,62 @@
     .wizard-option.selected {
       background: rgba(245, 158, 11, 0.1);
       border-color: #f59e0b;
+    }
+    .wizard-tabs {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .wizard-tab {
+      background: transparent;
+      border: 1px solid #3f3f46;
+      color: #a1a1aa;
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+    }
+    .wizard-tab:hover {
+      color: #fafafa;
+      border-color: #52525b;
+    }
+    .wizard-tab:focus-visible {
+      outline: 2px solid #f59e0b;
+      outline-offset: 2px;
+    }
+    .wizard-tab.active {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: #f59e0b;
+      color: #f59e0b;
+    }
+    .wizard-option.wizard-sample {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .sample-shape {
+      font-size: 16px;
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+      color: #a1a1aa;
+    }
+    .sample-swatches {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .sample-swatch {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+    .sample-text {
+      font-size: 14px;
+      font-weight: 600;
     }
     .wizard-nav {
       display: flex;
@@ -199,7 +263,7 @@
   <p class="lead">Stop squinting. Use Oculist to find text on any page and see it instantly.</p>
 
   <!-- Setup Wizard Hero Banner -->
-  <div style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 12px; padding: 24px; margin: 24px 0 32px; text-align: center; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.05);">
+  <div id="wizard-hero-banner" style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 12px; padding: 24px; margin: 24px 0 32px; text-align: center; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.05);">
     <h3 style="font-size: 18px; font-weight: 700; color: #f59e0b; margin-bottom: 8px;">Optimize Oculist for your vision</h3>
     <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 16px; line-height: 1.5;">Take a quick 3-question setup wizard to adjust size, speed, and colors for low vision, color blindness, or eye strain.</p>
     <button id="start-wizard" class="action-btn" style="max-width: 240px; margin: 0 auto; width: 100%;">Start Setup Wizard</button>
@@ -241,12 +305,59 @@
       <!-- Step 1: Color Blindness -->
       <div id="step-1" class="wizard-step active">
         <h2 class="wizard-title">Step 1 of 4: Color Blindness</h2>
-        <p class="wizard-desc">Do you experience color blindness?</p>
-        <div class="wizard-options">
+        <p class="wizard-desc">Do you experience color blindness? Pick your diagnosis if you know it, or compare samples if you're not sure.</p>
+
+        <div class="wizard-tabs" role="tablist" aria-label="How to choose your color setting">
+          <button type="button" id="step1-tab-named" class="wizard-tab active" role="tab" aria-selected="true" aria-controls="step1-panel-named">I know my diagnosis</button>
+          <button type="button" id="step1-tab-sample" class="wizard-tab" role="tab" aria-selected="false" aria-controls="step1-panel-sample">Not sure — compare samples</button>
+        </div>
+
+        <div id="step1-panel-named" class="wizard-options" role="tabpanel" aria-labelledby="step1-tab-named">
           <button class="wizard-option" data-value="none">No, I do not</button>
           <button class="wizard-option" data-value="amber-sky" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Yes, Deuteranopia (Red-Green)</button>
           <button class="wizard-option" data-value="amber-indigo" title="Optimized blue/yellow palette with distinct shape indicators for red-green color blindness.">Yes, Protanopia (Red-Green)</button>
           <button class="wizard-option" data-value="rose-cyan" title="Optimized red/cyan palette with shape indicators for blue-yellow color blindness.">Yes, Tritanopia (Blue-Yellow)</button>
+        </div>
+
+        <!-- Sample-comparison path for users who do not know or prefer not to name their
+             diagnosis. Reaches the exact same data-value set as the named panel above, so
+             it feeds the same colorBlindAnswer -> PRESETS resolution untouched. Each option
+             carries a shape glyph, a distinct swatch pair, and a text/aria-label description
+             of the visible result — none of them rely on color alone to be told apart, since
+             a user may not be able to discriminate the very axis a swatch demonstrates. -->
+        <div id="step1-panel-sample" class="wizard-options" role="tabpanel" aria-labelledby="step1-tab-sample" hidden>
+          <button class="wizard-option wizard-sample" data-value="none" aria-label="Sample A, square. Standard colors. Choose this if the default colors already look clearly separated to you.">
+            <span class="sample-shape" aria-hidden="true">&#9632;</span>
+            <span class="sample-swatches" aria-hidden="true">
+              <span class="sample-swatch" style="background:#fef08a"></span>
+              <span class="sample-swatch" style="background:#f59e0b"></span>
+            </span>
+            <span class="sample-text">Sample A — standard colors look clearly separated</span>
+          </button>
+          <button class="wizard-option wizard-sample" data-value="amber-sky" aria-label="Sample B, triangle. Warmer amber against sky blue. Choose this if it gives the clearest separation between the two colors, compared with the other samples.">
+            <span class="sample-shape" aria-hidden="true">&#9650;</span>
+            <span class="sample-swatches" aria-hidden="true">
+              <span class="sample-swatch" style="background:#fef08a"></span>
+              <span class="sample-swatch" style="background:#0284c7"></span>
+            </span>
+            <span class="sample-text">Sample B — warmer amber against sky blue</span>
+          </button>
+          <button class="wizard-option wizard-sample" data-value="amber-indigo" aria-label="Sample C, circle. Warmer amber against indigo blue. Choose this if it gives the clearest separation between the two colors, compared with the other samples.">
+            <span class="sample-shape" aria-hidden="true">&#9679;</span>
+            <span class="sample-swatches" aria-hidden="true">
+              <span class="sample-swatch" style="background:#fef08a"></span>
+              <span class="sample-swatch" style="background:#2563eb"></span>
+            </span>
+            <span class="sample-text">Sample C — warmer amber against indigo blue</span>
+          </button>
+          <button class="wizard-option wizard-sample" data-value="rose-cyan" aria-label="Sample D, diamond. Rose against cyan, with the strongest blue-yellow separation. Choose this if it gives the clearest separation between the two colors, compared with the other samples.">
+            <span class="sample-shape" aria-hidden="true">&#9670;</span>
+            <span class="sample-swatches" aria-hidden="true">
+              <span class="sample-swatch" style="background:#ffcbd1"></span>
+              <span class="sample-swatch" style="background:#06b6d4"></span>
+            </span>
+            <span class="sample-text">Sample D — rose against cyan, strongest blue-yellow separation</span>
+          </button>
         </div>
       </div>
 
@@ -263,10 +374,10 @@
       <!-- Step 3: Comfort (Eye Strain) -->
       <div id="step-3" class="wizard-step">
         <h2 class="wizard-title">Step 3 of 4: Visual Comfort</h2>
-        <p class="wizard-desc">Do you experience eye strain, or prefer quiet, reduced-motion animations?</p>
+        <p class="wizard-desc">How much animation do you want while searching?</p>
         <div class="wizard-options">
-          <button class="wizard-option" data-value="false">No, default animations are fine</button>
-          <button class="wizard-option" data-value="true" title="Warm amber color palette with reduced motion and quiet pulse transitions to prevent visual fatigue.">Yes, reduce motion and use warm sepia colors</button>
+          <button class="wizard-option" data-value="false">Standard animation is fine</button>
+          <button class="wizard-option" data-value="true" title="Warm amber color palette with reduced motion and quiet pulse transitions to prevent visual fatigue.">Less motion, with warm, quiet colors</button>
         </div>
       </div>
 
