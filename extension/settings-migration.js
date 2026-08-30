@@ -4,10 +4,13 @@
 // chrome.storage.sync independently. Every one of those three surfaces must normalise a
 // stored settings object away from clinical vocabulary before using it and before writing
 // it back — three copies of that logic is how it drifts, so this file is the one place it
-// lives. content.js is manifest-injected (see extension/manifest.json's content_scripts),
-// so this file is listed there *before* content.js and the two run in the same isolated
-// world, sharing this module's global. popup.html and welcome.js load it as an ordinary
-// <script> tag before their own script, sharing the page's global instead.
+// lives: both the mapping tables below AND the normalisation logic that uses them (oculist-
+// rnr.16 — popup.js and welcome.js used to keep their own verbatim/trimmed copies of
+// LEGACY_DISPLAY_PRESET_MAP; they now reference this module's export directly instead).
+// content.js is manifest-injected (see extension/manifest.json's content_scripts), so this
+// file is listed there *before* content.js and the two run in the same isolated world,
+// sharing this module's global. popup.html and welcome.js load it as an ordinary <script>
+// tag before their own script, sharing the page's global instead.
 //
 // Legacy fields this normalises:
 //   - 'visionProfile' (a clinical label, e.g. 'color-blind-deuteranopia') -> 'displayPreset'

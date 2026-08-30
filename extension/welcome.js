@@ -39,13 +39,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // summary text above and below stay in this wizard's own clinical-shortcut vocabulary
   // (that's the UI rnr.13 owns) — this table translates only at the point saveProfileAndFinish()
   // persists the choice.
-  const WIZARD_PROFILE_TO_DISPLAY_PRESET = {
-    'low-vision': 'high-contrast',
-    'color-blind-deuteranopia': 'rg-adjust-deut',
-    'color-blind-protanopia': 'rg-adjust-prot',
-    'color-blind-tritanopia': 'by-adjust',
-    'eye-strain': 'reduced-motion'
-  };
+  // oculist-rnr.16: this used to be its own trimmed copy of settings-migration.js's
+  // LEGACY_DISPLAY_PRESET_MAP (identical, minus the 'custom' entry). Referencing the
+  // canonical table directly below removes that drift risk, so the 'custom' exclusion is
+  // made explicit at the one call site instead (saveProfileAndFinish(), below) — this wizard
+  // never sets selectedProfile to 'custom' (see the state machine above; no step maps to
+  // it), but if it ever did, saveProfileAndFinish() must still send it to null rather than
+  // the canonical table's 'custom' -> 'custom' entry, since 'custom' has no PRESETS-driven
+  // meaning here the way it does in popup.js.
 
   const PRESETS = {
     'none': {
@@ -749,7 +750,13 @@ document.addEventListener('DOMContentLoaded', () => {
       // only the deletion of the legacy key matters at this call site.
       OculistSettingsMigration.normalizeOcSettings(settings);
 
-      settings.displayPreset = selectedProfile === 'none' ? null : (WIZARD_PROFILE_TO_DISPLAY_PRESET[selectedProfile] || null);
+      // 'custom' excluded explicitly here (see the table comment above) rather than via a
+      // trimmed copy of the canonical table: this wizard has no PRESETS entry or UI path
+      // that produces selectedProfile === 'custom', so there is nothing meaningful for it
+      // to translate to.
+      settings.displayPreset = (selectedProfile === 'none' || selectedProfile === 'custom')
+        ? null
+        : (OculistSettingsMigration.LEGACY_DISPLAY_PRESET_MAP[selectedProfile] || null);
       settings.visionSettings = {
         ...settings.visionSettings,
         ...vs

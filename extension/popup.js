@@ -101,22 +101,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   // vocabulary and the dropdown's option values it must equal, not what gets persisted.
   // These two tables translate between that internal vocabulary and the persisted one,
   // at the read (line ~180) and write (lines ~115, ~200, ~220) boundaries only.
-  const LEGACY_TO_FUNCTIONAL_PRESET = {
-    'low-vision': 'high-contrast',
-    'color-blind-deuteranopia': 'rg-adjust-deut',
-    'color-blind-protanopia': 'rg-adjust-prot',
-    'color-blind-tritanopia': 'by-adjust',
-    'eye-strain': 'reduced-motion',
-    'custom': 'custom'
-  };
-  const FUNCTIONAL_TO_LEGACY_PRESET = {
-    'high-contrast': 'low-vision',
-    'rg-adjust-deut': 'color-blind-deuteranopia',
-    'rg-adjust-prot': 'color-blind-protanopia',
-    'by-adjust': 'color-blind-tritanopia',
-    'reduced-motion': 'eye-strain',
-    'custom': 'custom'
-  };
+  // oculist-rnr.16: LEGACY_TO_FUNCTIONAL_PRESET is the same object settings-migration.js
+  // exports as LEGACY_DISPLAY_PRESET_MAP — aliased, not copied, so this file can never drift
+  // from the canonical table. settings-migration.js is loaded via <script> before this file
+  // in popup.html, so window.OculistSettingsMigration (referenced here as the bare global,
+  // matching this file's existing normalizeOcSettings() call below) is guaranteed to exist
+  // by the time this runs. FUNCTIONAL_TO_LEGACY_PRESET is this file's own UI-only reverse
+  // lookup (translating a persisted functional value back to the dropdown's legacy-shaped
+  // option values) — no other consumer needs it, so it stays local, but it is *derived* from
+  // the same canonical table rather than hand-copied, so it cannot drift from it either.
+  const LEGACY_TO_FUNCTIONAL_PRESET = OculistSettingsMigration.LEGACY_DISPLAY_PRESET_MAP;
+  const FUNCTIONAL_TO_LEGACY_PRESET = Object.keys(LEGACY_TO_FUNCTIONAL_PRESET).reduce((acc, legacyKey) => {
+    acc[LEGACY_TO_FUNCTIONAL_PRESET[legacyKey]] = legacyKey;
+    return acc;
+  }, {});
 
   // Union of every key any PRESETS entry sets. A direct edit to one of these keys means
   // the user just diverged from whatever preset governs it, so the active profile must
