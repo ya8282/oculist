@@ -25,20 +25,24 @@
 (function () {
   'use strict';
 
-  var LEGACY_DISPLAY_PRESET_MAP = {
+  // Frozen (oculist-rnr.22): this table is exported and aliased by reference elsewhere
+  // (popup.js's LEGACY_TO_FUNCTIONAL_PRESET) — freezing keeps any future write through an
+  // alias from silently corrupting the canonical copy that content.js also reads.
+  var LEGACY_DISPLAY_PRESET_MAP = Object.freeze({
     'low-vision': 'high-contrast',
     'color-blind-deuteranopia': 'rg-adjust-deut',
     'color-blind-protanopia': 'rg-adjust-prot',
     'color-blind-tritanopia': 'by-adjust',
     'eye-strain': 'reduced-motion',
     'custom': 'custom'
-  };
+  });
 
-  var LEGACY_COLOR_PALETTE_MAP = {
+  // Frozen for the same reason as LEGACY_DISPLAY_PRESET_MAP above.
+  var LEGACY_COLOR_PALETTE_MAP = Object.freeze({
     'deuteranopia': 'amber-sky',
     'protanopia': 'amber-indigo',
     'tritanopia': 'rose-cyan'
-  };
+  });
 
   // Maps a legacy visionProfile value to its functional displayPreset equivalent. Any
   // value not in the table (including null/undefined, or an unrecognized string) maps to
