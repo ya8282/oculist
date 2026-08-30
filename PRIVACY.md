@@ -1,6 +1,6 @@
 # Privacy Policy — Oculist
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-30
 
 <!-- KEEP IN SYNC WITH docs/privacy.html, the hosted copy the Chrome Web Store's
      Privacy tab points at. If you change one, change the other. -->
@@ -31,9 +31,11 @@ anywhere.
 Oculist stores three kinds of data, and nothing else:
 
 - **Settings**, in `chrome.storage.sync` under the key `oc-settings`: theme,
-  highlight effect, beacon colors, Lite Mode, your vision accessibility
-  profile and its individual settings, and the hostnames you have switched
-  Oculist off on.
+  highlight effect, beacon colors, Lite Mode, the display preset you've
+  chosen and its individual rendering values (palette, beacon size,
+  animation speed, motion sensitivity, border style, text labels, magnifier,
+  and any custom colors), and the hostnames you have switched Oculist off
+  on.
 - **Saved search-term lists**, in `chrome.storage.sync`, one key per list
   (`oc-list-<id>`) holding that list's name and terms. A saved list is
   exactly what it sounds like: a named, persisted record of search terms you
@@ -51,6 +53,25 @@ what was on them. It does keep a history of search *terms*, but only the
 ones you explicitly ask it to keep: the working list above, gone when the
 browser closes, and any saved lists, which persist by design and sync across
 your devices for as long as you keep them.
+
+The display preset stored above is a rendering choice — which palette, how
+big the beacon is, how fast it animates, and so on — not a description of
+you. Oculist's setup wizard and its Settings popup may ask which vision
+condition applies, to help you land on the right preset, but that answer is
+used only to pick the preset: it is never written to storage and never sent
+anywhere. Oculist does not store, transmit, or infer any medical or health
+information.
+
+If you update from a version of Oculist that stored a condition name
+directly (under a `visionProfile` key), that key is deleted from your synced
+settings the first time the popup or a freshly loaded page reads it, or the
+first time you finish the setup wizard on the welcome page — merely opening
+the welcome page touches nothing. The condition name itself is discarded and
+only the equivalent display preset is kept. A separate step that runs once
+on every update, to reseed the default disabled-sites list, reads and writes
+back your whole settings object without running that cleanup; if it fires
+before anything else has, it can write the old key back once. The next
+thing that reads your settings after that removes it again for good.
 
 `chrome.storage.sync` is Chrome's own sync, between your own signed-in Chrome
 profiles. It does not pass through any server operated by this extension's
@@ -86,6 +107,9 @@ updates. No other site is disabled out of the box.
 - **No analytics, telemetry, or crash reporting.** None, of any kind.
 - **No advertising, and no data sold or shared.**
 - **No account, no login, no identifier.**
+- **No medical or health information stored or sent.** The setup wizard may
+  ask which vision condition applies, but only to help you land on a display
+  preset — see "What it stores, and where" above.
 - **No search history beyond what you ask it to keep.** The working list in
   the find bar is used to match against the current page and is discarded
   when the browser session ends. A saved list is different — saving one is
