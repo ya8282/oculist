@@ -534,3 +534,30 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     await page.close();
   });
 });
+
+// oculist-rnr.22: structural hardening of the canonical mapping table itself, not the
+// migration behaviour above — these load extension/settings-migration.js directly via
+// Node's require() (its module.exports branch) rather than driving a real browser, since
+// they only need to inspect the exported table, not exercise a content-script boot.
+describe('LEGACY_DISPLAY_PRESET_MAP structural invariants (oculist-rnr.22)', () => {
+  const OculistSettingsMigration = require('../extension/settings-migration.js');
+
+  test('LEGACY_DISPLAY_PRESET_MAP and LEGACY_COLOR_PALETTE_MAP are frozen, so a future write through an alias cannot corrupt the canonical table', () => {
+    assert.strictEqual(Object.isFrozen(OculistSettingsMigration.LEGACY_DISPLAY_PRESET_MAP), true);
+    assert.strictEqual(Object.isFrozen(OculistSettingsMigration.LEGACY_COLOR_PALETTE_MAP), true);
+  });
+
+  // popup.js derives its FUNCTIONAL_TO_LEGACY_PRESET reverse lookup by inverting this table
+  // at load time. That inversion is only lossless while every forward value is distinct — a
+  // future duplicate value would silently drop a reverse entry with nothing failing. Asserts
+  // against the module's real export (not a copy) so a drift in the actual table is caught.
+  test('every value in LEGACY_DISPLAY_PRESET_MAP is distinct, so inverting it (as popup.js does) loses no entries', () => {
+    const map = OculistSettingsMigration.LEGACY_DISPLAY_PRESET_MAP;
+    const values = Object.values(map);
+    assert.strictEqual(
+      new Set(values).size,
+      Object.keys(map).length,
+      'a duplicate forward value would make popup.js\'s reverse-derived FUNCTIONAL_TO_LEGACY_PRESET silently drop an entry'
+    );
+  });
+});
