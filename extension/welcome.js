@@ -8,6 +8,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewEffectSelect = document.getElementById('preview-effect');
   const replayAnimBtn = document.getElementById('trigger-preview-beacon');
 
+  // Captured via its own stable id, not startWizardBtn.parentElement — #start-wizard itself
+  // gets destroyed the first time saveProfileAndFinish() rewrites this container's innerHTML
+  // (replaced by the completion banner + "Run Setup Again" button), so anything derived from
+  // re-querying #start-wizard on a second run would resolve to null. #wizard-hero-banner is
+  // the stable container itself and survives every rewrite.
+  const heroBanner = document.getElementById('wizard-hero-banner');
+
   let currentStep = 1;
   let colorBlindAnswer = 'none';
   let lowVisionAnswer = 'false';
@@ -100,12 +107,37 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // 1. Show Wizard modal
-  if (startWizardBtn) {
-    startWizardBtn.addEventListener('click', () => {
-      wizardModal.style.display = 'flex';
-      showStep(1);
-    });
+  function openWizard() {
+    resetWizardState();
+    wizardModal.style.display = 'flex';
+    currentStep = 1;
+    showStep(1);
   }
+
+  if (startWizardBtn) {
+    startWizardBtn.addEventListener('click', openWizard);
+  }
+
+  // Step 1 has two entry points into the same colorBlindAnswer: a named-condition
+  // shortcut for a user who already knows their diagnosis, and a sample-comparison
+  // path for a user who doesn't (or prefers not to say). Both panels' buttons share
+  // the '.wizard-option' class, so the stepsOptions wiring below already saves either
+  // one into colorBlindAnswer identically — this block only toggles which panel is
+  // visible/focusable, it does not touch selection logic.
+  const step1Tabs = [
+    { tab: document.getElementById('step1-tab-named'), panel: document.getElementById('step1-panel-named') },
+    { tab: document.getElementById('step1-tab-sample'), panel: document.getElementById('step1-panel-sample') }
+  ];
+  step1Tabs.forEach(({ tab }) => {
+    tab.addEventListener('click', () => {
+      step1Tabs.forEach(({ tab: t, panel: p }) => {
+        const active = t === tab;
+        t.classList.toggle('active', active);
+        t.setAttribute('aria-selected', String(active));
+        p.hidden = !active;
+      });
+    });
+  });
 
   // 2. Click option choices
   const stepsOptions = [
@@ -130,10 +162,35 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Default select first item in steps 1, 2, 3
-  document.querySelectorAll('#step-1 .wizard-option')[0].classList.add('selected');
-  document.querySelectorAll('#step-2 .wizard-option')[0].classList.add('selected');
-  document.querySelectorAll('#step-3 .wizard-option')[0].classList.add('selected');
+  // Restores every piece of in-memory wizard state (answers, selected-option highlighting,
+  // and step 1's active tab) back to its opening default. Called both for the initial page
+  // load below and from openWizard() on every re-run — without this, re-running the wizard
+  // (via "Run Setup Again") would silently inherit whatever answers a prior run left behind
+  // for any step the user clicks past with Next, rather than starting fresh each time.
+  function resetWizardState() {
+    colorBlindAnswer = 'none';
+    lowVisionAnswer = 'false';
+    eyeStrainAnswer = 'false';
+    selectedProfile = 'none';
+
+    // Step 1 always reopens on the named-condition shortcut tab, not wherever a prior run
+    // left it.
+    step1Tabs.forEach(({ tab, panel }, idx) => {
+      const active = idx === 0;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+      panel.hidden = !active;
+    });
+
+    // Default-select the first option in steps 1, 2, and 3, clearing any prior selection.
+    ['#step-1 .wizard-option', '#step-2 .wizard-option', '#step-3 .wizard-option'].forEach((selector) => {
+      const opts = document.querySelectorAll(selector);
+      opts.forEach((o) => o.classList.remove('selected'));
+      if (opts[0]) opts[0].classList.add('selected');
+    });
+  }
+
+  resetWizardState();
 
   // Navigation Listeners
   backBtn.addEventListener('click', () => {
@@ -706,10 +763,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     wizardModal.style.display = 'none';
 
-    const heroBanner = document.getElementById('start-wizard').parentElement;
+    if (!heroBanner) return;
     heroBanner.innerHTML = `
       <h3 style="font-size: 18px; font-weight: 700; color: #10b981; margin-bottom: 8px;">✓ Vision Setup Completed!</h3>
-      <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 0; line-height: 1.5;">Oculist has been successfully configured with your <strong>${selectedProfile === 'none' ? 'Standard' : selectedProfile.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</strong> profile.</p>
+      <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 12px; line-height: 1.5;">Oculist has been successfully configured with your <strong>${selectedProfile === 'none' ? 'Standard' : selectedProfile.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</strong> profile. Fine-tune it any time from the extension's Settings popup.</p>
+      <button id="rerun-wizard" class="nav-btn" style="max-width: 240px; margin: 0 auto;" aria-label="Run the setup wizard again">Run Setup Again</button>
     `;
+
+    // Only the functional preset (settings.displayPreset, already persisted above) survives
+    // once this page reloads or the wizard is re-run — the clinical selection made above
+    // lives only in this closure's selectedProfile/colorBlindAnswer variables and is never
+    // written anywhere. Re-running the picker here (or via the Settings popup's own Active
+    // Vision Profile dropdown, which is always available) is the only way to see the named
+    // shortcut again; nothing is faked to make it look otherwise.
+    const rerunBtn = document.getElementById('rerun-wizard');
+    if (rerunBtn) {
+      rerunBtn.addEventListener('click', openWizard);
+    }
   }
 });
