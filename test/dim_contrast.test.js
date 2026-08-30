@@ -27,6 +27,19 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 
+// oculist-rnr.12: the #vision-profile dropdown (and popup.js's own PRESETS, which
+// loadBuiltInProfiles() reads below) still uses these legacy-shaped values, but the
+// persisted 'oc-settings.displayPreset' field only ever holds the functional key on the
+// right — mirrors popup.js's own LEGACY_TO_FUNCTIONAL_PRESET.
+const LEGACY_TO_FUNCTIONAL_PRESET = {
+  'low-vision': 'high-contrast',
+  'color-blind-deuteranopia': 'rg-adjust-deut',
+  'color-blind-protanopia': 'rg-adjust-prot',
+  'color-blind-tritanopia': 'by-adjust',
+  'eye-strain': 'reduced-motion',
+  'custom': 'custom'
+};
+
 // Sourced directly from popup.js's own PRESETS object (not hand-copied), so this test
 // tracks whatever built-in profiles actually exist rather than a list that can drift out of
 // sync with the real one.
@@ -358,15 +371,16 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     await popup.selectOption('#vision-profile', profileKey);
     // saveSettings() is async (awaits chrome.storage.sync.set) — wait for the write to
     // actually land before tearing the popup page down, instead of guessing how long it
-    // takes.
+    // takes. The persisted field is 'displayPreset', holding the functional translation of
+    // profileKey (oculist-rnr.12), not profileKey itself.
+    const expectedPreset = profileKey === 'none' ? null : LEGACY_TO_FUNCTIONAL_PRESET[profileKey];
     await popup.waitForFunction(
       (expected) =>
         chrome.storage.sync.get('oc-settings').then((d) => {
           const s = d['oc-settings'];
-          const wanted = expected === 'none' ? null : expected;
-          return !!s && s.visionProfile === wanted;
+          return !!s && s.displayPreset === expected;
         }),
-      profileKey,
+      expectedPreset,
       { timeout: POLL_TIMEOUT }
     );
     await popup.close();

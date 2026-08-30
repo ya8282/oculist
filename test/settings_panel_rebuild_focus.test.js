@@ -108,17 +108,18 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     );
   }
 
-  // Same foreign-write pattern as setForeignPosition(), but for visionProfile — setting a
-  // named profile like 'eye-strain' disables the colour pickers (getProfileConstraints() /
+  // Same foreign-write pattern as setForeignPosition(), but for displayPreset — setting a
+  // named preset like 'reduced-motion' (oculist-rnr.12's functional replacement for the old
+  // 'eye-strain' visionProfile value) disables the colour pickers (getProfileConstraints() /
   // constraints.colorsDisabled, content.js) on rebuild, so a control that was focused before
   // the rebuild can still be *found* afterward by its data-oc-key but is no longer a valid
   // focus target.
-  function setForeignVisionProfile(visionProfile) {
+  function setForeignDisplayPreset(displayPreset) {
     return evalInContentScript(
       'new Promise(function (resolve) {' +
         "chrome.storage.sync.get('oc-settings', function (data) {" +
         "var current = (data && data['oc-settings']) || {};" +
-        'var next = Object.assign({}, current, { visionProfile: ' + JSON.stringify(visionProfile) + ' });' +
+        'var next = Object.assign({}, current, { displayPreset: ' + JSON.stringify(displayPreset) + ' });' +
         "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
         '});' +
         '})'
@@ -258,7 +259,7 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     // settings panel.
     await waitForActiveElement('.oc-input');
   });
-  test('a rebuild that disables the previously focused control (colours, via a visionProfile change) falls back to the panel container, not BODY', async () => {
+  test('a rebuild that disables the previously focused control (colours, via a displayPreset change) falls back to the panel container, not BODY', async () => {
     await page.locator(GEAR_BTN).click();
     await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
 
@@ -267,10 +268,11 @@ describe('Settings panel in-place rebuild: focus stays in the shadow root (oculi
     await page.locator(COLOR_MATCH_INPUT).focus();
     await waitForActiveElement('[data-oc-key="color:match"]');
 
-    // A foreign visionProfile change lands (popup/another tab) while focus is on the now
-    // soon-to-be-disabled colour control. eye-strain disables the colour pickers
+    // A foreign displayPreset change lands (popup/another tab) while focus is on the now
+    // soon-to-be-disabled colour control. reduced-motion (oculist-rnr.12's functional
+    // replacement for the old 'eye-strain' visionProfile value) disables the colour pickers
     // (constraints.colorsDisabled) on rebuild.
-    await setForeignVisionProfile('eye-strain');
+    await setForeignDisplayPreset('reduced-motion');
 
     // Confirm the rebuild actually ran and the control is genuinely disabled now (not a
     // false pass because nothing happened).

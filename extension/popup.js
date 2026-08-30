@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'deuteranopia',
+      colorPalette: 'amber-sky',
       borderStyle: 'medium'
     },
     'color-blind-protanopia': {
@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'protanopia',
+      colorPalette: 'amber-indigo',
       borderStyle: 'medium'
     },
     'color-blind-tritanopia': {
@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'tritanopia',
+      colorPalette: 'rose-cyan',
       borderStyle: 'medium'
     },
     'eye-strain': {
@@ -91,6 +91,31 @@ document.addEventListener('DOMContentLoaded', async () => {
       colorPalette: 'warm',
       borderStyle: 'none'
     }
+  };
+
+  // oculist-rnr.12: chrome.storage.sync's 'oc-settings.displayPreset' field holds only
+  // functional rendering keys now (never a clinical label — see content.js for the
+  // human decision behind this). This file's own PRESETS keys above, PROFILE_NAMES,
+  // PROFILE_GUIDANCE, getProfileConstraints() and #vision-profile's <option value="...">
+  // in popup.html are left exactly as they are — they're this file's internal, UI-facing
+  // vocabulary and the dropdown's option values it must equal, not what gets persisted.
+  // These two tables translate between that internal vocabulary and the persisted one,
+  // at the read (line ~180) and write (lines ~115, ~200, ~220) boundaries only.
+  const LEGACY_TO_FUNCTIONAL_PRESET = {
+    'low-vision': 'high-contrast',
+    'color-blind-deuteranopia': 'rg-adjust-deut',
+    'color-blind-protanopia': 'rg-adjust-prot',
+    'color-blind-tritanopia': 'by-adjust',
+    'eye-strain': 'reduced-motion',
+    'custom': 'custom'
+  };
+  const FUNCTIONAL_TO_LEGACY_PRESET = {
+    'high-contrast': 'low-vision',
+    'rg-adjust-deut': 'color-blind-deuteranopia',
+    'rg-adjust-prot': 'color-blind-protanopia',
+    'by-adjust': 'color-blind-tritanopia',
+    'reduced-motion': 'eye-strain',
+    'custom': 'custom'
   };
 
   // Union of every key any PRESETS entry sets. A direct edit to one of these keys means
@@ -107,7 +132,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // preset; otherwise leaves whatever profile (named or custom) was already active alone.
   function applyDirectSettingChange(key) {
     if (GOVERNED_SETTING_KEYS.has(key)) {
-      settings.visionProfile = 'custom';
+      settings.displayPreset = 'custom';
       visionProfileSelect.value = 'custom';
     }
     updateOverridesUI(visionProfileSelect.value);
@@ -148,13 +173,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   shortcutText.textContent = isMac ? '⌘+Shift+F' : 'Ctrl+Shift+F';
 
   // Load settings initially
-  let settings = { disabledSites: [], performanceMode: false, visionProfile: null, visionSettings: {} };
+  let settings = { disabledSites: [], performanceMode: false, displayPreset: null, visionSettings: {} };
   try {
     const data = await chrome.storage.sync.get('oc-settings');
     if (data && data['oc-settings']) {
       settings = data['oc-settings'];
       if (!Array.isArray(settings.disabledSites)) {
         settings.disabledSites = [];
+      }
+      // oculist-rnr.12 (review fix, gaps 1 & 2): content scripts do not re-inject into
+      // already-open tabs after an extension update, so a not-yet-updated tab's popup can
+      // be the FIRST thing to read (and, on any toggle, write back) a pre-update settings
+      // object — normalise it here too, before it's used for anything below, or this
+      // surface would silently re-persist a legacy 'visionProfile'/clinical colorPalette
+      // value straight past content.js's own migration. normalizeOcSettings() prefers an
+      // already-present 'displayPreset' over a stale legacy 'visionProfile' (so a later
+      // content-script boot can never revert a choice made here), and is idempotent, so
+      // persisting eagerly whenever it actually changes something is always safe. Uses a
+      // direct chrome.storage.sync.set() rather than saveSettings() below: saveSettings()
+      // reads `activeTab`, which isn't assigned until later in this file, and referencing
+      // it here — before its own `let activeTab;` line has run — would throw.
+      if (OculistSettingsMigration.normalizeOcSettings(settings)) {
+        chrome.storage.sync.set({ 'oc-settings': settings }).catch(() => {});
       }
     }
   } catch (e) {
@@ -172,7 +212,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Populate Vision Profile
-  const activeProfile = settings.visionProfile || 'none';
+  // settings.displayPreset is the functional stored value; translate it back to this
+  // file's legacy-shaped internal vocabulary (matching PRESETS keys and the
+  // #vision-profile <option value="...">s) before using it anywhere below.
+  const activeProfile = settings.displayPreset
+    ? (FUNCTIONAL_TO_LEGACY_PRESET[settings.displayPreset] || 'none')
+    : 'none';
   visionProfileSelect.value = activeProfile;
 
   // Ensure visionSettings exist
@@ -188,7 +233,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Profile Change Listener
   visionProfileSelect.addEventListener('change', async () => {
     const selected = visionProfileSelect.value;
-    settings.visionProfile = selected === 'none' ? null : selected;
+    settings.displayPreset = selected === 'none' ? null : (LEGACY_TO_FUNCTIONAL_PRESET[selected] || 'custom');
 
     if (selected !== 'custom') {
       const presetValues = PRESETS[selected] || PRESETS['none'];
@@ -207,7 +252,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Unlock / Customize Profile - shared by the top banner and the per-section lock badges
   async function unlockToCustom() {
     visionProfileSelect.value = 'custom';
-    settings.visionProfile = 'custom';
+    settings.displayPreset = 'custom';
     updateOverridesUI('custom');
     updateProfileGuidance('custom');
     await saveSettings();
