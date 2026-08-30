@@ -232,20 +232,47 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     const pageErrors = [];
     page.on('pageerror', (err) => pageErrors.push(err));
 
-    // First run: pick the low-vision profile (step 2 "yes"), color-blind "none".
-    await page.click('#step1-panel-named .wizard-option[data-value="none"]');
+    // First run: set a NON-DEFAULT answer on every step that has one (oculist-rnr.18), so any
+    // answer resetWizardState() fails to clear is unambiguously distinguishable from the
+    // second run's defaults below. Step 1: switch to the sample tab (itself non-default —
+    // the wizard always reopens on the named tab) and pick the amber-indigo sample. Step 2:
+    // opt into the low-vision profile. Step 3: opt into the non-default answer too. Low-vision
+    // (step 2) outranks the color-blind choice (step 1) in buildPreviewSummary, so the
+    // resulting persisted profile is 'low-vision' (displayPreset 'high-contrast', beaconSize
+    // 'xl') regardless of the step-1/step-3 answers — but those answers must still be set to
+    // non-default values here, since they're exactly the "masked" state that could otherwise
+    // leak into a second run without ever being caught by this test's own first-run
+    // assertions.
+    await page.click('#step1-tab-sample');
+    await page.waitForSelector('#step1-panel-sample:not([hidden])');
+    await page.click('#step1-panel-sample .wizard-option[data-value="amber-indigo"]');
     await page.waitForTimeout(400);
     await page.waitForSelector('#step-2.active');
     await page.click('#step-2.active .wizard-option[data-value="true"]');
     await page.waitForTimeout(400);
-    await clickFirstOptionAndWait(page, '#step-3');
+    await page.waitForSelector('#step-3.active');
+    await page.click('#step-3.active .wizard-option[data-value="true"]');
+    await page.waitForTimeout(400);
     await finishWizard(page);
 
     const firstStored = await waitForSetupWizardCompleted(page);
     assert.strictEqual(firstStored.displayPreset, 'high-contrast', 'first run must persist the low-vision preset');
+    assert.strictEqual(firstStored.visionSettings.beaconSize, 'xl', 'first run must persist the low-vision beaconSize');
 
     const firstBannerText = await page.locator('#wizard-hero-banner').innerText();
     assert.match(firstBannerText, /Low.?Vision/i, 'the completion banner must reflect the first run\'s choice');
+
+    // Sanity check on the setup itself: the tab-reset assertion after reopening is only
+    // meaningful if the first run genuinely left step 1 on the sample tab, not the named tab
+    // it would already be on by default.
+    const sampleTabStillActiveAfterFirstRun = await page.evaluate(
+      () => document.getElementById('step1-tab-sample').classList.contains('active')
+    );
+    assert.strictEqual(
+      sampleTabStillActiveAfterFirstRun,
+      true,
+      'test setup: first run must end on the sample tab or the reopen assertion below would be vacuous'
+    );
 
     // Second run, via the "Run Setup Again" affordance the completion banner adds. This is
     // exactly the path that threw (Cannot read properties of null (reading 'parentElement'))
@@ -254,30 +281,66 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     await page.click('#rerun-wizard');
     await page.waitForSelector('#step-1.active');
 
-    // Re-opening must have reset step 1 back to the named tab and its default answer, not
-    // silently inherited the prior run's "low-vision: yes" for step 2 if the user clicks
-    // past it with Next.
-    const namedTabActive = await page.evaluate(() => document.getElementById('step1-tab-named').classList.contains('active'));
-    assert.strictEqual(namedTabActive, true, 're-opening the wizard must reset step 1 back to the named-condition tab');
+    // Re-opening must have reset step 1 back to the named tab, with the sample panel
+    // genuinely computed display:none (not merely carrying the `hidden` attribute — same
+    // computed-style idiom as the "genuinely display:none" test above), not silently left on
+    // the sample tab the first run ended on.
+    const reopenedTabState = await page.evaluate(() => ({
+      namedActive: document.getElementById('step1-tab-named').classList.contains('active'),
+      sampleActive: document.getElementById('step1-tab-sample').classList.contains('active'),
+      namedDisplay: getComputedStyle(document.getElementById('step1-panel-named')).display,
+      sampleDisplay: getComputedStyle(document.getElementById('step1-panel-sample')).display,
+    }));
+    assert.strictEqual(reopenedTabState.namedActive, true, 're-opening the wizard must reset step 1 back to the named-condition tab');
+    assert.strictEqual(reopenedTabState.sampleActive, false, 're-opening the wizard must deactivate the sample tab left active by the first run');
+    assert.notStrictEqual(reopenedTabState.namedDisplay, 'none', 're-opened named panel must actually render');
+    assert.strictEqual(reopenedTabState.sampleDisplay, 'none', 're-opened sample panel (left active by the first run) must be computed display:none');
 
-    await page.click('#step1-panel-named .wizard-option[data-value="rose-cyan"]');
-    await page.waitForTimeout(400);
-    await clickFirstOptionAndWait(page, '#step-2');
-    await clickFirstOptionAndWait(page, '#step-3');
-    await finishWizard(page);
+    // Drive the second run through with Next only — no option is clicked on any step. This is
+    // the only way to actually exercise resetWizardState(): re-clicking an option on the
+    // second run would overwrite whatever the first run left behind, masking exactly the
+    // inheritance bug this test exists to catch (oculist-rnr.18). navigateNext() has no
+    // selection guard (see welcome.js), so clicking Next past an unselected step is permitted.
+    await page.click('#wizard-next'); // step 1 -> step 2
+    await page.waitForSelector('#step-2.active');
+    await page.click('#wizard-next'); // step 2 -> step 3
+    await page.waitForSelector('#step-3.active');
+    await page.click('#wizard-next'); // step 3 -> step 4
+    await finishWizard(page); // waits for #step-4.active, then Next triggers saveProfileAndFinish()
 
-    const secondStored = await waitForCondition(
-      () => readStoredSettings(page),
-      (stored) => !!(stored && stored.displayPreset === 'by-adjust'),
-      { timeout: POLL_TIMEOUT, message: 'second run never persisted the expected by-adjust preset' }
+    // Wait for the second run's async save to actually land before reading storage back.
+    // wizardModal.style.display is flipped to 'flex' by openWizard() on reopen and is only set
+    // back to 'none' by saveProfileAndFinish() after its `await chrome.storage.sync.set(...)`
+    // resolves, so this predicate is genuinely false the instant the last Next click returns
+    // and only becomes true once the write has landed — it is not decoration (oculist-66m).
+    // wizard-modal's state lives in the page's main world, so page.waitForFunction() is used
+    // directly per this suite's convention (test/helpers/wait.js), rather than the Node-side
+    // waitForCondition helper reserved for isolated-world/Node-side state.
+    await page.waitForFunction(() => document.getElementById('wizard-modal').style.display === 'none');
+
+    const secondStored = await readStoredSettings(page);
+
+    // The second run clicked no option anywhere, so every answer must have come from
+    // resetWizardState()'s defaults, not anything the first run set: displayPreset null and
+    // visionSettings exactly equal to PRESETS['none']. Asserting the whole preset object (not
+    // just one field) so a leak into any single field — beaconSize, colorPalette, or
+    // otherwise — is caught, not just the one the first test happened to check.
+    assert.strictEqual(secondStored.displayPreset, null, 'second run must persist the default (none) preset, not the first run\'s low-vision choice it never re-selected');
+    assert.deepStrictEqual(
+      secondStored.visionSettings,
+      {
+        beaconSize: 'm',
+        animationSpeed: 'normal',
+        textLabels: false,
+        motionSensitivity: 'full',
+        colorPalette: 'default',
+        borderStyle: 'none'
+      },
+      'second run must persist the default visionSettings, not any value inherited from the first run'
     );
-    assert.strictEqual(secondStored.displayPreset, 'by-adjust', 'second run must persist its own (different) choice');
-    // Second run's step 2 answer defaulted back to "no" (the reset default), so the profile
-    // becomes the Tritanopia one chosen in step 1, not low-vision surviving from the first run.
-    assert.strictEqual(secondStored.visionSettings.beaconSize, 'l', 'second run must not inherit first run\'s beaconSize (xl from low-vision)');
 
     const secondBannerText = await page.locator('#wizard-hero-banner').innerText();
-    assert.match(secondBannerText, /Tritanopia/i, 'the completion banner must reflect the second run\'s choice, not the first');
+    assert.match(secondBannerText, /Standard/i, 'the completion banner must reflect the second run\'s default (Standard) profile');
     assert.doesNotMatch(secondBannerText, /Low.?Vision/i, 'the completion banner must not still advertise the first run\'s profile');
 
     assert.deepStrictEqual(pageErrors, [], `re-running the wizard must not throw: ${pageErrors.map((e) => e.message).join('; ')}`);
