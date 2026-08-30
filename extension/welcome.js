@@ -14,6 +14,32 @@ document.addEventListener('DOMContentLoaded', () => {
   let eyeStrainAnswer = 'false';
   let selectedProfile = 'none';
 
+  // oculist-rnr.12 (corrected scope): step 1's wizard-option buttons now carry a functional
+  // data-value ('amber-sky'/'amber-indigo'/'rose-cyan' — see welcome.html near line 247),
+  // matching what colorPalette now persists as, so colorBlindAnswer picks that functional
+  // value straight up. The PRESETS object below keeps its clinical-shaped keys unchanged
+  // ('color-blind-deuteranopia' etc. — in-memory/UI-facing, not persisted, per the agreed
+  // design), so this table translates colorBlindAnswer back to the PRESETS key suffix it
+  // must interpolate into, at the one place that happens (buildPreviewSummary below).
+  const COLOR_ANSWER_TO_PRESET_SUFFIX = {
+    'amber-sky': 'deuteranopia',
+    'amber-indigo': 'protanopia',
+    'rose-cyan': 'tritanopia'
+  };
+
+  // oculist-rnr.12: chrome.storage.sync's 'oc-settings.displayPreset' field now holds only
+  // functional rendering keys, never a clinical label. selectedProfile/PRESETS/badge and
+  // summary text above and below stay in this wizard's own clinical-shortcut vocabulary
+  // (that's the UI rnr.13 owns) — this table translates only at the point saveProfileAndFinish()
+  // persists the choice.
+  const WIZARD_PROFILE_TO_DISPLAY_PRESET = {
+    'low-vision': 'high-contrast',
+    'color-blind-deuteranopia': 'rg-adjust-deut',
+    'color-blind-protanopia': 'rg-adjust-prot',
+    'color-blind-tritanopia': 'by-adjust',
+    'eye-strain': 'reduced-motion'
+  };
+
   const PRESETS = {
     'none': {
       beaconSize: 'm',
@@ -36,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'deuteranopia',
+      colorPalette: 'amber-sky',
       borderStyle: 'medium'
     },
     'color-blind-protanopia': {
@@ -44,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'protanopia',
+      colorPalette: 'amber-indigo',
       borderStyle: 'medium'
     },
     'color-blind-tritanopia': {
@@ -52,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'tritanopia',
+      colorPalette: 'rose-cyan',
       borderStyle: 'medium'
     },
     'eye-strain': {
@@ -67,9 +93,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const PALETTE_COLORS = {
     'default': { match: '#fef08a', active: '#f59e0b', beacon: '#fbbf24' },
-    'deuteranopia': { match: '#fef08a', active: '#0284c7', beacon: '#0284c7' },
-    'protanopia': { match: '#fef08a', active: '#2563eb', beacon: '#2563eb' },
-    'tritanopia': { match: '#ffcbd1', active: '#06b6d4', beacon: '#06b6d4' },
+    'amber-sky': { match: '#fef08a', active: '#0284c7', beacon: '#0284c7' },
+    'amber-indigo': { match: '#fef08a', active: '#2563eb', beacon: '#2563eb' },
+    'rose-cyan': { match: '#ffcbd1', active: '#06b6d4', beacon: '#06b6d4' },
     'warm': { match: '#fef08a', active: '#d97706', beacon: '#eab308' }
   };
 
@@ -160,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (lowVisionAnswer === 'true') {
       selectedProfile = 'low-vision';
     } else if (colorBlindAnswer !== 'none') {
-      selectedProfile = `color-blind-${colorBlindAnswer}`;
+      selectedProfile = `color-blind-${COLOR_ANSWER_TO_PRESET_SUFFIX[colorBlindAnswer] || colorBlindAnswer}`;
     } else if (eyeStrainAnswer === 'true') {
       selectedProfile = 'eye-strain';
     } else {
@@ -656,7 +682,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await chrome.storage.sync.get('oc-settings');
       const settings = (data && data['oc-settings']) || {};
 
-      settings.visionProfile = selectedProfile === 'none' ? null : selectedProfile;
+      // oculist-rnr.12 (review fix, gap 1): a not-yet-updated install's stored object can
+      // still carry a legacy 'visionProfile' key (content scripts don't re-inject into
+      // already-open tabs after an update, so welcome.html can be the first surface to
+      // touch a pre-update settings object). Strip it before this wizard's own fresh choice
+      // gets written below, or the legacy key would ride along into the write-back
+      // untouched forever. The displayPreset value normalizeOcSettings() computes here is
+      // immediately overwritten by the wizard's own selection on the next line regardless —
+      // only the deletion of the legacy key matters at this call site.
+      OculistSettingsMigration.normalizeOcSettings(settings);
+
+      settings.displayPreset = selectedProfile === 'none' ? null : (WIZARD_PROFILE_TO_DISPLAY_PRESET[selectedProfile] || null);
       settings.visionSettings = {
         ...settings.visionSettings,
         ...vs

@@ -334,28 +334,29 @@ describe('Dispersion Bloom: palette-derived radial chromatic dispersion', () => 
     assertColorsMatch(colors, expectedRingHexes(defaultBeacon));
 
     try {
-      // Switch the vision profile's colour palette (default -> tritanopia). Its beacon
-      // colour is injected as a live CSS custom property by the content script itself
-      // (injectHighlightStyles()'s designTokensCss --oc-palette-tritanopia-beacon) — read
+      // Switch the colour palette (default -> rose-cyan, oculist-rnr.12's functional
+      // replacement for the old 'tritanopia' persisted value). Its beacon colour is
+      // injected as a live CSS custom property by the content script itself
+      // (injectHighlightStyles()'s designTokensCss --oc-palette-rose-cyan-beacon) — read
       // it out of the real page instead of hardcoding the value a second time.
-      await setVisionSettings({ colorPalette: 'tritanopia' });
-      const tritanopiaBeacon = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--oc-palette-tritanopia-beacon').trim()
+      await setVisionSettings({ colorPalette: 'rose-cyan' });
+      const roseCyanBeacon = await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--oc-palette-rose-cyan-beacon').trim()
       );
       assert.ok(
-        /^#[0-9a-f]{6}$/i.test(tritanopiaBeacon),
-        `unexpected tritanopia beacon custom property value: "${tritanopiaBeacon}"`
+        /^#[0-9a-f]{6}$/i.test(roseCyanBeacon),
+        `unexpected rose-cyan beacon custom property value: "${roseCyanBeacon}"`
       );
       assert.notStrictEqual(
-        tritanopiaBeacon.toLowerCase(),
+        roseCyanBeacon.toLowerCase(),
         defaultBeacon.toLowerCase(),
-        'sanity check: default and tritanopia beacon colours must actually differ for this test to prove anything'
+        'sanity check: default and rose-cyan beacon colours must actually differ for this test to prove anything'
       );
 
       await replay();
       colors = await ringColors();
       assert.strictEqual(colors.length, 3, `expected 3 dispersion rings, got ${colors.length}`);
-      assertColorsMatch(colors, expectedRingHexes(tritanopiaBeacon));
+      assertColorsMatch(colors, expectedRingHexes(roseCyanBeacon));
     } finally {
       await setVisionSettings({ colorPalette: 'default' });
     }

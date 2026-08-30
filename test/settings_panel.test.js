@@ -35,6 +35,13 @@ function createDOMEnvironment() {
   // Assign standard browser globals to Node global space for testing browser scripts
   Object.assign(global, domGlobals);
 
+  // oculist-rnr.12: content.js is manifest-injected with settings-migration.js listed
+  // immediately before it (extension/manifest.json's content_scripts), sharing the same
+  // isolated-world `window` — this eval mirrors that load order so content.js's own
+  // `window.OculistSettingsMigration` reference resolves the same way it does for real.
+  const settingsMigrationPath = path.join(__dirname, '../extension/settings-migration.js');
+  eval(fs.readFileSync(settingsMigrationPath, 'utf8'));
+
   // Mock Web Animations API Element.prototype.animate
   dom.window.Element.prototype.animate = function(keyframes, options) {
     return {

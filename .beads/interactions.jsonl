@@ -110,3 +110,4 @@
 {"id":"int-130b4d7b3af4ca2eee2a51b126e25be7","kind":"field_change","created_at":"2026-08-29T06:59:42.420066Z","actor":"ya8282","issue_id":"oculist-rnr.5","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-d77322d0665208cced3457e3728d13e4","kind":"field_change","created_at":"2026-08-29T07:03:18.456823Z","actor":"ya8282","issue_id":"oculist-vuk","extra":{"field":"priority","new_value":"3","old_value":"2"}}
 {"id":"int-4a9af48d818e4979f805e195cdeeda64","kind":"field_change","created_at":"2026-08-29T07:05:25.247695Z","actor":"ya8282","issue_id":"oculist-rnr.9","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-afcfadc5bd6eea7047f86817043b724e","kind":"field_change","created_at":"2026-08-30T16:11:12.920898Z","actor":"ya8282","issue_id":"oculist-rnr.11","extra":{"field":"status","new_value":"open","old_value":"in_progress"}}

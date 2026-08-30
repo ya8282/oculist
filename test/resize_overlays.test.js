@@ -64,7 +64,9 @@ describe('Low Vision overlays survive a window resize', () => {
       () =>
         chrome.storage.sync
           .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
+          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+          // translation of the 'low-vision' dropdown option ('high-contrast').
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'high-contrast')),
       null,
       { timeout: POLL_TIMEOUT }
     );

@@ -148,7 +148,9 @@ describe('Finder survives SPA navigation that swaps the body', () => {
       () =>
         chrome.storage.sync
           .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'color-blind-deuteranopia')),
+          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+          // translation of the 'color-blind-deuteranopia' dropdown option ('rg-adjust-deut').
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'rg-adjust-deut')),
       null,
       { timeout: POLL_TIMEOUT }
     );
