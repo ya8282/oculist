@@ -400,6 +400,48 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     await secondPage.close();
   });
 
+  // oculist-rnr.16: direct coverage for the hasOwnProperty precedence branch in
+  // settings-migration.js's normalizeOcSettings() (lines ~69-76) — up to now it was only
+  // verified by inspection. Unlike the 'review gap 2' scenario below (which derives this
+  // state across two separate events: a popup reselect, then a later content-script boot),
+  // this seeds a SINGLE stored object that already has both 'visionProfile' (stale legacy)
+  // and 'displayPreset' (a fresh, different value) present together from the very first
+  // read. If the precedence check were missing or inverted, the stale legacy value would
+  // overwrite the fresh displayPreset and silently discard real user data.
+  test('a stored object with both a stale legacy visionProfile and an already-set displayPreset keeps displayPreset and discards the stale legacy value', async () => {
+    await seedOcSettings(sw, {
+      disabledSites: [],
+      performanceMode: false,
+      // If the legacy field were (wrongly) allowed to win, this would compute to
+      // 'high-contrast' — deliberately different from displayPreset below so the two
+      // outcomes are unambiguous.
+      visionProfile: 'low-vision',
+      displayPreset: 'reduced-motion',
+      visionSettings: {},
+      setupWizardCompleted: true,
+      seededDefaultBlocklist: true,
+    });
+
+    const page = await openTrackedPage();
+    const migrated = await waitForCondition(
+      () => readOcSettings(sw),
+      (s) => !!s && !Object.prototype.hasOwnProperty.call(s, 'visionProfile'),
+      { timeout: POLL_TIMEOUT, message: 'migration of the simultaneous visionProfile + displayPreset case never landed' }
+    );
+
+    assert.strictEqual(
+      migrated.displayPreset,
+      'reduced-motion',
+      'an already-present displayPreset must win over a stale legacy visionProfile, not be overwritten by it'
+    );
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(migrated, 'visionProfile'),
+      false,
+      'the stale legacy visionProfile must still be deleted even though its value was discarded unused'
+    );
+    await page.close();
+  });
+
   // Review gap 1 regression: content scripts do not re-inject into already-open tabs after
   // an extension update, so a legacy user's popup — not a content-script boot — can be the
   // very first thing to read a pre-update settings object. Exercises the real popup.js
