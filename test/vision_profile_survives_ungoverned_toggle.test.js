@@ -15,7 +15,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -96,15 +96,11 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     // Persisted storage must agree with the live dropdown, and the magnifier toggle itself
     // must still have taken effect — wait for the async chrome.storage.sync.set() write to
     // actually land before reading it back.
-    await popup.waitForFunction(
-      () =>
-        chrome.storage.sync
-          .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionSettings && d['oc-settings'].visionSettings.magnifier === true)),
-      null,
-      { timeout: POLL_TIMEOUT }
+    const stored = await waitForCondition(
+      () => readStoredSettings(popup),
+      (d) => !!(d && d.visionSettings && d.visionSettings.magnifier === true),
+      { timeout: POLL_TIMEOUT, message: 'oc-settings.visionSettings.magnifier never became true' }
     );
-    const stored = await readStoredSettings(popup);
     // oculist-rnr.12: the persisted field is 'displayPreset' now, holding the functional
     // key 'reduced-motion' for what the #vision-profile dropdown still labels 'eye-strain'.
     assert.strictEqual(stored.displayPreset, 'reduced-motion', 'persisted displayPreset must still be reduced-motion');
@@ -132,12 +128,11 @@ describe('Vision profile survives ungoverned setting toggles', () => {
 
     // Wait for the async chrome.storage.sync.set() write to actually land before reading
     // it back.
-    await popup.waitForFunction(
-      () => chrome.storage.sync.get('oc-settings').then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'custom')),
-      null,
-      { timeout: POLL_TIMEOUT }
+    const stored = await waitForCondition(
+      () => readStoredSettings(popup),
+      (d) => !!(d && d.displayPreset === 'custom'),
+      { timeout: POLL_TIMEOUT, message: "oc-settings.displayPreset never became 'custom'" }
     );
-    const stored = await readStoredSettings(popup);
     assert.strictEqual(stored.displayPreset, 'custom');
 
     await popup.close();

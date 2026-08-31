@@ -107,6 +107,39 @@ document.addEventListener('DOMContentLoaded', () => {
     'warm': { match: '#fef08a', active: '#d97706', beacon: '#eab308' }
   };
 
+  // oculist-336: single source of truth for the composed vision profile + settings.
+  // Resolves selectedProfile by the same priority as before (low-vision > color-blind >
+  // eye-strain), then — when low-vision AND a color-vision answer are both present —
+  // overlays the user's chosen palette onto the low-vision preset instead of discarding it.
+  // colorBlindAnswer already holds the functional palette value ('amber-sky' /
+  // 'amber-indigo' / 'rose-cyan', see COLOR_ANSWER_TO_PRESET_SUFFIX above), so it can be
+  // assigned to colorPalette directly, no translation needed. displayPreset/selectedProfile
+  // stay 'low-vision' either way (sizing/contrast/motion/border still come from that
+  // preset) — only colorPalette is overridden.
+  // All three consumers below (buildPreviewSummary, runMockupAnimation,
+  // saveProfileAndFinish) call this so the summary, the mockup preview, and the persisted
+  // settings can never disagree.
+  function resolveVisionSettings() {
+    let profile;
+    if (lowVisionAnswer === 'true') {
+      profile = 'low-vision';
+    } else if (colorBlindAnswer !== 'none') {
+      profile = `color-blind-${COLOR_ANSWER_TO_PRESET_SUFFIX[colorBlindAnswer] || colorBlindAnswer}`;
+    } else if (eyeStrainAnswer === 'true') {
+      profile = 'eye-strain';
+    } else {
+      profile = 'none';
+    }
+
+    let settings = PRESETS[profile] || PRESETS['none'];
+
+    if (profile === 'low-vision' && colorBlindAnswer !== 'none') {
+      settings = { ...settings, colorPalette: colorBlindAnswer };
+    }
+
+    return { profile, settings };
+  }
+
   // 1. Show Wizard modal
   function openWizard() {
     resetWizardState();
@@ -279,16 +312,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildPreviewSummary() {
-    // Resolve vision profile based on options: low-vision > color-blind > eye-strain
-    if (lowVisionAnswer === 'true') {
-      selectedProfile = 'low-vision';
-    } else if (colorBlindAnswer !== 'none') {
-      selectedProfile = `color-blind-${COLOR_ANSWER_TO_PRESET_SUFFIX[colorBlindAnswer] || colorBlindAnswer}`;
-    } else if (eyeStrainAnswer === 'true') {
-      selectedProfile = 'eye-strain';
-    } else {
-      selectedProfile = 'none';
-    }
+    const resolved = resolveVisionSettings();
+    selectedProfile = resolved.profile;
 
     // Update Profile badge
     const badge = document.getElementById('profile-badge');
@@ -303,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = badgeTexts[selectedProfile] || 'Custom';
 
     // Build configuration listing
-    const vs = PRESETS[selectedProfile] || PRESETS['none'];
+    const vs = resolved.settings;
     const summaryList = document.getElementById('summary-list');
     summaryList.innerHTML = '';
 
@@ -380,7 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const w = targetRect.width;
     const h = targetRect.height;
 
-    const vs = PRESETS[selectedProfile] || PRESETS['none'];
+    const vs = resolveVisionSettings().settings;
     const effect = previewEffectSelect.value;
     const colors = PALETTE_COLORS[vs.colorPalette] || PALETTE_COLORS['default'];
     
@@ -772,7 +797,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function saveProfileAndFinish() {
-    const vs = PRESETS[selectedProfile] || PRESETS['none'];
+    const resolved = resolveVisionSettings();
+    selectedProfile = resolved.profile;
+    const vs = resolved.settings;
 
     // Save to sync storage
     try {

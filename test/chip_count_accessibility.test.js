@@ -24,7 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { enableAccessibilityDomain, computedAccessibleName, waitForComputedAccessibleName } = require('./helpers/accessible_name');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -39,6 +39,17 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+
+// Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+// confirmed against this Playwright version that a promise-returning predicate resolves
+// immediately on the (truthy) Promise object rather than being awaited (see
+// test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+// trip from Node on every poll tick instead.
+function readStoredSettings(target) {
+  return target.evaluate(
+    () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+  );
+}
 
 describe('Chip term accessible name includes the hit count', () => {
   let server, ctx, page, client, isolatedContextId;
@@ -350,13 +361,10 @@ describe('A Lite Mode chip announces the real countMatchesOnly() count, not a bl
     // The checkbox itself is visually hidden by the slider CSS toggle pattern — click its
     // <label> (the actionable, visible element) instead of the input.
     await popup.click('label[for="toggle-lite-mode"]');
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync
-          .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
-      enabled,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (stored) => !!(stored && stored.performanceMode === enabled),
+      { timeout: POLL_TIMEOUT, message: `oc-settings.performanceMode never became ${enabled}` }
     );
     await popup.close();
     await page.bringToFront();

@@ -341,23 +341,56 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
         timeout: LONG_TIMEOUT,
         message: 'speed lines beacon never reached its final frame in Lite Mode',
       });
-      const frames = await evalInContentScript('window.__ocTest.speedLinesFrameCount');
-      const draws = await evalInContentScript('window.__ocTest.speedLinesHighlightDrawCount');
-      assert.ok(frames > 0, 'sanity check: expected at least one frame to have rendered in Lite Mode');
+      // The demonstrated flake here is the bead's own "7 !== 5": frames and draws read as
+      // two SEPARATE round trips off a live, still-running rAF loop, so a frame could land
+      // in between them and manufacture a false mismatch — the exact race
+      // readFrameAndDrawCounts() below already closes for its own early/late samples in
+      // the persistence test above.
+      // Reading frames/draws/highlightY/independent-anchor together in one atomic
+      // evaluation, right when 'done' is observed, eliminates that race structurally: no
+      // round trip can land between the two counters any more, so they can never disagree
+      // on a still-running effect. It also NARROWS, but does not eliminate, a second,
+      // separate risk: .oc-beacon is removed by an independent wall-clock setTimeout in
+      // content.js, and the previous four-round-trip version left a wider real-time gap in
+      // which that teardown could in principle beat this read. Measuring the actual gap at
+      // fault time (elapsed/DUR encoded into a probe run here) put this read mid-flight —
+      // elapsed ~354ms of a 760ms DUR, i.e. teardown roughly 400ms out — and a deliberate
+      // teardown-timing probe at DUR*0.2 still passed; independent anchor reads are still a
+      // live getBoundingClientRect() on the real #target/.oc-beacon elements, not
+      // effect-internal state, same as elementCenterInContainer's own math, just taken
+      // through this already-open isolated-world channel instead of a fourth, slower
+      // round trip via Playwright's own page.evaluate().
+      const result = await evalInContentScript(`
+        (function () {
+          var el = document.querySelector('#target');
+          var container = document.querySelector('.oc-beacon');
+          var independent = null;
+          if (el && container) {
+            var r = el.getBoundingClientRect();
+            var c = container.getBoundingClientRect();
+            independent = { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+          }
+          return {
+            frames: window.__ocTest.speedLinesFrameCount,
+            draws: window.__ocTest.speedLinesHighlightDrawCount,
+            highlightY: window.__ocTest.lastSpeedLinesHighlightY,
+            independent: independent
+          };
+        })()
+      `);
+      assert.ok(result.frames > 0, 'sanity check: expected at least one frame to have rendered in Lite Mode');
       assert.strictEqual(
-        draws,
-        frames,
-        `expected the highlight to draw on every frame in Lite Mode too; frames=${frames}, highlightDraws=${draws}`
+        result.draws,
+        result.frames,
+        `expected the highlight to draw on every frame in Lite Mode too; frames=${result.frames}, highlightDraws=${result.draws}`
       );
 
-      const highlightY = await evalInContentScript('window.__ocTest.lastSpeedLinesHighlightY');
-      const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
-      assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
-      const dy = Math.abs(highlightY - independent.y);
+      assert.ok(result.independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
+      const dy = Math.abs(result.highlightY - result.independent.y);
       assert.ok(
         dy <= ANCHOR_TOLERANCE,
         `expected the Lite Mode highlight to still sit at the match's real vertical centre within ${ANCHOR_TOLERANCE}px; ` +
-          `highlightY=${highlightY}, independent=${JSON.stringify(independent)} (dy=${dy}px)`
+          `highlightY=${result.highlightY}, independent=${JSON.stringify(result.independent)} (dy=${dy}px)`
       );
     } finally {
       await setSettings({ performanceMode: false });
