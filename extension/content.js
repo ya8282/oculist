@@ -64,11 +64,20 @@
   var pendingSelfWrites = [];
 
   function saveSettings() {
-    pendingSelfWrites.push(stableStringify(settings));
-    // Purely a leak guard. An echo that never arrives would otherwise pin an entry here
-    // forever; nobody queues twenty writes ahead of the first echo in practice.
-    if (pendingSelfWrites.length > 20) pendingSelfWrites.shift();
-    chrome.storage.sync.set({ 'oc-settings': settings });
+    // oculist-xvh: writeOcSettings() three-way merges this write against a concurrent
+    // foreign write instead of blindly overwriting it (see settings-migration.js). The
+    // echo record must be of the MERGED object actually written, not of `settings` — a
+    // foreign write folded into the merge changes what lands in storage, and recording
+    // `settings` instead would make the onChanged listener fail to recognise a merge
+    // that included a foreign key as our own echo. Do NOT copy `merged` back into
+    // `settings` here: a foreign write already delivers itself through the existing
+    // onChanged listener, and copying it in here would defeat that path.
+    OculistSettingsMigration.writeOcSettings(settings, undefined, function (merged) {
+      pendingSelfWrites.push(stableStringify(merged));
+      // Purely a leak guard. An echo that never arrives would otherwise pin an entry here
+      // forever; nobody queues twenty writes ahead of the first echo in practice.
+      if (pendingSelfWrites.length > 20) pendingSelfWrites.shift();
+    });
   }
 
   // chrome.storage hands objects back with their keys sorted alphabetically, while the
@@ -349,6 +358,14 @@
   // is asserted on the DOM instead (count text and the oculist-match highlight
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
+
+  // Same test-reachability reasoning as getDebounceTimer above: activeBeacons (declared
+  // further down, in the "State" section) is a module-private "have we drawn since the
+  // last reset" flag animate() increments and cancelBeacons()/fadeActiveBeacons() reset
+  // to 0 — nothing outside this closure can read it otherwise. oculist-5rv's regression
+  // test uses this to assert animate() does not increment it on a guard-skipped
+  // (zero-width/zero-height rect) run.
+  window.__ocTest.getActiveBeacons = function () { return activeBeacons; };
 
   // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
   // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
@@ -3635,7 +3652,27 @@
     var effectKey = settings.effect;
     var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
-      activeBeacons++;
+      // ponytail: every effectsRegistry entry guards run(rect) with the identical
+      // `if (!rect || rect.width === 0 || rect.height === 0) return;` (audited
+      // oculist-5rv) before drawing anything, so a zero-metric rect never draws a beacon
+      // regardless of which effect is selected. animateSpeedLines() is the one entry
+      // where that guard is not the first statement — its oculist-47e hook resets run
+      // ahead of it, which is exactly why run() is still called unconditionally below. activeBeacons++ used to fire unconditionally right here,
+      // so a guard-skipped run below still counted itself with no matching decrement
+      // — a real leak, just not a suppression: activeBeacons is only ever compared to
+      // 0 (cancelBeacons resets it; fadeActiveBeacons's scroll-path check
+      // short-circuits a querySelectorAll('.oc-beacon') on it), so it's a "have we
+      // drawn since the last reset" flag, not a true count, and each leaked increment
+      // only cost one wasted querySelectorAll — fadeActiveBeacons() self-heals a pure
+      // leak on the first scroll after it, since it zeroes the flag when it finds no
+      // beacons in the DOM. Gating
+      // just the increment here (rather than a bare early return before this whole
+      // block) keeps that flag accurate at its single call site while still always
+      // calling run() — animateSpeedLines() relies on being called even on a
+      // guard-skipped rect to reset its own __ocTest hooks before its early return
+      // (oculist-47e); a bare early return here would silently stop it from ever
+      // being invoked on a zero rect, leaving those hooks stale.
+      if (rect && rect.width !== 0 && rect.height !== 0) activeBeacons++;
       effectObj.run(rect);
     }
   }
@@ -7315,6 +7352,11 @@
     // legacy field a not-yet-updated surface re-persisted, and always deletes the legacy
     // key either way — idempotent by construction, since a normalised object never has a
     // 'visionProfile' key or a clinical colorPalette value for a later pass to re-detect.
+    // oculist-xvh: base for writeOcSettings()'s three-way merge — must be recorded from
+    // the raw read, before normalizeOcSettings() below mutates `saved` in place, or the
+    // base would already reflect this tab's own not-yet-written migration instead of
+    // what storage actually held at boot.
+    OculistSettingsMigration.rememberOcSettings(data && data['oc-settings']);
     var needsMigration = false;
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];
