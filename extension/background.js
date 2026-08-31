@@ -64,40 +64,57 @@ async function injectAndToggle(tabId) {
 // later extension update does not undo that choice.
 const DEFAULT_DISABLED_SITES = ['github.com'];
 
-function seedDefaultBlocklist() {
+// chrome.storage.sync has no transaction or compare-and-swap primitive, so a write
+// from another context (the popup, or a concurrent extension update) can still land
+// in the gap between this get() and this set() — that residual window cannot be
+// closed without a CAS API Chrome doesn't offer. What this DOES buy: every write
+// goes through one fresh get() taken immediately before its own set(), so this file's
+// own multiple write sites never base a write on a snapshot an earlier write (of ours)
+// has already superseded. `mutate` may return `false` to skip the write entirely
+// (e.g. nothing to change) — in that case `done` still fires, but with no set() call.
+function updateSettings(mutate, done) {
   chrome.storage.sync.get('oc-settings', (data) => {
     const settings = (data && data['oc-settings']) || {};
-    if (settings.seededDefaultBlocklist) return;
+    const result = mutate(settings);
+    if (result === false) {
+      if (done) done();
+      return;
+    }
+    chrome.storage.sync.set({ 'oc-settings': settings }, done);
+  });
+}
+
+function seedDefaultBlocklist(done) {
+  updateSettings((settings) => {
+    if (settings.seededDefaultBlocklist) return false;
     if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
     DEFAULT_DISABLED_SITES.forEach((host) => {
       if (settings.disabledSites.indexOf(host) === -1) settings.disabledSites.push(host);
     });
     settings.seededDefaultBlocklist = true;
-    chrome.storage.sync.set({ 'oc-settings': settings });
-  });
+  }, done);
 }
 
 // First-run onboarding.
 chrome.runtime.onInstalled.addListener((details) => {
   // Runs on update too, so existing installs pick the default up once. The flag inside
-  // keeps it to exactly once.
-  seedDefaultBlocklist();
+  // keeps it to exactly once. The performanceMode write below (when it runs) waits for
+  // this one to finish first — see updateSettings — so neither write clobbers the other.
+  seedDefaultBlocklist(() => {
+    if (details.reason === 'install') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 
-  if (details.reason === 'install') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
-
-    // Auto-enable Lite Mode for low-spec devices. hardwareConcurrency is the only
-    // capability signal available in a service worker (no rAF/DOM here for an FPS
-    // sample), so cores is the whole heuristic — good enough as a starting default,
-    // and the user can always flip it manually in the popup.
-    if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4) {
-      chrome.storage.sync.get('oc-settings', (data) => {
-        const settings = (data && data['oc-settings']) || {};
-        settings.performanceMode = true;
-        chrome.storage.sync.set({ 'oc-settings': settings });
-      });
+      // Auto-enable Lite Mode for low-spec devices. hardwareConcurrency is the only
+      // capability signal available in a service worker (no rAF/DOM here for an FPS
+      // sample), so cores is the whole heuristic — good enough as a starting default,
+      // and the user can always flip it manually in the popup.
+      if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4) {
+        updateSettings((settings) => {
+          settings.performanceMode = true;
+        });
+      }
     }
-  }
+  });
 });
 
 let cachedDisabledImageDatas = null;
