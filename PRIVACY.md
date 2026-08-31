@@ -68,14 +68,14 @@ settings the first time the popup or a freshly loaded page reads it, or the
 first time you finish the setup wizard on the welcome page — merely opening
 the welcome page touches nothing. The condition name itself is discarded and
 only the equivalent display preset is kept. A separate step that runs once
-on every update, to reseed the default disabled-sites list, now runs that
-same cleanup too, so it does not carry the old key forward. The only
-exception is if that cleanup code fails to load — an unlikely packaging
+on every install and every update, to reseed the default disabled-sites list,
+now runs that same cleanup too, so it does not carry the old key forward. The
+only exception is if that cleanup code fails to load — an unlikely packaging
 problem, not something that happens in normal use — in which case this step
-reads and writes back your whole settings object without running the
-cleanup, and if it fires before anything else has, it can write the old key
-back once. Either way, the next thing that reads your settings after that
-removes it again for good.
+reads and writes back your whole settings object without running the cleanup,
+and if it fires before anything else has, it can write the old key back once.
+Either way, the next thing that reads your settings after that removes it
+again for good.
 
 `chrome.storage.sync` is Chrome's own sync, between your own signed-in Chrome
 profiles. It does not pass through any server operated by this extension's
