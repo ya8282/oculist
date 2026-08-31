@@ -64,11 +64,20 @@
   var pendingSelfWrites = [];
 
   function saveSettings() {
-    pendingSelfWrites.push(stableStringify(settings));
-    // Purely a leak guard. An echo that never arrives would otherwise pin an entry here
-    // forever; nobody queues twenty writes ahead of the first echo in practice.
-    if (pendingSelfWrites.length > 20) pendingSelfWrites.shift();
-    chrome.storage.sync.set({ 'oc-settings': settings });
+    // oculist-xvh: writeOcSettings() three-way merges this write against a concurrent
+    // foreign write instead of blindly overwriting it (see settings-migration.js). The
+    // echo record must be of the MERGED object actually written, not of `settings` — a
+    // foreign write folded into the merge changes what lands in storage, and recording
+    // `settings` instead would make the onChanged listener fail to recognise a merge
+    // that included a foreign key as our own echo. Do NOT copy `merged` back into
+    // `settings` here: a foreign write already delivers itself through the existing
+    // onChanged listener, and copying it in here would defeat that path.
+    OculistSettingsMigration.writeOcSettings(settings, undefined, function (merged) {
+      pendingSelfWrites.push(stableStringify(merged));
+      // Purely a leak guard. An echo that never arrives would otherwise pin an entry here
+      // forever; nobody queues twenty writes ahead of the first echo in practice.
+      if (pendingSelfWrites.length > 20) pendingSelfWrites.shift();
+    });
   }
 
   // chrome.storage hands objects back with their keys sorted alphabetically, while the
@@ -7315,6 +7324,11 @@
     // legacy field a not-yet-updated surface re-persisted, and always deletes the legacy
     // key either way — idempotent by construction, since a normalised object never has a
     // 'visionProfile' key or a clinical colorPalette value for a later pass to re-detect.
+    // oculist-xvh: base for writeOcSettings()'s three-way merge — must be recorded from
+    // the raw read, before normalizeOcSettings() below mutates `saved` in place, or the
+    // base would already reflect this tab's own not-yet-written migration instead of
+    // what storage actually held at boot.
+    OculistSettingsMigration.rememberOcSettings(data && data['oc-settings']);
     var needsMigration = false;
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];

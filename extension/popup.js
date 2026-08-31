@@ -174,6 +174,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   let settings = { disabledSites: [], performanceMode: false, displayPreset: null, visionSettings: {} };
   try {
     const data = await chrome.storage.sync.get('oc-settings');
+    // oculist-xvh: base for writeOcSettings()'s three-way merge — recorded from the raw
+    // read, before normalizeOcSettings() below mutates `settings` in place, so the base
+    // reflects what storage actually held rather than this popup's own not-yet-written
+    // migration.
+    OculistSettingsMigration.rememberOcSettings(data && data['oc-settings']);
     if (data && data['oc-settings']) {
       settings = data['oc-settings'];
       if (!Array.isArray(settings.disabledSites)) {
@@ -187,12 +192,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       // value straight past content.js's own migration. normalizeOcSettings() prefers an
       // already-present 'displayPreset' over a stale legacy 'visionProfile' (so a later
       // content-script boot can never revert a choice made here), and is idempotent, so
-      // persisting eagerly whenever it actually changes something is always safe. Uses a
-      // direct chrome.storage.sync.set() rather than saveSettings() below: saveSettings()
-      // reads `activeTab`, which isn't assigned until later in this file, and referencing
-      // it here — before its own `let activeTab;` line has run — would throw.
+      // persisting eagerly whenever it actually changes something is always safe. Uses
+      // OculistSettingsMigration.writeOcSettings() directly rather than saveSettings()
+      // below: saveSettings() reads `activeTab`, which isn't assigned until later in this
+      // file, and referencing it here — before its own `let activeTab;` line has run —
+      // would throw. writeOcSettings() never rejects, so no .catch() is needed.
       if (OculistSettingsMigration.normalizeOcSettings(settings)) {
-        chrome.storage.sync.set({ 'oc-settings': settings }).catch(() => {});
+        OculistSettingsMigration.writeOcSettings(settings);
       }
     }
   } catch (e) {
@@ -392,7 +398,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function saveSettings() {
     try {
-      await chrome.storage.sync.set({ 'oc-settings': settings });
+      // oculist-xvh: three-way merge against a concurrent foreign write instead of a
+      // blind overwrite (see settings-migration.js). writeOcSettings() never rejects, so
+      // this await always resolves — with the merged object, or null on a storage error
+      // — and the surrounding try/catch stays for the sendMessage call below.
+      await new Promise(function (resolve) {
+        OculistSettingsMigration.writeOcSettings(settings, resolve);
+      });
       // Notify active tab that settings updated
       if (activeTab && activeTab.id) {
         chrome.tabs.sendMessage(activeTab.id, { action: 'settingsUpdated', settings: settings }).catch(() => {});
