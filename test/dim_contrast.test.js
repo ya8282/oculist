@@ -31,15 +31,19 @@ const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 // oculist-rnr.12: the #vision-profile dropdown (and popup.js's own PRESETS, which
 // loadBuiltInProfiles() reads below) still uses these legacy-shaped values, but the
 // persisted 'oc-settings.displayPreset' field only ever holds the functional key on the
-// right — mirrors popup.js's own LEGACY_TO_FUNCTIONAL_PRESET.
-const LEGACY_TO_FUNCTIONAL_PRESET = {
-  'low-vision': 'high-contrast',
-  'color-blind-deuteranopia': 'rg-adjust-deut',
-  'color-blind-protanopia': 'rg-adjust-prot',
-  'color-blind-tritanopia': 'by-adjust',
-  'eye-strain': 'reduced-motion',
-  'custom': 'custom'
-};
+// right. This file's own assertions never depend on the mapping's own correctness — every
+// contrast/CSS check below keys off profileKey (e.g. 'color-blind-tritanopia'), not off the
+// derived preset string. The only consumer of this table in this file is
+// setVisionProfile()'s wait predicate, which just needs to know when popup.js's write has
+// landed so the test can move on to the real (contrast) assertions. So — unlike
+// display_preset_migration.test.js's LEGACY_CASES/LEGACY_PALETTE_CASES, which are a
+// deliberate independent literal because the mapping's correctness IS what those tests
+// assert (oculist-rnr.24) — importing the canonical export here is correct: it removes a
+// hand-copy that could silently drift with no compensating benefit, without making
+// anything here tautological (the popup UI's write path is still exercised for real; the
+// mapping's own correctness is covered by display_preset_migration.test.js's oculist-
+// rnr.12 popup-write case and its oculist-rnr.22 structural invariants).
+const { LEGACY_DISPLAY_PRESET_MAP: LEGACY_TO_FUNCTIONAL_PRESET } = require('../extension/settings-migration.js');
 
 // Sourced directly from popup.js's own PRESETS object (not hand-copied), so this test
 // tracks whatever built-in profiles actually exist rather than a list that can drift out of
