@@ -805,6 +805,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Save to sync storage
     try {
       const data = await chrome.storage.sync.get('oc-settings');
+      // oculist-xvh: base for writeOcSettings()'s three-way merge — recorded from the raw
+      // read, before normalizeOcSettings() below mutates `settings` in place, so the base
+      // reflects what storage actually held rather than this wizard's own not-yet-written
+      // choice.
+      OculistSettingsMigration.rememberOcSettings(data && data['oc-settings']);
       const settings = (data && data['oc-settings']) || {};
 
       // oculist-rnr.12 (review fix, gap 1): a not-yet-updated install's stored object can
@@ -830,7 +835,12 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       settings.setupWizardCompleted = true;
 
-      await chrome.storage.sync.set({ 'oc-settings': settings });
+      // oculist-xvh: three-way merge against a concurrent foreign write instead of a
+      // blind overwrite (see settings-migration.js). writeOcSettings() never rejects, so
+      // this await always resolves — with the merged object, or null on a storage error.
+      await new Promise(function (resolve) {
+        OculistSettingsMigration.writeOcSettings(settings, resolve);
+      });
     } catch (e) {
       console.error('Failed to save settings:', e);
     }

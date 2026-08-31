@@ -29,7 +29,15 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 
-function loadBackground({ backing, hardwareConcurrency, onTabsCreate, onGetSnapshot }) {
+function loadBackground({
+  backing, hardwareConcurrency, onTabsCreate, onGetSnapshot,
+  // oculist-6tp: 1-indexed call numbers (matching calls.get/calls.set below) on which
+  // to simulate chrome.runtime.lastError, following the transient-property pattern
+  // test/worklist_storage.test.js uses — set immediately before the callback runs and
+  // deleted immediately after, since real Chrome only exposes lastError for the
+  // duration of the callback it belongs to.
+  getLastErrorOnCall, setLastErrorOnCall,
+}) {
   const calls = { get: 0, set: 0 };
   let onInstalledListener = null;
   const noopEvent = () => ({ addListener: () => {} });
@@ -70,17 +78,31 @@ function loadBackground({ backing, hardwareConcurrency, onTabsCreate, onGetSnaps
         // but before the callback fires must NOT be visible to this read.
         get: (key, cb) => {
           calls.get++;
+          const failThisCall = getLastErrorOnCall === calls.get;
           const snapshot = JSON.parse(JSON.stringify({ [key]: backing[key] }));
           // Fires synchronously right after the snapshot is captured but before the
           // callback's macrotask is even scheduled to run — i.e. exactly the gap a
           // concurrent writer (the popup) can land in and still have this get()'s
           // eventual callback deliver a snapshot that predates it.
           if (onGetSnapshot) onGetSnapshot(calls.get, key);
-          setTimeout(() => cb(snapshot), 0);
+          setTimeout(() => {
+            if (failThisCall) {
+              chrome.runtime.lastError = { message: 'Oculist test: simulated get() failure' };
+              try { cb(undefined); } finally { delete chrome.runtime.lastError; }
+              return;
+            }
+            cb(snapshot);
+          }, 0);
         },
         set: (obj, cb) => {
           calls.set++;
+          const failThisCall = setLastErrorOnCall === calls.set;
           setTimeout(() => {
+            if (failThisCall) {
+              chrome.runtime.lastError = { message: 'Oculist test: simulated set() failure' };
+              try { if (cb) cb(); } finally { delete chrome.runtime.lastError; }
+              return;
+            }
             Object.assign(backing, obj);
             if (cb) cb();
           }, 0);
@@ -271,4 +293,198 @@ test('a legacy visionProfile present at background\'s read is not resurrected by
     settings.colorProfile, 'deuteranopia',
     'oculist-b65: the popup\'s write lands early enough in this scenario for the retry-and-recompute fix to recover it too: ' + JSON.stringify(settings)
   );
+});
+
+// oculist-6tp: updateSettings() used to have three ways to strand `done` or clobber
+// real data on a storage failure — see the bead. Each test below isolates the run to
+// the single seedDefaultBlocklist write site (hardwareConcurrency: 8 skips the
+// performanceMode branch, same trick the tests above use) so the get()/set() call
+// counts are unambiguous, and spies on console.error / chrome.tabs.create as an
+// external, black-box proxy for "did `done` fire, and how many times" — background.js
+// exposes no internal hook to count `done` invocations directly.
+function spyConsoleError() {
+  const messages = [];
+  const orig = console.error;
+  console.error = (...args) => { messages.push(args.map(String).join(' ')); };
+  return { messages, restore: () => { console.error = orig; } };
+}
+
+test('(a) a mutate() that throws synchronously still calls done exactly once, and issues NO set()', async () => {
+  const backing = { 'oc-settings': {} };
+  const errSpy = spyConsoleError();
+  let tabsCreateCalls = 0;
+
+  // Targeted, self-restoring: Array#push is used all over Node's own async machinery
+  // (the event loop, the test runner itself), so a blanket "throw on the first push
+  // anywhere" is not safe — it can fire on an unrelated push before mutate() ever runs.
+  // Only throw on the exact call the seed mutate makes — settings.disabledSites.push
+  // ('github.com'), per DEFAULT_DISABLED_SITES in background.js — and restore
+  // immediately after either forwarding or throwing.
+  const origPush = Array.prototype.push;
+  Array.prototype.push = function (...args) {
+    if (args.length === 1 && args[0] === 'github.com') {
+      Array.prototype.push = origPush;
+      throw new Error('oculist-6tp-test-mutate-threw');
+    }
+    return origPush.apply(this, args);
+  };
+
+  try {
+    const { fire, calls } = loadBackground({
+      backing,
+      hardwareConcurrency: 8,
+      onTabsCreate: () => { tabsCreateCalls++; },
+    });
+
+    fire({ reason: 'install' });
+    await flush(6);
+
+    assert.strictEqual(calls.set, 0, 'a throwing mutate() must not be followed by any set(): ' + JSON.stringify(calls));
+    assert.strictEqual(
+      tabsCreateCalls, 1,
+      '(d) done must still fire exactly once — welcome tab opens exactly once despite the throw'
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('mutate() threw')),
+      'the throw must be surfaced via console.error, not swallowed: ' + JSON.stringify(errSpy.messages)
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('seedDefaultBlocklist failed')),
+      'onInstalled\'s done callback must have received a truthy error argument: ' + JSON.stringify(errSpy.messages)
+    );
+  } finally {
+    Array.prototype.push = origPush; // safety net if push was never reached
+    errSpy.restore();
+  }
+});
+
+test('(b) a get() reporting chrome.runtime.lastError calls done exactly once, issues NO set(), and leaves storage untouched', async () => {
+  const original = { untouchedMarker: 'do-not-clobber-me' };
+  const backing = { 'oc-settings': Object.assign({}, original) };
+  const errSpy = spyConsoleError();
+  let tabsCreateCalls = 0;
+
+  try {
+    const { fire, calls } = loadBackground({
+      backing,
+      hardwareConcurrency: 8,
+      getLastErrorOnCall: 1, // the very first (only) get() this run makes
+      onTabsCreate: () => { tabsCreateCalls++; },
+    });
+
+    fire({ reason: 'install' });
+    await flush(6);
+
+    assert.strictEqual(calls.set, 0, 'a failed get() must never be followed by a set(): ' + JSON.stringify(calls));
+    assert.deepStrictEqual(
+      backing['oc-settings'], original,
+      'a failed get() must not result in a near-empty object being written over real data: ' + JSON.stringify(backing['oc-settings'])
+    );
+    assert.strictEqual(
+      tabsCreateCalls, 1,
+      '(d) done must still fire exactly once — welcome tab opens exactly once despite the read failure'
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('chrome.storage.sync.get failed')),
+      'the read failure must be surfaced via console.error: ' + JSON.stringify(errSpy.messages)
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('seedDefaultBlocklist failed')),
+      'onInstalled\'s done callback must have received a truthy error argument: ' + JSON.stringify(errSpy.messages)
+    );
+  } finally {
+    errSpy.restore();
+  }
+});
+
+test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, and done can tell the write failed', async () => {
+  const backing = { 'oc-settings': {} };
+  const errSpy = spyConsoleError();
+  let tabsCreateCalls = 0;
+
+  try {
+    const { fire, calls } = loadBackground({
+      backing,
+      hardwareConcurrency: 8,
+      setLastErrorOnCall: 1, // the only set() this run makes (no drift, no retry)
+      onTabsCreate: () => { tabsCreateCalls++; },
+    });
+
+    fire({ reason: 'install' });
+    await flush(6);
+
+    assert.strictEqual(calls.set, 1, 'the set() must have been attempted exactly once (no blind retry on set failure): ' + JSON.stringify(calls));
+    assert.strictEqual(
+      backing['oc-settings'].seededDefaultBlocklist, undefined,
+      'a failed set() must not be treated as a successful write: ' + JSON.stringify(backing['oc-settings'])
+    );
+    assert.strictEqual(
+      tabsCreateCalls, 1,
+      '(d) done must still fire exactly once — welcome tab opens exactly once despite the write failure ' +
+      '(onboarding is judged more valuable than the seed write landing — see background.js\'s onInstalled comment)'
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('chrome.storage.sync.set failed')),
+      'the write failure must be surfaced via console.error: ' + JSON.stringify(errSpy.messages)
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('seedDefaultBlocklist failed')),
+      'done must receive a truthy error argument so a caller can branch on the write having failed: ' + JSON.stringify(errSpy.messages)
+    );
+  } finally {
+    errSpy.restore();
+  }
+});
+
+test('(e) the plain success path still calls done exactly once (no double-call from the new error branches)', async () => {
+  const backing = { 'oc-settings': {} };
+  let tabsCreateCalls = 0;
+
+  const { fire, calls } = loadBackground({
+    backing,
+    hardwareConcurrency: 8,
+    onTabsCreate: () => { tabsCreateCalls++; },
+  });
+
+  fire({ reason: 'install' });
+  await flush(6);
+
+  assert.strictEqual(tabsCreateCalls, 1, 'done must fire exactly once on the plain success path');
+  assert.strictEqual(calls.get, 2, 'expected exactly one initial get() and one confirming re-read: ' + JSON.stringify(calls));
+  assert.strictEqual(calls.set, 1, 'expected exactly one set() on the plain success path: ' + JSON.stringify(calls));
+  assert.ok(
+    Array.isArray(backing['oc-settings'].disabledSites) && backing['oc-settings'].disabledSites.includes('github.com'),
+    'the seed write must still land: ' + JSON.stringify(backing['oc-settings'])
+  );
+});
+
+test('(e) the confirm-then-retry (oculist-b65) path still calls done exactly once (no double-call from the new error branches)', async () => {
+  const backing = { 'oc-settings': {} };
+  let tabsCreateCalls = 0;
+
+  const { fire, calls } = loadBackground({
+    backing,
+    hardwareConcurrency: 8,
+    onGetSnapshot: (callIndex) => {
+      if (callIndex === 1) {
+        // Same drift-injection shape as "a concurrent write landing in the seed's own
+        // get-to-set gap survives" above — forces exactly one retry recursion.
+        backing['oc-settings'] = Object.assign({}, backing['oc-settings'], { concurrentWrite: true });
+      }
+    },
+    onTabsCreate: () => { tabsCreateCalls++; },
+  });
+
+  fire({ reason: 'install' });
+  await flush(10);
+
+  assert.strictEqual(
+    tabsCreateCalls, 1,
+    'done must fire exactly once across the whole retry recursion, not once per attempt'
+  );
+  assert.ok(
+    Array.isArray(backing['oc-settings'].disabledSites) && backing['oc-settings'].disabledSites.includes('github.com'),
+    'the seed write must still land after the retry: ' + JSON.stringify(backing['oc-settings'])
+  );
+  assert.strictEqual(backing['oc-settings'].concurrentWrite, true, 'the concurrent write must survive: ' + JSON.stringify(backing['oc-settings']));
 });
