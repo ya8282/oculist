@@ -166,6 +166,17 @@ describe('Dim highlight registry for inactive terms', () => {
     );
   }
 
+  // Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+  // confirmed against this Playwright version that a promise-returning predicate resolves
+  // immediately on the (truthy) Promise object rather than being awaited (see
+  // test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+  // trip from Node on every poll tick instead.
+  function readStoredSettings(target) {
+    return target.evaluate(
+      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+    );
+  }
+
   function rangeTexts(registryName) {
     return evalInContentScript(`
       (function () {
@@ -254,13 +265,10 @@ describe('Dim highlight registry for inactive terms', () => {
     // 'change' listener is not awaited by Playwright's click() — wait for the write to
     // actually land before tearing the popup page down, instead of guessing how long it
     // takes.
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync
-          .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
-      enabled,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (stored) => !!(stored && stored.performanceMode === enabled),
+      { timeout: POLL_TIMEOUT, message: `oc-settings.performanceMode never became ${enabled}` }
     );
     await popup.close();
     await page.bringToFront();
@@ -597,15 +605,12 @@ describe('Dim highlight registry for inactive terms', () => {
     // whether the visible CSS text changed.
     const before = await armSettingsEcho();
     await popup.selectOption('#vision-profile', 'low-vision');
-    await popup.waitForFunction(
-      () =>
-        chrome.storage.sync
-          .get('oc-settings')
-          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
-          // translation of the 'low-vision' dropdown option ('high-contrast').
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'high-contrast')),
-      null,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+      // translation of the 'low-vision' dropdown option ('high-contrast').
+      (stored) => !!(stored && stored.displayPreset === 'high-contrast'),
+      { timeout: POLL_TIMEOUT, message: "oc-settings.displayPreset never became 'high-contrast'" }
     );
     await popup.close();
     await page.bringToFront();
@@ -633,15 +638,12 @@ describe('Dim highlight registry for inactive terms', () => {
     // Wait for the reset write to actually land in chrome.storage.sync before closing —
     // this context may persist across test file runs, so the write genuinely has to
     // commit, not just be dispatched.
-    await resetPopup.waitForFunction(
-      () =>
-        chrome.storage.sync
-          .get('oc-settings')
-          // oculist-rnr.12: selecting 'none' persists displayPreset as null, not the
-          // string 'none'.
-          .then((d) => !!d['oc-settings'] && d['oc-settings'].displayPreset === null),
-      null,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(resetPopup),
+      // oculist-rnr.12: selecting 'none' persists displayPreset as null, not the
+      // string 'none'.
+      (stored) => !!stored && stored.displayPreset === null,
+      { timeout: POLL_TIMEOUT, message: 'oc-settings.displayPreset never became null' }
     );
     await resetPopup.close();
   });

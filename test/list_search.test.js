@@ -45,6 +45,17 @@ const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
 const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
 const COUNT = '#oc-wrap >> .oc-count';
 
+// Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+// confirmed against this Playwright version that a promise-returning predicate resolves
+// immediately on the (truthy) Promise object rather than being awaited (see
+// test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+// trip from Node on every poll tick instead.
+function readStoredSettings(target) {
+  return target.evaluate(
+    () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+  );
+}
+
 describe('performListSearch() and per-term chip counts', () => {
   let server, ctx, page, client, isolatedContextId, extId;
 
@@ -251,13 +262,10 @@ describe('performListSearch() and per-term chip counts', () => {
     // 'change' listener is not awaited by Playwright's click() — wait for the write to
     // actually land before tearing the popup page down, instead of guessing how long it
     // takes.
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync
-          .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
-      enabled,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (stored) => !!(stored && stored.performanceMode === enabled),
+      { timeout: POLL_TIMEOUT, message: `oc-settings.performanceMode never became ${enabled}` }
     );
     await popup.close();
     await page.bringToFront();
@@ -584,13 +592,10 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
     // onChanged echo, unlike the sibling describe above — but Lite Mode here is a fixture
     // speed optimisation, not something any assertion below depends on for correctness:
     // findRanges()/countMatchesOnly() share the same 999-per-term cap either way.)
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync
-          .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].performanceMode === expected)),
-      enabled,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (stored) => !!(stored && stored.performanceMode === enabled),
+      { timeout: POLL_TIMEOUT, message: `oc-settings.performanceMode never became ${enabled}` }
     );
     await popup.close();
     await page.bringToFront();
