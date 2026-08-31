@@ -7251,6 +7251,48 @@
       if (!changes['oc-settings']) return;
       var nv = changes['oc-settings'].newValue;
       if (!nv) return;
+      // oculist-tuy: refresh writeOcSettings()'s three-way-merge base (see
+      // OculistSettingsMigration.rememberOcSettings()/mergeOcSettings() in
+      // settings-migration.js) from every foreign write, not just this tab's own.
+      // Without this, `base` stays frozen at the boot snapshot: two foreign writes to the
+      // same key straddling a local save would have this tab's next saveSettings() diff
+      // its in-memory value (adopted from the FIRST foreign write) against the stale boot
+      // base, see it differ, and treat it as a local edit that overwrites the SECOND
+      // foreign write that already landed in storage.
+      //   - Placed here, before the self-echo check below: `nv` is the full newValue of
+      //     'oc-settings', i.e. exactly what storage now holds, on every path — self-echo
+      //     included. On the echo of our own write this equals the `merged` object
+      //     writeOcSettings() already remembers in its own set() callback, so remembering
+      //     it here again is a same-value no-op that just removes an ordering dependency
+      //     on that async callback; on a coalesced write the echo branch below splices
+      //     several queued entries, but `nv` is still the latest stored state either way.
+      //   - Remembered as the FULL `nv`, not just the SETTINGS_KEYS subset applied to
+      //     `settings` below: `base` must mean the same "what storage held" thing here as
+      //     it does at the boot read at the bottom of this file, which also remembers the whole
+      //     stored object. This carries the same pre-existing hazard documented at
+      //     mergeOcSettings()'s own header comment (an unmodelled key surviving in storage only
+      //     while also absent from `base`) — unchanged by this fix, and guarded against by
+      //     SETTINGS_KEYS round-tripping every key any surface writes (see the note on
+      //     seededDefaultBlocklist in the settings defaults at the top of this file).
+      //   - This only ever ADVANCES `base` to a value `settings` already reflects (see the
+      //     unconditional `settings[k] = incoming;` a few lines below, which runs outside
+      //     the `changed` check) or is about to be given the exact same value — base never
+      //     moves ahead of what the in-memory object holds, so a genuine local edit made
+      //     after this can't be turned into a no-op by it.
+      //   - One asymmetry this creates: the 'effect' key below normalises a stale/unknown
+      //     incoming value to 'hud' before storing it in `settings`, so after that,
+      //     settings.effect ('hud') and base.effect (still the raw stale value, e.g.
+      //     'lens') diverge. The next merge then treats 'hud' as a local edit and persists
+      //     it — which heals the stale value rather than losing anything, so it's fine.
+      //   - Semantic change worth knowing: if a foreign write DELETES a modelled key,
+      //     `base` loses it too, so this tab's copy then reads as a local edit and gets
+      //     re-persisted, where before the deletion propagated. No writer deletes
+      //     modelled keys today (they all write whole objects) and re-persisting is the
+      //     self-healing direction, but a future factory-reset-by-deletion would need
+      //     this revisited.
+      //   - Out of scope: `if (!nv) return;` above (the key was deleted entirely) leaves
+      //     `base` stale relative to an empty store; left alone here.
+      OculistSettingsMigration.rememberOcSettings(nv);
       // Our own writes echo back here. Rebuilding the panel on that echo detaches the
       // live <input type="color">, dismissing the native colour dialog mid-interaction.
       // Drop the matching entry and everything queued before it — a coalesced write can
