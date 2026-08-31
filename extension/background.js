@@ -17,6 +17,33 @@ try {
   console.error('Oculist: chrome.storage.session.setAccessLevel threw.', err);
 }
 
+// content.js's loadWorkList/saveWorkList (extension/content.js) race this file's own
+// setAccessLevel() call above with no ordering guarantee, and can lose that race — see
+// oculist-ex1. Rather than have content.js guess how long to wait, it can ask us:
+// Promise.resolve(...) below normalizes setAccessLevelResult — a real promise, or
+// undefined/null on an older Chrome without setAccessLevel, or on the try/catch throw
+// path above — into a promise that always settles (the .catch swallows a rejection,
+// since "the grant failed" and "the grant is unsupported" both mean the same thing to a
+// content script: stop waiting, retry, and let it fail its own way if still denied).
+// sessionAccessReady only ever resolves once, so every 'ensureSessionAccess' sender gets
+// the same answer, ordered correctly relative to setAccessLevel() regardless of when it
+// asks — before, during, or after that promise settles.
+var sessionAccessReady = Promise.resolve(setAccessLevelResult).catch(function () {});
+
+// Guarded the same way setAccessLevel() above is: real Chrome always has
+// chrome.runtime.onMessage, but this file is also loaded directly by unit tests against
+// a minimal chrome mock that only stubs the runtime surfaces its own scenario touches.
+if (chrome.runtime && chrome.runtime.onMessage &&
+  typeof chrome.runtime.onMessage.addListener === 'function') {
+  chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (!message || message.action !== 'ensureSessionAccess') return undefined;
+    sessionAccessReady.then(function () {
+      sendResponse({ ready: true });
+    });
+    return true; // keep the message channel open for the asynchronous sendResponse above.
+  });
+}
+
 var BLOCKED_PREFIXES = [
   'chrome://', 'chrome-extension://', 'edge://', 'about:',
   'https://chrome.google.com/webstore', 'https://chromewebstore.google.com'
