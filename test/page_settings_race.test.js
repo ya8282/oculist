@@ -133,11 +133,34 @@ function makeFakeChromeStorage(backing) {
         if (cb) setTimeout(cb, 0);
       },
     }),
-    storage: { sync, onChanged: { addListener() {} } },
+    storage: {
+      sync,
+      // oculist-tuy: capture content.js's own onChanged listener (it registers exactly
+      // one) instead of the previous no-op stub, so a test can deliver a synthetic
+      // chrome.storage.onChanged event into it via fireOnChanged() below. Existing tests
+      // never call fireOnChanged(), so this is a no-op for them.
+      onChanged: {
+        addListener(fn) {
+          state.onChangedListener = fn;
+        },
+      },
+    },
     commands: { onCommand: { addListener() {} } },
   };
 
   return { chrome, state };
+}
+
+// Delivers a synthetic chrome.storage.onChanged('oc-settings', { newValue }) event
+// straight into content.js's own registered listener (captured above), the same shape a
+// real chrome.storage.sync write — this tab's own echo or a foreign one — delivers.
+function fireOnChanged(state, newValue) {
+  assert.strictEqual(
+    typeof state.onChangedListener,
+    'function',
+    'content.js must have registered a chrome.storage.onChanged listener before fireOnChanged() is used'
+  );
+  state.onChangedListener({ 'oc-settings': { newValue: newValue } });
 }
 
 // Flushes the setTimeout(0) chain far enough for a multi-hop get/get/set (or a full
@@ -486,6 +509,199 @@ describe("content.js's saveSettings() (oculist-xvh)", () => {
         'instant',
         "this tab's own change must still land"
       );
+    }
+  );
+});
+
+// A full, internally-consistent default settings object at content.js's own hardcoded
+// default values (same shape as the literal used in the describe block above), returned
+// fresh (deep-copied) per call so tests can mutate their own copy freely.
+function defaultOcSettings() {
+  return JSON.parse(JSON.stringify({
+    effect: 'hud',
+    position: 'tr',
+    theme: 'dark',
+    matchColor: '#fef08a',
+    activeColor: '#f59e0b',
+    beaconColor: '#fbbf24',
+    scrollBehavior: 'smooth',
+    disabledSites: [],
+    performanceMode: false,
+    displayPreset: null,
+    visionSettings: {
+      beaconSize: 'm',
+      animationSpeed: 'normal',
+      textLabels: false,
+      magnifier: false,
+      motionSensitivity: 'full',
+      colorPalette: 'default',
+      borderStyle: 'none',
+      customColors: { matchColor: '#fef08a', activeColor: '#f59e0b', beaconColor: '#fbbf24' },
+    },
+    setupWizardCompleted: false,
+    seededDefaultBlocklist: false,
+  }));
+}
+
+describe("content.js's chrome.storage.onChanged listener refreshes the merge base (oculist-tuy)", () => {
+  test(
+    '(a) REGRESSION: a foreign write straddling a local save must not be reverted to an ' +
+      'earlier foreign write this tab already adopted',
+    async () => {
+      // The losing sequence this bead fixes:
+      //   1. boot: base.position = 'tr', settings.position = 'tr'.
+      //   2. Foreign write #1 (delivered via onChanged) sets position = 'v2'. The listener
+      //      adopts v2 into `settings` unconditionally; without the fix, `base` is never
+      //      refreshed and stays at 'tr'.
+      //   3. Foreign write #2 sets position = 'v3' directly in storage (the straddle) —
+      //      deliberately WITHOUT an onChanged delivery, so this tab has no idea storage
+      //      moved again.
+      //   4. This tab makes an unrelated local edit (scrollBehavior) and saves. Without the
+      //      fix, the merge diffs local.position ('v2') against the stale base ('tr'), sees
+      //      a difference, and treats 'v2' as a local edit that wins — silently reverting
+      //      the already-landed 'v3' back to 'v2'. With the fix, base tracks the tab's own
+      //      adopted 'v2', so 'v2' === base and the merge lets the freshly-read 'v3' stand.
+      const backing = { 'oc-settings': defaultOcSettings() };
+
+      const { dom, state } = loadContentScript(backing);
+      await flush(6); // let the boot get()/rememberOcSettings() settle.
+
+      state.getCalls = 0;
+      state.setCalls = 0;
+      state.setLog = [];
+
+      // Foreign write #1: delivered through the real onChanged path.
+      const nv1 = Object.assign({}, backing['oc-settings'], { position: 'v2' });
+      backing['oc-settings'] = nv1;
+      fireOnChanged(state, nv1);
+
+      // Foreign write #2 (the straddle): lands directly in storage, no onChanged delivery.
+      backing['oc-settings'] = Object.assign({}, backing['oc-settings'], { position: 'v3' });
+
+      // This tab's own genuine, unrelated local edit.
+      dom.window.__ocToggle();
+      const wrapRoot = dom.window.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      assert.ok(gearBtn, 'settings gear button must exist once the bar is open');
+      gearBtn.click();
+      const scrollInstantBtn = wrapRoot.querySelector('[data-oc-key="scroll:instant"]');
+      assert.ok(scrollInstantBtn, 'the scroll-behavior "instant" option must exist in the settings panel');
+      scrollInstantBtn.click(); // triggers settings.scrollBehavior = 'instant'; saveSettings();
+
+      await flush(8);
+
+      assert.strictEqual(
+        backing['oc-settings'].position,
+        'v3',
+        'the straddling foreign write must survive this tab\'s unrelated save, not be reverted to the earlier-adopted v2'
+      );
+      assert.strictEqual(
+        backing['oc-settings'].scrollBehavior,
+        'instant',
+        "this tab's own unrelated change must still land"
+      );
+    }
+  );
+
+  test(
+    '(b) a genuine local edit made after a foreign onChanged still wins and is persisted',
+    async () => {
+      // Guards the worse-direction failure: refreshing `base` from every foreign write
+      // must never make a SUBSEQUENT genuine local edit look like a no-op. theme goes
+      // dark (boot) -> system (foreign onChanged) -> light (this tab's own genuine pick),
+      // three distinct values so the assertion can't be satisfied by coincidence.
+      const backing = { 'oc-settings': defaultOcSettings() };
+
+      const { dom, state } = loadContentScript(backing);
+      await flush(6);
+
+      state.getCalls = 0;
+      state.setCalls = 0;
+      state.setLog = [];
+
+      const nv1 = Object.assign({}, backing['oc-settings'], { theme: 'system' });
+      backing['oc-settings'] = nv1;
+      fireOnChanged(state, nv1);
+
+      dom.window.__ocToggle();
+      const wrapRoot = dom.window.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+      const themeLightBtn = wrapRoot.querySelector('[data-oc-key="theme:light"]');
+      assert.ok(themeLightBtn, 'the theme:light option must exist in the settings panel');
+      themeLightBtn.click(); // triggers settings.theme = 'light'; saveSettings();
+
+      await flush(8);
+
+      assert.strictEqual(
+        backing['oc-settings'].theme,
+        'light',
+        "this tab's own genuine edit made after adopting a foreign onChanged must still persist"
+      );
+    }
+  );
+
+  test(
+    '(c) a self-echo of this tab\'s own write is still recognised and does not re-adopt or tear down the panel',
+    async () => {
+      const backing = { 'oc-settings': defaultOcSettings() };
+
+      const { dom, state } = loadContentScript(backing);
+      await flush(6);
+
+      dom.window.__ocToggle();
+      const wrapRoot = dom.window.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+      gearBtn.click();
+
+      const themeLightBtn = wrapRoot.querySelector('[data-oc-key="theme:light"]');
+      assert.ok(themeLightBtn, 'the theme:light option must exist in the settings panel');
+      themeLightBtn.click(); // write A: settings.theme = 'light'; saveSettings();
+      await flush(8);
+      // Snapshot exactly what write A put in storage — this is the payload its own echo
+      // will carry.
+      const mergedA = JSON.parse(JSON.stringify(backing['oc-settings']));
+      assert.strictEqual(mergedA.theme, 'light', 'write A must have landed before write B begins');
+
+      const themeSystemBtn = wrapRoot.querySelector('[data-oc-key="theme:system"]');
+      assert.ok(themeSystemBtn, 'the theme:system option must exist in the settings panel');
+      themeSystemBtn.click(); // write B: settings.theme = 'system'; saveSettings();
+      await flush(8);
+      const mergedB = JSON.parse(JSON.stringify(backing['oc-settings']));
+      assert.strictEqual(mergedB.theme, 'system', 'write B must have landed before the echoes are delivered');
+
+      const settingsPanelBeforeEchoes = wrapRoot.querySelector('#oc-settings-panel');
+      assert.ok(settingsPanelBeforeEchoes, 'settings panel must be open before the echoes land');
+
+      // Deliver write A's own echo AFTER write B has already landed in memory — the exact
+      // "memory has already moved on" shape the self-echo guard exists for. Recognised
+      // correctly, this must be a no-op: it must NOT re-apply the older 'light' value over
+      // the current 'system' one, and must NOT rebuild the panel.
+      fireOnChanged(state, mergedA);
+      let settingsPanelAfter = wrapRoot.querySelector('#oc-settings-panel');
+      assert.strictEqual(
+        settingsPanelAfter,
+        settingsPanelBeforeEchoes,
+        "write A's own stale echo must not rebuild the settings panel"
+      );
+      assert.ok(
+        wrapRoot.querySelector('[data-oc-key="theme:system"]').classList.contains('active'),
+        "write A's own stale echo must not revert the in-memory/displayed theme back to 'light'"
+      );
+      assert.ok(
+        !wrapRoot.querySelector('[data-oc-key="theme:light"]').classList.contains('active'),
+        "the 'light' option must not be showing as active again"
+      );
+
+      // Write B's own echo must likewise be recognised and be a no-op.
+      fireOnChanged(state, mergedB);
+      settingsPanelAfter = wrapRoot.querySelector('#oc-settings-panel');
+      assert.strictEqual(
+        settingsPanelAfter,
+        settingsPanelBeforeEchoes,
+        "write B's own echo must not rebuild the settings panel either"
+      );
+      assert.strictEqual(state.setCalls, 2, 'delivering the two self-echoes must not have triggered any further storage writes');
     }
   );
 });
