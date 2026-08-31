@@ -21,7 +21,9 @@
 // surrounding state, not as evidence that cross-context writes are now safe — they are
 // not. What this test actually guards is the seed write surviving the performanceMode
 // write, i.e. background.js no longer clobbering its own earlier write. The popup race
-// stays open for want of a CAS primitive; see the comment in background.js.
+// stays open for want of a CAS primitive; see the comment in background.js. oculist-b65
+// (below) narrows that residual window and adds recovery for writes landing inside it,
+// but does not close it either — see that test and the same background.js comment.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -179,11 +181,61 @@ test('an already-seeded blocklist is not rewritten (user re-enabling github.com 
 //
 // What this test does NOT claim to fix (see the file-level comment above and the
 // matching comment in background.js): chrome.storage.sync has no compare-and-swap, so
-// background's own set() below still clobbers the popup's write wholesale (its
-// 'colorProfile' field is expected to be lost here) — that residual cross-context race
-// is explicitly out of scope for oculist-hzr. The only invariant under test is that the
-// legacy field itself is never resurrected by background's write, regardless of what
-// else that write clobbers.
+// a write landing in the small residual gap oculist-b65's retry-and-recompute leaves
+// open (the confirming re-read immediately before set()) is still not detected. This
+// particular test's own concurrent write happens to land earlier — in the gap before
+// that confirming re-read — so oculist-b65's fix now recovers it too: 'colorProfile'
+// is NOT lost here (see the assertion below). The only invariant this test was ever
+// written to guard is narrower and still holds regardless: the legacy field itself is
+// never resurrected by background's write, whatever else that write does or doesn't
+// clobber.
+// oculist-b65: the seed's own get()-to-set() gap (not the wizard — see below) can still
+// swallow a genuine concurrent page write whole, with the written key absent entirely
+// from the final stored object (not merely stale). This is the actual production
+// exposure: chrome.tabs.create(welcome.html) in the onInstalled handler below runs
+// inside seedDefaultBlocklist's `done` callback, which only fires after the seed's own
+// set() has already committed — so the wizard's own write can never land inside the
+// seed's get-to-set window; the reachable case is some OTHER writer (a content script
+// in an already-open tab, or the popup) landing in that window, most plausible on an
+// 'update' from a pre-seeding build but modelled here on 'install' to isolate it from
+// the separate performanceMode write path (hardwareConcurrency >= 4 skips that branch,
+// same isolation trick as the visionProfile test above).
+test('a concurrent write landing in the seed\'s own get-to-set gap survives (is not silently erased)', async () => {
+  const backing = { 'oc-settings': {} };
+
+  const { fire } = loadBackground({
+    backing,
+    hardwareConcurrency: 8, // >= 4: keep this test to the single seedDefaultBlocklist write site
+    onGetSnapshot: (callIndex) => {
+      if (callIndex === 1) {
+        // Stands in for a content script's saveSettings() (extension/content.js)
+        // landing in the exact gap between the seed's get() snapshot and its
+        // callback firing — the hazard oculist-b65 measured in production, where
+        // the concurrent write's key came back ABSENT from storage entirely, not
+        // stale.
+        backing['oc-settings'] = Object.assign({}, backing['oc-settings'], {
+          effect: 'reader',
+        });
+      }
+    },
+  });
+
+  fire({ reason: 'install' });
+
+  await flush(10);
+
+  const settings = backing['oc-settings'];
+  assert.strictEqual(
+    settings.effect, 'reader',
+    'the concurrent page write must survive the seed\'s write-back, not be erased: ' + JSON.stringify(settings)
+  );
+  assert.ok(
+    Array.isArray(settings.disabledSites) && settings.disabledSites.includes('github.com'),
+    'the seed write itself must still land: ' + JSON.stringify(settings)
+  );
+  assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must still be set: ' + JSON.stringify(settings));
+});
+
 test('a legacy visionProfile present at background\'s read is not resurrected by its write-back after a concurrent write deletes it', async () => {
   const backing = { 'oc-settings': { disabledSites: [], visionProfile: 'legacy-deuteranopia' } };
 
@@ -215,4 +267,8 @@ test('a legacy visionProfile present at background\'s read is not resurrected by
     'the seed write itself must still land: ' + JSON.stringify(settings)
   );
   assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must still be set: ' + JSON.stringify(settings));
+  assert.strictEqual(
+    settings.colorProfile, 'deuteranopia',
+    'oculist-b65: the popup\'s write lands early enough in this scenario for the retry-and-recompute fix to recover it too: ' + JSON.stringify(settings)
+  );
 });
