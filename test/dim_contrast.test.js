@@ -350,6 +350,17 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
   // onChanged-echo probe dim_highlight.test.js's setLiteMode() uses: it waits for
   // content.js's own oc-settings listener to have actually run, which is agnostic to
   // whether the visible CSS text changed.
+  // Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+  // confirmed against this Playwright version that a promise-returning predicate resolves
+  // immediately on the (truthy) Promise object rather than being awaited (see
+  // test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+  // trip from Node on every poll tick instead.
+  function readStoredSettings(target) {
+    return target.evaluate(
+      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+    );
+  }
+
   async function setVisionProfile(profileKey) {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
@@ -374,14 +385,10 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     // takes. The persisted field is 'displayPreset', holding the functional translation of
     // profileKey (oculist-rnr.12), not profileKey itself.
     const expectedPreset = profileKey === 'none' ? null : LEGACY_TO_FUNCTIONAL_PRESET[profileKey];
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync.get('oc-settings').then((d) => {
-          const s = d['oc-settings'];
-          return !!s && s.displayPreset === expected;
-        }),
-      expectedPreset,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (stored) => !!stored && stored.displayPreset === expectedPreset,
+      { timeout: POLL_TIMEOUT, message: `oc-settings.displayPreset never became ${expectedPreset}` }
     );
     await popup.close();
     await page.bringToFront();
@@ -419,14 +426,10 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
       el.value = value;
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }, hex);
-    await popup.waitForFunction(
-      (expected) =>
-        chrome.storage.sync.get('oc-settings').then((d) => {
-          const s = d['oc-settings'];
-          return !!(s && s.visionSettings && s.visionSettings.customColors && s.visionSettings.customColors.matchColor === expected);
-        }),
-      hex,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (s) => !!(s && s.visionSettings && s.visionSettings.customColors && s.visionSettings.customColors.matchColor === hex),
+      { timeout: POLL_TIMEOUT, message: `oc-settings.visionSettings.customColors.matchColor never became ${hex}` }
     );
     await popup.close();
     await page.bringToFront();

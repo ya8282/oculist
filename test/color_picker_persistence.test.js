@@ -15,13 +15,24 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
 
 const INPUT = '#oc-wrap >> .oc-input';
 const GEAR = '#oc-wrap >> [aria-label="Options"]';
+
+// Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+// confirmed against this Playwright version that a promise-returning predicate resolves
+// immediately on the (truthy) Promise object rather than being awaited (see
+// test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+// trip from Node on every poll tick instead.
+function readStoredSettings(target) {
+  return target.evaluate(
+    () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+  );
+}
 
 describe('Settings panel survives its own storage writes', () => {
   let server, ctx, page, extId;
@@ -136,15 +147,12 @@ describe('Settings panel survives its own storage writes', () => {
     await popup.selectOption('#vision-profile', 'low-vision');
     // Wait for the write to actually land before tearing the popup page down, instead of
     // guessing how long the async chrome.storage.sync.set() call takes.
-    await popup.waitForFunction(
-      () =>
-        chrome.storage.sync
-          .get('oc-settings')
-          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
-          // translation of the 'low-vision' dropdown option ('high-contrast').
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'high-contrast')),
-      null,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+      // translation of the 'low-vision' dropdown option ('high-contrast').
+      (stored) => !!(stored && stored.displayPreset === 'high-contrast'),
+      { timeout: POLL_TIMEOUT, message: "oc-settings.displayPreset never became 'high-contrast'" }
     );
     await popup.close();
 
