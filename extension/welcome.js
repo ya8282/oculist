@@ -405,7 +405,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const w = targetRect.width;
     const h = targetRect.height;
 
-    const vs = resolveVisionSettings().settings;
+    const resolved = resolveVisionSettings();
+    const vs = resolved.settings;
     const effect = previewEffectSelect.value;
     const colors = PALETTE_COLORS[vs.colorPalette] || PALETTE_COLORS['default'];
     
@@ -492,7 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (motion === 'reduced') {
-      if (selectedProfile === 'eye-strain') {
+      if (resolved.profile === 'eye-strain') {
         const sw = Math.max(w + 30, 70) * scale;
         const sh = Math.max(h + 20, 36) * scale;
         const cx = x + w / 2;

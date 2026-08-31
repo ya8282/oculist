@@ -133,6 +133,52 @@
     return { terms: terms, activeIndex: newIdx };
   }
 
+  // background.js's service-worker startup call to
+  // chrome.storage.session.setAccessLevel('TRUSTED_AND_UNTRUSTED_CONTEXTS') races this
+  // content script's own boot with no ordering guarantee. Until that grant lands,
+  // chrome.storage.session is DEFINED but DENIED here — a call against it fails with
+  // chrome.runtime.lastError, not with the API being undefined, so the storageAvailable
+  // check above cannot catch this case; it can only catch a genuinely absent API (an
+  // older Chrome, or setAccessLevel having never been called at all).
+  //
+  // Chrome gives no error code or property for this specific failure — lastError is
+  // always just a free-text string, so matching its exact wording is the only signal
+  // available to tell "denied because the grant hasn't landed yet (retry-worthy)" apart
+  // from every other lastError (not retry-worthy: logged and treated as a real failure
+  // instead). If a future Chrome release changes this string, isSessionAccessDeniedError
+  // simply stops matching and every call falls through to the "unexpected failure"
+  // branch below — noisier (it would start logging on the ordinary startup race) but
+  // never silently wrong, and still bounded, so this is a safe way for the match to fail.
+  var SESSION_ACCESS_DENIED_MESSAGE = 'Access to storage is not allowed from this context.';
+
+  function isSessionAccessDeniedError(err) {
+    return !!(err && typeof err.message === 'string' &&
+      err.message.indexOf(SESSION_ACCESS_DENIED_MESSAGE) !== -1);
+  }
+
+  // Deterministic (not timing-based) gate for the one retry loadWorkList/saveWorkList are
+  // allowed: ask background.js — which holds onto its own setAccessLevel() promise — to
+  // reply only once that promise has settled, then retry exactly once. This turns "wait
+  // out an unmeasured race" into "wait for an observed readiness signal", the same
+  // ready-ping strategy the bead suggests instead of a fixed-delay retry (which the
+  // measured ~9ms window makes unsafe: an immediate retry can land inside it too).
+  // If the extension context is gone (sendMessage throws) or background.js never answers
+  // meaningfully, `next()` still runs — the caller having asked at all is what bounds this
+  // to one retry, not the reply's content.
+  function retryAfterSessionAccessReady(next) {
+    try {
+      chrome.runtime.sendMessage({ action: 'ensureSessionAccess' }, function () {
+        // Reading lastError here only marks a missing receiver handled (e.g. background.js
+        // torn down); either way, some real time has passed and there is nothing further
+        // to wait for, so it is not treated differently from a normal reply.
+        void chrome.runtime.lastError;
+        next();
+      });
+    } catch (err) {
+      next();
+    }
+  }
+
   function loadWorkList(callback) {
     var storageAvailable;
     try {
@@ -147,9 +193,44 @@
       callback(defaultWorkList());
       return;
     }
+    attemptLoadWorkList(callback, true);
+  }
+
+  // allowRetry is exactly-once by construction: this function is entered with
+  // allowRetry=true from loadWorkList() itself, and the only recursive call passes
+  // false — so no call chain can retry more than once. Every branch below either
+  // returns after calling `callback` exactly one time, or (the single access-denied +
+  // allowRetry branch) returns without calling it, handing the exactly-once obligation
+  // to the one attemptLoadWorkList(callback, false) call it schedules. That recursive
+  // call's own allowRetry=false forecloses a further denied+retry branch, so it is
+  // itself forced through one of the callback-calling branches. Net: callback fires
+  // exactly once across the original attempt, the retry, and every failure path.
+  function attemptLoadWorkList(callback, allowRetry) {
     try {
       chrome.storage.session.get(WORK_LIST_KEY, function (data) {
-        if (chrome.runtime.lastError || !data || !data[WORK_LIST_KEY]) {
+        var err = chrome.runtime.lastError;
+        if (err) {
+          if (isSessionAccessDeniedError(err)) {
+            if (allowRetry) {
+              retryAfterSessionAccessReady(function () {
+                attemptLoadWorkList(callback, false);
+              });
+              return;
+            }
+            // Retry already used and still denied: a permanent denial (no setAccessLevel
+            // support, or a policy that always refuses). This is the expected steady
+            // state for those browsers/policies, not a bug — degrade silently like an
+            // absent API, same as before this fix, and do not log on every page load.
+            callback(defaultWorkList());
+            return;
+          }
+          // Any other lastError is unexpected — surface it so a real storage failure is
+          // diagnosable, instead of the previous unconditional swallow.
+          console.error('Oculist: chrome.storage.session.get failed.', err);
+          callback(defaultWorkList());
+          return;
+        }
+        if (!data || !data[WORK_LIST_KEY]) {
           callback(defaultWorkList());
           return;
         }
@@ -161,18 +242,48 @@
   }
 
   function saveWorkList(list) {
+    var storageAvailable;
     try {
-      if (!chrome.storage || !chrome.storage.session) return;
-      var payload = {
-        terms: Array.isArray(list && list.terms) ? list.terms : [],
-        activeIndex: typeof (list && list.activeIndex) === 'number' ? list.activeIndex : -1
-      };
+      storageAvailable = !!(chrome.storage && chrome.storage.session);
+    } catch (err) {
+      storageAvailable = false;
+    }
+    // fail silently — a browser without session storage access must not throw here.
+    if (!storageAvailable) return;
+    var payload = {
+      terms: Array.isArray(list && list.terms) ? list.terms : [],
+      activeIndex: typeof (list && list.activeIndex) === 'number' ? list.activeIndex : -1
+    };
+    attemptSaveWorkList(payload, true);
+  }
+
+  // Same exactly-once-retry shape as attemptLoadWorkList above, but saveWorkList has no
+  // callback of its own to guarantee — the only externally-observable contract is "at
+  // most one retry, then stop", which allowRetry=false on the recursive call already
+  // forecloses the same way.
+  function attemptSaveWorkList(payload, allowRetry) {
+    try {
       var setObj = {};
       setObj[WORK_LIST_KEY] = payload;
       var setResult = chrome.storage.session.set(setObj, function () {
         // Read lastError so a rejected/unavailable write doesn't surface as an unchecked
-        // runtime error; this is invisible plumbing and must fail silently.
-        void chrome.runtime.lastError;
+        // runtime error; this is invisible plumbing and must fail silently — but only for
+        // the cases that were always meant to be invisible (see below).
+        var err = chrome.runtime.lastError;
+        if (!err) return;
+        if (isSessionAccessDeniedError(err)) {
+          if (allowRetry) {
+            retryAfterSessionAccessReady(function () {
+              attemptSaveWorkList(payload, false);
+            });
+          }
+          // else: permanent denial — same silent no-op as before this fix; see
+          // attemptLoadWorkList for why this specific, expected case must not log.
+          return;
+        }
+        // Unexpected failure — surface it, matching background.js's own storage-failure
+        // reporting; "invisible plumbing" was only ever meant to cover the no-access case.
+        console.error('Oculist: chrome.storage.session.set failed.', err);
       });
       if (setResult && typeof setResult.catch === 'function') {
         setResult.catch(function () {});
@@ -2208,6 +2319,24 @@
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
     document.documentElement.appendChild(container);
+
+    // lastSpeedLinesContainerRect: the container's own live getBoundingClientRect(), taken
+    // right after it is placed in the document and never touched again on this element --
+    // its CSS (left/top/width/height/transform) is fixed for the rest of this beacon's life,
+    // so this rect stays correct for the container's entire lifetime on a static page. A
+    // test that needs the container's rendered position should read this instead of
+    // re-querying '.oc-beacon' near completion: this beacon's own container is removed by an
+    // independent wall-clock setTimeout(DUR) that empirically fires no later than, and
+    // usually strictly before, the rAF loop's own final "done" tick (that tick can only run
+    // on the next vsync-aligned callback at-or-after elapsed>=DUR, while the timer fires
+    // right at DUR) -- so a live '.oc-beacon' query taken anywhere near or after completion
+    // is racing that removal and can lose. Capturing here, long before either the completion
+    // tick or the removal timer can fire, sidesteps that race entirely instead of trying to
+    // win it.
+    window.__ocTest.lastSpeedLinesContainerRect = (function () {
+      var r = container.getBoundingClientRect();
+      return { left: r.left, top: r.top };
+    })();
 
     var canvas = document.createElement('canvas');
     var dpr = window.devicePixelRatio || 1;

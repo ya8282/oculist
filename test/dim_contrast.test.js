@@ -22,6 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
@@ -350,16 +351,6 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
   // onChanged-echo probe dim_highlight.test.js's setLiteMode() uses: it waits for
   // content.js's own oc-settings listener to have actually run, which is agnostic to
   // whether the visible CSS text changed.
-  // Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
-  // confirmed against this Playwright version that a promise-returning predicate resolves
-  // immediately on the (truthy) Promise object rather than being awaited (see
-  // test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
-  // trip from Node on every poll tick instead.
-  function readStoredSettings(target) {
-    return target.evaluate(
-      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-    );
-  }
 
   async function setVisionProfile(profileKey) {
     const popup = await ctx.newPage();
