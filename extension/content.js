@@ -359,6 +359,14 @@
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
 
+  // Same test-reachability reasoning as getDebounceTimer above: activeBeacons (declared
+  // further down, in the "State" section) is a module-private "have we drawn since the
+  // last reset" flag animate() increments and cancelBeacons()/fadeActiveBeacons() reset
+  // to 0 — nothing outside this closure can read it otherwise. oculist-5rv's regression
+  // test uses this to assert animate() does not increment it on a guard-skipped
+  // (zero-width/zero-height rect) run.
+  window.__ocTest.getActiveBeacons = function () { return activeBeacons; };
+
   // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
   // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
   // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
@@ -3644,7 +3652,27 @@
     var effectKey = settings.effect;
     var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
     if (effectObj && typeof effectObj.run === 'function') {
-      activeBeacons++;
+      // ponytail: every effectsRegistry entry guards run(rect) with the identical
+      // `if (!rect || rect.width === 0 || rect.height === 0) return;` (audited
+      // oculist-5rv) before drawing anything, so a zero-metric rect never draws a beacon
+      // regardless of which effect is selected. animateSpeedLines() is the one entry
+      // where that guard is not the first statement — its oculist-47e hook resets run
+      // ahead of it, which is exactly why run() is still called unconditionally below. activeBeacons++ used to fire unconditionally right here,
+      // so a guard-skipped run below still counted itself with no matching decrement
+      // — a real leak, just not a suppression: activeBeacons is only ever compared to
+      // 0 (cancelBeacons resets it; fadeActiveBeacons's scroll-path check
+      // short-circuits a querySelectorAll('.oc-beacon') on it), so it's a "have we
+      // drawn since the last reset" flag, not a true count, and each leaked increment
+      // only cost one wasted querySelectorAll — fadeActiveBeacons() self-heals a pure
+      // leak on the first scroll after it, since it zeroes the flag when it finds no
+      // beacons in the DOM. Gating
+      // just the increment here (rather than a bare early return before this whole
+      // block) keeps that flag accurate at its single call site while still always
+      // calling run() — animateSpeedLines() relies on being called even on a
+      // guard-skipped rect to reset its own __ocTest hooks before its early return
+      // (oculist-47e); a bare early return here would silently stop it from ever
+      // being invoked on a zero rect, leaving those hooks stale.
+      if (rect && rect.width !== 0 && rect.height !== 0) activeBeacons++;
       effectObj.run(rect);
     }
   }
