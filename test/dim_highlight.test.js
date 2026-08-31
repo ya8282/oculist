@@ -601,7 +601,9 @@ describe('Dim highlight registry for inactive terms', () => {
       () =>
         chrome.storage.sync
           .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
+          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+          // translation of the 'low-vision' dropdown option ('high-contrast').
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'high-contrast')),
       null,
       { timeout: POLL_TIMEOUT }
     );
@@ -635,7 +637,9 @@ describe('Dim highlight registry for inactive terms', () => {
       () =>
         chrome.storage.sync
           .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'none')),
+          // oculist-rnr.12: selecting 'none' persists displayPreset as null, not the
+          // string 'none'.
+          .then((d) => !!d['oc-settings'] && d['oc-settings'].displayPreset === null),
       null,
       { timeout: POLL_TIMEOUT }
     );

@@ -1,5 +1,9 @@
 // Usage: node scripts/screenshots.js
-// Captures 6 store screenshots at 1280×800 into repo/screenshots/.
+// Captures 5 store screenshots at 1280×800 into repo/screenshots/ (Chrome Web Store's
+// hard cap). Order is chosen for store conversion: (1) core interaction, (2) the
+// multi-term chip list — the headline v1.7.0 feature — with its dim/active highlight
+// treatment visible, (3) a new v1.7.0 effect, (4) the settings panel, (5) the toolbar
+// popup's vision-profile picker composited over a styled page.
 // ponytail: fixed waitForTimeout for animations — swap for waitForSelector
 //           on a stable post-animation element if timing proves flaky.
 
@@ -73,15 +77,34 @@ async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/01-find-bar.png` });
 
-  // 02 — matches highlighted while typing
+  // 02 — the v1.7.0 headline feature: a multi-term chip list with the dim/active
+  // highlight treatment visible on the page. Each term is committed as its own chip by
+  // pressing Enter with different input text; addChipTerm() pushes a new chip only when
+  // the input differs from the currently active chip, so the input is cleared between
+  // terms exactly like a user retyping the field (Enter never clears it on its own).
+  // The last term committed lands as the active chip — its matches get the bright
+  // active-color highlight while the earlier two terms fall back to the dimmed
+  // oculist-dim-match treatment, which is the contrast this screenshot exists to sell.
   await page.locator(INPUT).type('browser', { delay: 60 });
-  await page.waitForTimeout(800);
-  await page.screenshot({ path: `${OUT}/02-matches.png` });
+  await page.keyboard.press('Enter');
+  await waitForBeaconsToSettle(page);
+  await page.locator(INPUT).fill('');
+  await page.locator(INPUT).type('web', { delay: 60 });
+  await page.keyboard.press('Enter');
+  await waitForBeaconsToSettle(page);
+  await page.locator(INPUT).fill('');
+  await page.locator(INPUT).type('history', { delay: 60 });
+  await page.keyboard.press('Enter');
+  await waitForBeaconsToSettle(page);
+  await page.screenshot({ path: `${OUT}/02-multi-term-list.png` });
 
-  // 03 — beacon mid-animation (Warp Drive effect in blue color)
+  // 03 — beacon mid-animation, showcasing a new v1.7.0 effect (Chrono Tunnel) in blue
+  // color. The input still holds 'history', matching the active chip from step 02, so
+  // this Enter takes the plain next-match path (findNext) rather than committing another
+  // chip — exactly what re-fires the beacon under the newly selected effect.
   await page.locator(GEAR).click();
   await page.waitForTimeout(300);
-  await page.locator('#oc-wrap >> text=Warp Drive').first().click();
+  await page.locator('#oc-wrap >> text=Chrono Tunnel').first().click();
   await page.waitForTimeout(200);
 
   // Change beacon color to a vibrant blue
@@ -97,30 +120,20 @@ async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
 
   await page.keyboard.press('Enter');
   await page.waitForTimeout(380);
-  await page.screenshot({ path: `${OUT}/03-beacon-warp.png` });
+  await page.screenshot({ path: `${OUT}/03-beacon-chrono-tunnel.png` });
 
   // 04 — settings panel open. This one is about the panel, so the page behind it must be
-  // quiet: let the Warp Drive beacon fired above finish before opening the gear, or its
-  // streaks are still crossing the page underneath.
+  // quiet: let the Chrono Tunnel beacon fired above finish before opening the gear, or
+  // its streaks are still crossing the page underneath.
   await waitForBeaconsToSettle(page);
   await page.locator(GEAR).click();
   await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
   await page.waitForTimeout(600); // panel open animation
   await page.screenshot({ path: `${OUT}/04-settings.png` });
-
-  // 05 — Spotlight effect beacon for variety
-  const spotlightLabel = page.locator('#oc-wrap >> text=Spotlight').first();
-  if (await spotlightLabel.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await spotlightLabel.click();
-    await page.waitForTimeout(200);
-  }
-  await page.locator(GEAR).click(); // close settings
+  await page.locator(GEAR).click(); // close settings before the popup section below
   await page.waitForTimeout(200);
-  await page.keyboard.press('Enter');
-  await page.waitForTimeout(380);
-  await page.screenshot({ path: `${OUT}/05-beacon-spotlight.png` });
 
-  // 06 — vision accessibility profiles. These live in the toolbar popup, not the
+  // 05 — vision accessibility profiles. These live in the toolbar popup, not the
   // in-page gear panel, so this one is composited: the popup is only 320px wide and
   // a store screenshot must be exactly 1280×800. Shoot both, then lay the popup over
   // a page backdrop in a throwaway page and shoot that.
@@ -178,7 +191,7 @@ async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
     <img class="popup" src="data:image/png;base64,${popupShot}">
   `);
   await composite.waitForTimeout(400);
-  await composite.screenshot({ path: `${OUT}/06-vision-profiles.png` });
+  await composite.screenshot({ path: `${OUT}/05-vision-profiles.png` });
 
   await ctx.close();
   console.log(`Screenshots written to ${OUT}`);

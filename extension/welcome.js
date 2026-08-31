@@ -8,11 +8,45 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewEffectSelect = document.getElementById('preview-effect');
   const replayAnimBtn = document.getElementById('trigger-preview-beacon');
 
+  // Captured via its own stable id, not startWizardBtn.parentElement — #start-wizard itself
+  // gets destroyed the first time saveProfileAndFinish() rewrites this container's innerHTML
+  // (replaced by the completion banner + "Run Setup Again" button), so anything derived from
+  // re-querying #start-wizard on a second run would resolve to null. #wizard-hero-banner is
+  // the stable container itself and survives every rewrite.
+  const heroBanner = document.getElementById('wizard-hero-banner');
+
   let currentStep = 1;
   let colorBlindAnswer = 'none';
   let lowVisionAnswer = 'false';
   let eyeStrainAnswer = 'false';
   let selectedProfile = 'none';
+
+  // oculist-rnr.12 (corrected scope): step 1's wizard-option buttons now carry a functional
+  // data-value ('amber-sky'/'amber-indigo'/'rose-cyan' — see welcome.html near line 247),
+  // matching what colorPalette now persists as, so colorBlindAnswer picks that functional
+  // value straight up. The PRESETS object below keeps its clinical-shaped keys unchanged
+  // ('color-blind-deuteranopia' etc. — in-memory/UI-facing, not persisted, per the agreed
+  // design), so this table translates colorBlindAnswer back to the PRESETS key suffix it
+  // must interpolate into, at the one place that happens (buildPreviewSummary below).
+  const COLOR_ANSWER_TO_PRESET_SUFFIX = {
+    'amber-sky': 'deuteranopia',
+    'amber-indigo': 'protanopia',
+    'rose-cyan': 'tritanopia'
+  };
+
+  // oculist-rnr.12: chrome.storage.sync's 'oc-settings.displayPreset' field now holds only
+  // functional rendering keys, never a clinical label. selectedProfile/PRESETS/badge and
+  // summary text above and below stay in this wizard's own clinical-shortcut vocabulary
+  // (that's the UI rnr.13 owns) — this table translates only at the point saveProfileAndFinish()
+  // persists the choice.
+  // oculist-rnr.16: this used to be its own trimmed copy of settings-migration.js's
+  // LEGACY_DISPLAY_PRESET_MAP (identical, minus the 'custom' entry). Referencing the
+  // canonical table directly below removes that drift risk, so the 'custom' exclusion is
+  // made explicit at the one call site instead (saveProfileAndFinish(), below) — this wizard
+  // never sets selectedProfile to 'custom' (see the state machine above; no step maps to
+  // it), but if it ever did, saveProfileAndFinish() must still send it to null rather than
+  // the canonical table's 'custom' -> 'custom' entry, since 'custom' has no PRESETS-driven
+  // meaning here the way it does in popup.js.
 
   const PRESETS = {
     'none': {
@@ -36,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'deuteranopia',
+      colorPalette: 'amber-sky',
       borderStyle: 'medium'
     },
     'color-blind-protanopia': {
@@ -44,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'protanopia',
+      colorPalette: 'amber-indigo',
       borderStyle: 'medium'
     },
     'color-blind-tritanopia': {
@@ -52,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
       animationSpeed: 'normal',
       textLabels: true,
       motionSensitivity: 'full',
-      colorPalette: 'tritanopia',
+      colorPalette: 'rose-cyan',
       borderStyle: 'medium'
     },
     'eye-strain': {
@@ -67,17 +101,85 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const PALETTE_COLORS = {
     'default': { match: '#fef08a', active: '#f59e0b', beacon: '#fbbf24' },
-    'deuteranopia': { match: '#fef08a', active: '#0284c7', beacon: '#0284c7' },
-    'protanopia': { match: '#fef08a', active: '#2563eb', beacon: '#2563eb' },
-    'tritanopia': { match: '#ffcbd1', active: '#06b6d4', beacon: '#06b6d4' },
+    'amber-sky': { match: '#fef08a', active: '#0284c7', beacon: '#0284c7' },
+    'amber-indigo': { match: '#fef08a', active: '#2563eb', beacon: '#2563eb' },
+    'rose-cyan': { match: '#ffcbd1', active: '#06b6d4', beacon: '#06b6d4' },
     'warm': { match: '#fef08a', active: '#d97706', beacon: '#eab308' }
   };
 
   // 1. Show Wizard modal
+  function openWizard() {
+    resetWizardState();
+    wizardModal.style.display = 'flex';
+    currentStep = 1;
+    showStep(1);
+  }
+
   if (startWizardBtn) {
-    startWizardBtn.addEventListener('click', () => {
-      wizardModal.style.display = 'flex';
-      showStep(1);
+    startWizardBtn.addEventListener('click', openWizard);
+  }
+
+  // Step 1 has two entry points into the same colorBlindAnswer: a named-condition
+  // shortcut for a user who already knows their diagnosis, and a sample-comparison
+  // path for a user who doesn't (or prefers not to say). Both panels' buttons share
+  // the '.wizard-option' class, so the stepsOptions wiring below already saves either
+  // one into colorBlindAnswer identically — this block only toggles which panel is
+  // visible/focusable, it does not touch selection logic.
+  const step1Tabs = [
+    { tab: document.getElementById('step1-tab-named'), panel: document.getElementById('step1-panel-named') },
+    { tab: document.getElementById('step1-tab-sample'), panel: document.getElementById('step1-panel-sample') }
+  ];
+  // Single source of truth for switching the active step-1 tab: mouse click, arrow-key
+  // navigation, and resetWizardState() all funnel through this one function so there is
+  // exactly one place that flips .active/aria-selected/hidden/tabindex together (oculist-rnr.19).
+  // Also drives the WAI-ARIA APG roving-tabindex convention for the tablist: the selected
+  // tab gets tabindex="0" (the tablist's one Tab stop) and the unselected tab gets
+  // tabindex="-1" (removed from the Tab order, reachable only by arrowing over from the
+  // selected tab).
+  function selectStep1Tab(tab) {
+    step1Tabs.forEach(({ tab: t, panel: p }) => {
+      const active = t === tab;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', String(active));
+      t.setAttribute('tabindex', active ? '0' : '-1');
+      p.hidden = !active;
+    });
+  }
+
+  step1Tabs.forEach(({ tab }) => {
+    tab.addEventListener('click', () => selectStep1Tab(tab));
+  });
+
+  // APG tabs pattern keyboard support: ArrowRight/ArrowLeft move (and wrap, since there are
+  // only two tabs) between tabs, Home/End jump to the first/last. This is "automatic
+  // activation" mode (APG's recommended default when revealing the panel is cheap, which it
+  // is here) — the arrow key both moves focus AND selects/activates the newly focused tab.
+  // Only the keys above call preventDefault(); every other key (notably Tab, and Enter/Space
+  // which a <button> already activates natively) passes through untouched so focus still
+  // leaves the tablist normally and native button activation keeps working.
+  const step1Tablist = document.querySelector('.wizard-tabs');
+  if (step1Tablist) {
+    step1Tablist.addEventListener('keydown', (e) => {
+      const currentIndex = step1Tabs.findIndex(({ tab }) => tab === e.target);
+      if (currentIndex === -1) return;
+
+      let newIndex;
+      if (e.key === 'ArrowRight') {
+        newIndex = (currentIndex + 1) % step1Tabs.length;
+      } else if (e.key === 'ArrowLeft') {
+        newIndex = (currentIndex - 1 + step1Tabs.length) % step1Tabs.length;
+      } else if (e.key === 'Home') {
+        newIndex = 0;
+      } else if (e.key === 'End') {
+        newIndex = step1Tabs.length - 1;
+      } else {
+        return;
+      }
+
+      e.preventDefault();
+      const newTab = step1Tabs[newIndex].tab;
+      selectStep1Tab(newTab);
+      newTab.focus();
     });
   }
 
@@ -104,10 +206,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Default select first item in steps 1, 2, 3
-  document.querySelectorAll('#step-1 .wizard-option')[0].classList.add('selected');
-  document.querySelectorAll('#step-2 .wizard-option')[0].classList.add('selected');
-  document.querySelectorAll('#step-3 .wizard-option')[0].classList.add('selected');
+  // Restores every piece of in-memory wizard state (answers, selected-option highlighting,
+  // and step 1's active tab) back to its opening default. Called both for the initial page
+  // load below and from openWizard() on every re-run — without this, re-running the wizard
+  // (via "Run Setup Again") would silently inherit whatever answers a prior run left behind
+  // for any step the user clicks past with Next, rather than starting fresh each time.
+  function resetWizardState() {
+    colorBlindAnswer = 'none';
+    lowVisionAnswer = 'false';
+    eyeStrainAnswer = 'false';
+    selectedProfile = 'none';
+
+    // Step 1 always reopens on the named-condition shortcut tab, not wherever a prior run
+    // left it. Goes through the same selectStep1Tab() the click/keyboard handlers use, so
+    // the roving tabindex (tabindex="0" on named, "-1" on sample) is restored too.
+    selectStep1Tab(step1Tabs[0].tab);
+
+    // Default-select the first option in steps 1, 2, and 3, clearing any prior selection.
+    ['#step-1 .wizard-option', '#step-2 .wizard-option', '#step-3 .wizard-option'].forEach((selector) => {
+      const opts = document.querySelectorAll(selector);
+      opts.forEach((o) => o.classList.remove('selected'));
+      if (opts[0]) opts[0].classList.add('selected');
+    });
+  }
+
+  resetWizardState();
 
   // Navigation Listeners
   backBtn.addEventListener('click', () => {
@@ -160,7 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (lowVisionAnswer === 'true') {
       selectedProfile = 'low-vision';
     } else if (colorBlindAnswer !== 'none') {
-      selectedProfile = `color-blind-${colorBlindAnswer}`;
+      selectedProfile = `color-blind-${COLOR_ANSWER_TO_PRESET_SUFFIX[colorBlindAnswer] || colorBlindAnswer}`;
     } else if (eyeStrainAnswer === 'true') {
       selectedProfile = 'eye-strain';
     } else {
@@ -656,7 +779,23 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await chrome.storage.sync.get('oc-settings');
       const settings = (data && data['oc-settings']) || {};
 
-      settings.visionProfile = selectedProfile === 'none' ? null : selectedProfile;
+      // oculist-rnr.12 (review fix, gap 1): a not-yet-updated install's stored object can
+      // still carry a legacy 'visionProfile' key (content scripts don't re-inject into
+      // already-open tabs after an update, so welcome.html can be the first surface to
+      // touch a pre-update settings object). Strip it before this wizard's own fresh choice
+      // gets written below, or the legacy key would ride along into the write-back
+      // untouched forever. The displayPreset value normalizeOcSettings() computes here is
+      // immediately overwritten by the wizard's own selection on the next line regardless —
+      // only the deletion of the legacy key matters at this call site.
+      OculistSettingsMigration.normalizeOcSettings(settings);
+
+      // 'custom' excluded explicitly here (see the table comment above) rather than via a
+      // trimmed copy of the canonical table: this wizard has no PRESETS entry or UI path
+      // that produces selectedProfile === 'custom', so there is nothing meaningful for it
+      // to translate to.
+      settings.displayPreset = (selectedProfile === 'none' || selectedProfile === 'custom')
+        ? null
+        : (OculistSettingsMigration.LEGACY_DISPLAY_PRESET_MAP[selectedProfile] || null);
       settings.visionSettings = {
         ...settings.visionSettings,
         ...vs
@@ -670,10 +809,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     wizardModal.style.display = 'none';
 
-    const heroBanner = document.getElementById('start-wizard').parentElement;
+    if (!heroBanner) return;
     heroBanner.innerHTML = `
       <h3 style="font-size: 18px; font-weight: 700; color: #10b981; margin-bottom: 8px;">✓ Vision Setup Completed!</h3>
-      <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 0; line-height: 1.5;">Oculist has been successfully configured with your <strong>${selectedProfile === 'none' ? 'Standard' : selectedProfile.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</strong> profile.</p>
+      <p style="font-size: 14px; color: #a1a1aa; margin-bottom: 12px; line-height: 1.5;">Oculist has been successfully configured with your <strong>${selectedProfile === 'none' ? 'Standard' : selectedProfile.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</strong> profile. Fine-tune it any time from the extension's Settings popup.</p>
+      <button id="rerun-wizard" class="nav-btn" style="max-width: 240px; margin: 0 auto;" aria-label="Run the setup wizard again">Run Setup Again</button>
     `;
+
+    // Only the functional preset (settings.displayPreset, already persisted above) survives
+    // once this page reloads or the wizard is re-run — the clinical selection made above
+    // lives only in this closure's selectedProfile/colorBlindAnswer variables and is never
+    // written anywhere. Re-running the picker here (or via the Settings popup's own Active
+    // Vision Profile dropdown, which is always available) is the only way to see the named
+    // shortcut again; nothing is faked to make it look otherwise.
+    const rerunBtn = document.getElementById('rerun-wizard');
+    if (rerunBtn) {
+      rerunBtn.addEventListener('click', openWizard);
+    }
   }
 });

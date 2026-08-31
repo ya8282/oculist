@@ -140,7 +140,9 @@ describe('Settings panel survives its own storage writes', () => {
       () =>
         chrome.storage.sync
           .get('oc-settings')
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'low-vision')),
+          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+          // translation of the 'low-vision' dropdown option ('high-contrast').
+          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'high-contrast')),
       null,
       { timeout: POLL_TIMEOUT }
     );
@@ -156,6 +158,9 @@ describe('Settings panel survives its own storage writes', () => {
     const banner = await page.evaluate(
       () => document.getElementById('oc-wrap').shadowRoot.querySelector('.oc-settings-profile-banner').textContent
     );
+    // oculist-rnr.12: storage persists the functional 'high-contrast' displayPreset value,
+    // but the in-page banner keeps its original clinical wording by design (rnr.13 owns UI
+    // wording) — only the storage schema changed here.
     assert.match(banner, /Low Vision/, 'the panel should have rebuilt with the Low Vision banner');
   });
 });
