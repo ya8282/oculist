@@ -31,9 +31,12 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 // magnitude.
 const ANCHOR_TOLERANCE = 2;
 
-// #target is the text the finder searches for and the beacon fires on.
+// #target is the text the finder searches for and the beacon fires on. min-height gives the
+// scroll-robustness test below (oculist-gor) real room to scroll the page underneath the
+// beacon; it doesn't move #target or change anything the other tests in this suite assert
+// on.
 const PAGE = `<!doctype html><meta charset="utf-8">
-<style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; background:#06080D; color:#ccc; }</style>
+<style>body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; background:#06080D; color:#ccc; min-height: 1600px; }</style>
 <p>${'filler words to fill the page and give the streak field room to spread. '.repeat(30)} <span id="target">quarklet</span> ${'more filler words trailing after the match. '.repeat(30)}</p>`;
 
 const INPUT = '#oc-wrap >> .oc-input';
@@ -381,6 +384,16 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
       // possibly fire, not at the finish line where the race was already lost. Reading that
       // captured rect here instead of re-querying '.oc-beacon' removes the race structurally.
       // '#target' itself is never touched by content.js and is safe to query live at any time.
+      //
+      // Both sides of this comparison must live in the SAME coordinate space, and it must be
+      // one that cannot go stale between the capture above and this read: content.js stores
+      // lastSpeedLinesContainerRect in DOCUMENT coordinates (its viewport rect at capture
+      // time plus the scroll offset at that same instant), so '#target' is converted to
+      // document coordinates the same way here — its live viewport rect plus the CURRENT
+      // scroll offset, read in the same round trip as the rect itself so nothing can scroll
+      // in between. Document coordinates for a statically-positioned element never change
+      // with scrolling, so this holds regardless of how much the page has scrolled since the
+      // container was captured.
       const result = await evalInContentScript(`
         (function () {
           var el = document.querySelector('#target');
@@ -388,7 +401,9 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
           var independent = null;
           if (el && containerRect) {
             var r = el.getBoundingClientRect();
-            independent = { x: r.left + r.width / 2 - containerRect.left, y: r.top + r.height / 2 - containerRect.top };
+            var docLeft = r.left + window.scrollX;
+            var docTop = r.top + window.scrollY;
+            independent = { x: docLeft + r.width / 2 - containerRect.left, y: docTop + r.height / 2 - containerRect.top };
           }
           return {
             frames: window.__ocTest.speedLinesFrameCount,
@@ -414,6 +429,79 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
       );
     } finally {
       await setSettings({ performanceMode: false });
+    }
+  });
+
+  // Scroll-robustness (oculist-gor): lastSpeedLinesContainerRect is captured once, right
+  // after the container is appended, and stored in DOCUMENT coordinates precisely so that a
+  // scroll happening any time afterwards cannot desync it from a live read taken later (see
+  // the capture site in content.js). This test forces exactly that gap: it fires the beacon
+  // while scrolled to SCROLL_AT_CAPTURE (so the capture happens away from scrollY=0, where a
+  // stale viewport-relative rect would otherwise coincidentally equal its document-coordinate
+  // value), then scrolls further to a *different* offset, SCROLL_AT_READ, before rerunning the
+  // same atomic frames/draws/highlightY/independent check the Lite Mode test above uses.
+  // Against a pre-fix version that stored a viewport-relative rect, this fails with a dy
+  // roughly equal to (SCROLL_AT_READ - SCROLL_AT_CAPTURE); against the fix, both sides are in
+  // document coordinates and the scroll delta cancels out.
+  test('the centre-line highlight anchor check survives a scroll between capture and read', async () => {
+    const SCROLL_AT_CAPTURE = 150;
+    const SCROLL_AT_READ = 550;
+    await page.evaluate((y) => window.scrollTo(0, y), SCROLL_AT_CAPTURE);
+    try {
+      await replay();
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
+        timeout: POLL_TIMEOUT,
+        message: 'speed lines never rendered its first frames',
+      });
+
+      // This fixture sets no 'scroll-behavior', so the scroll resolves instantly and
+      // scrollY is already updated by the time this evaluate() round trip returns -- no
+      // separate scroll-settle wait is needed. Note the two-argument form is NOT
+      // unconditionally instant: it uses behavior 'auto', which does consult CSS
+      // 'scroll-behavior'. On a page that sets 'smooth' this would need a settle wait.
+      await page.evaluate((y) => window.scrollTo(0, y), SCROLL_AT_READ);
+
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesDone', (v) => v === true, {
+        timeout: LONG_TIMEOUT,
+        message: 'speed lines beacon never reached its final frame',
+      });
+
+      const result = await evalInContentScript(`
+        (function () {
+          var el = document.querySelector('#target');
+          var containerRect = window.__ocTest.lastSpeedLinesContainerRect;
+          var independent = null;
+          if (el && containerRect) {
+            var r = el.getBoundingClientRect();
+            var docLeft = r.left + window.scrollX;
+            var docTop = r.top + window.scrollY;
+            independent = { x: docLeft + r.width / 2 - containerRect.left, y: docTop + r.height / 2 - containerRect.top };
+          }
+          return {
+            frames: window.__ocTest.speedLinesFrameCount,
+            draws: window.__ocTest.speedLinesHighlightDrawCount,
+            highlightY: window.__ocTest.lastSpeedLinesHighlightY,
+            independent: independent
+          };
+        })()
+      `);
+
+      assert.ok(result.frames > 0, 'sanity check: expected at least one frame to have rendered');
+      assert.strictEqual(
+        result.draws,
+        result.frames,
+        `expected the highlight to draw on every frame despite the intervening scroll; frames=${result.frames}, highlightDraws=${result.draws}`
+      );
+      assert.ok(result.independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
+      const dy = Math.abs(result.highlightY - result.independent.y);
+      assert.ok(
+        dy <= ANCHOR_TOLERANCE,
+        `expected the centre-line highlight to still match the match's real rendered vertical centre within ` +
+          `${ANCHOR_TOLERANCE}px after scrolling from ${SCROLL_AT_CAPTURE}px to ${SCROLL_AT_READ}px between capture ` +
+          `and read; highlightY=${result.highlightY}, independent=${JSON.stringify(result.independent)} (dy=${dy}px)`
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
     }
   });
 
