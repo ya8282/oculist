@@ -16,6 +16,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -51,12 +52,6 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     });
 
     return popup;
-  }
-
-  function readStoredSettings(popup) {
-    return popup.evaluate(
-      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-    );
   }
 
   test('toggling the magnifier leaves a named vision profile alone', async () => {

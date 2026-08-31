@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -108,12 +109,6 @@ describe('Low vision + color vision answers compose instead of discarding the pa
     await page.click('#start-wizard');
     await page.waitForSelector('#step-1.active');
     return page;
-  }
-
-  function readStoredSettings(page) {
-    return page.evaluate(
-      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-    );
   }
 
   async function waitForSetupWizardCompleted(page) {
