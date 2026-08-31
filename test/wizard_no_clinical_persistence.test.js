@@ -215,7 +215,9 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
       );
     }
 
-    // Tabs themselves must be keyboard reachable too — real <button role="tab"> elements.
+    // This only checks the tab's accessible name, not its keyboard reachability — under
+    // roving tabindex (oculist-rnr.19) the unselected tab has no Tab stop of its own; see the
+    // ArrowRight/ArrowLeft, Home/End, and arrow-then-Tab tests below for that guarantee.
     const tabName = await computedAccessibleName(client, `document.querySelector('#step1-tab-sample')`);
     assert.ok(tabName && tabName.length > 0, 'the "compare samples" tab must have a non-empty accessible name');
 
@@ -272,6 +274,113 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     assert.strictEqual(state.namedTabIndex, '-1');
     assert.notStrictEqual(state.sampleDisplay, 'none');
     assert.strictEqual(state.namedDisplay, 'none');
+
+    await page.close();
+  });
+
+  test('Home/End on the step-1 tablist jump to the first/last tab with focus, selection, and roving tabindex (oculist-rnr.25)', async () => {
+    const page = await openWelcome();
+
+    async function tabState() {
+      return page.evaluate(() => ({
+        activeId: document.activeElement && document.activeElement.id,
+        namedSelected: document.getElementById('step1-tab-named').getAttribute('aria-selected'),
+        sampleSelected: document.getElementById('step1-tab-sample').getAttribute('aria-selected'),
+        namedTabIndex: document.getElementById('step1-tab-named').getAttribute('tabindex'),
+        sampleTabIndex: document.getElementById('step1-tab-sample').getAttribute('tabindex'),
+      }));
+    }
+
+    // Named tab is selected/focused by default; End must jump straight to the last tab
+    // (sample), not merely step one position like ArrowRight would.
+    await page.locator('#step1-tab-named').focus();
+    await page.keyboard.press('End');
+    let state = await tabState();
+    assert.strictEqual(state.activeId, 'step1-tab-sample', 'End must move focus to the last (sample) tab');
+    assert.strictEqual(state.sampleSelected, 'true', 'End must select the last tab');
+    assert.strictEqual(state.namedSelected, 'false', 'End must deselect the named tab');
+    assert.strictEqual(state.sampleTabIndex, '0', 'End must make the last tab the roving tabindex="0" stop');
+    assert.strictEqual(state.namedTabIndex, '-1', 'End must leave the first tab at tabindex="-1"');
+
+    // From the last tab, Home must jump straight back to the first tab.
+    await page.keyboard.press('Home');
+    state = await tabState();
+    assert.strictEqual(state.activeId, 'step1-tab-named', 'Home must move focus to the first (named) tab');
+    assert.strictEqual(state.namedSelected, 'true', 'Home must select the first tab');
+    assert.strictEqual(state.sampleSelected, 'false', 'Home must deselect the last tab');
+    assert.strictEqual(state.namedTabIndex, '0', 'Home must make the first tab the roving tabindex="0" stop');
+    assert.strictEqual(state.sampleTabIndex, '-1', 'Home must leave the last tab at tabindex="-1"');
+
+    await page.close();
+  });
+
+  test('Tab passes through the step-1 tablist untouched, and Enter/Space still activate the focused tab natively (oculist-rnr.25)', async () => {
+    const page = await openWelcome();
+
+    // Tab is not one of the handled keys, so the keydown handler must return before calling
+    // preventDefault() and let focus move OUT of the tablist under the browser's own tab
+    // order, rather than being trapped or redirected to the other tab.
+    await page.locator('#step1-tab-named').focus();
+    await page.keyboard.press('Tab');
+    const afterTab = await page.evaluate(() => ({
+      tag: document.activeElement && document.activeElement.tagName,
+      inTablist: !!(document.activeElement && document.activeElement.closest('.wizard-tabs')),
+    }));
+    assert.strictEqual(afterTab.tag, 'BUTTON', 'Tab must land on a real focusable element outside the tablist');
+    assert.strictEqual(afterTab.inTablist, false, 'Tab must move focus OUT of the tablist, not to the other tab or nowhere');
+
+    // Enter is likewise unhandled by the keydown handler; the named tab's own <button>
+    // element must still activate it natively. Start from the sample tab selected so
+    // activating the named tab via Enter is a real, observable state change.
+    await page.click('#step1-tab-sample');
+    await page.waitForSelector('#step1-panel-sample:not([hidden])');
+    await page.locator('#step1-tab-named').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#step1-panel-named:not([hidden])');
+    let namedSelected = await page.evaluate(() => document.getElementById('step1-tab-named').getAttribute('aria-selected'));
+    assert.strictEqual(namedSelected, 'true', 'Enter on a focused tab must still activate it via native <button> behavior');
+
+    // Same check for Space, the other native activation key.
+    await page.click('#step1-tab-sample');
+    await page.waitForSelector('#step1-panel-sample:not([hidden])');
+    await page.locator('#step1-tab-named').focus();
+    await page.keyboard.press(' ');
+    await page.waitForSelector('#step1-panel-named:not([hidden])');
+    namedSelected = await page.evaluate(() => document.getElementById('step1-tab-named').getAttribute('aria-selected'));
+    assert.strictEqual(namedSelected, 'true', 'Space on a focused tab must still activate it via native <button> behavior');
+
+    await page.close();
+  });
+
+  test('a keyboard-only user can arrow to the sample tab and then Tab straight into its panel to reach a well-named option (oculist-rnr.25)', async () => {
+    const page = await openWelcome();
+    const client = await ctx.newCDPSession(page);
+    await enableAccessibilityDomain(client);
+
+    // Roving tabindex removes the sample tab's own Tab stop (oculist-rnr.19), so the tab is
+    // reached by arrow key instead -- ArrowRight from the named tab, or equally End or a
+    // wrapping ArrowLeft. This test walks that whole path end to end: arrow across, then Tab
+    // into the revealed panel and land on a well-named option. The existing tests cover the
+    // two halves separately and neither joins them -- the rnr.19 ArrowRight test asserts the
+    // arrow moves focus and selection, while the accessible-name test reaches the sample
+    // panel by CLICK, so nothing else presses Tab from a tab into the panel it just revealed.
+    await page.locator('#step1-tab-named').focus();
+    await page.keyboard.press('ArrowRight');
+    await page.waitForSelector('#step1-panel-sample:not([hidden])');
+    const sampleSelected = await page.evaluate(() => document.getElementById('step1-tab-sample').getAttribute('aria-selected'));
+    assert.strictEqual(sampleSelected, 'true', 'test setup: ArrowRight must select the sample tab before Tab is exercised');
+
+    await page.keyboard.press('Tab');
+    const afterTab = await page.evaluate(() => ({
+      tag: document.activeElement && document.activeElement.tagName,
+      inSamplePanel: !!(document.activeElement && document.activeElement.closest('#step1-panel-sample')),
+    }));
+    assert.strictEqual(afterTab.tag, 'BUTTON', 'Tab from the arrowed-to sample tab must land on a real button');
+    assert.strictEqual(afterTab.inSamplePanel, true, 'Tab from the arrowed-to sample tab must land inside the sample panel it just revealed');
+
+    const reachedOptionName = await computedAccessibleName(client, 'document.activeElement');
+    assert.ok(reachedOptionName && reachedOptionName.length > 0, 'the option reached by arrow-then-Tab must have a non-empty accessible name');
+    assert.match(reachedOptionName, /Sample [A-Z]/, `the option reached by arrow-then-Tab must describe itself, not just a color (got: ${reachedOptionName})`);
 
     await page.close();
   });
@@ -339,11 +448,19 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
       sampleActive: document.getElementById('step1-tab-sample').classList.contains('active'),
       namedDisplay: getComputedStyle(document.getElementById('step1-panel-named')).display,
       sampleDisplay: getComputedStyle(document.getElementById('step1-panel-sample')).display,
+      namedTabIndex: document.getElementById('step1-tab-named').getAttribute('tabindex'),
+      sampleTabIndex: document.getElementById('step1-tab-sample').getAttribute('tabindex'),
     }));
     assert.strictEqual(reopenedTabState.namedActive, true, 're-opening the wizard must reset step 1 back to the named-condition tab');
     assert.strictEqual(reopenedTabState.sampleActive, false, 're-opening the wizard must deactivate the sample tab left active by the first run');
     assert.notStrictEqual(reopenedTabState.namedDisplay, 'none', 're-opened named panel must actually render');
     assert.strictEqual(reopenedTabState.sampleDisplay, 'none', 're-opened sample panel (left active by the first run) must be computed display:none');
+    // oculist-rnr.25: resetWizardState() goes through selectStep1Tab(), the same function the
+    // click/keyboard paths use, so reopening must also restore the roving tabindex (the named
+    // tab regains the tablist's sole tabindex="0" stop, the sample tab reverts to "-1") — not
+    // just the .active class and computed display checked above.
+    assert.strictEqual(reopenedTabState.namedTabIndex, '0', 're-opening the wizard must restore the named tab as the roving tabindex="0" stop');
+    assert.strictEqual(reopenedTabState.sampleTabIndex, '-1', 're-opening the wizard must restore the sample tab to tabindex="-1", not leave it as the roving stop the first run left it as');
 
     // Drive the second run through with Next only — no option is clicked on any step. This is
     // the only way to actually exercise resetWizardState(): re-clicking an option on the
