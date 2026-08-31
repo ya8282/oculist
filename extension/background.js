@@ -139,9 +139,25 @@ const DEFAULT_DISABLED_SITES = ['github.com'];
 //      and no confirming re-read either.
 const MAX_SETTINGS_WRITE_ATTEMPTS = 3;
 
+// oculist-6tp: every branch below is written to call `done` (when present) exactly
+// once, and to never call chrome.storage.sync.set() with a settings object derived
+// from a failed read or a mutate() that threw partway through. `done` is called with
+// no arguments on success (matching its pre-existing contract — see seedDefaultBlocklist
+// and the performanceMode call site, neither of which passed an argument before this
+// fix), and with a single error argument (the lastError object, or the thrown error) on
+// every failure path, so a caller that wants to distinguish success from failure can,
+// while a caller that ignores arguments (the existing ones) keeps working unchanged.
 function updateSettings(mutate, done, attemptsLeft) {
   if (attemptsLeft === undefined) attemptsLeft = MAX_SETTINGS_WRITE_ATTEMPTS - 1;
   chrome.storage.sync.get('oc-settings', (data) => {
+    if (chrome.runtime.lastError) {
+      // A failed read must never be treated as "no stored settings" — data would be
+      // {}, and writing mutate()'s result on top of that would clobber whatever is
+      // actually stored. Abandon the write entirely.
+      console.error('Oculist: chrome.storage.sync.get failed in updateSettings.', chrome.runtime.lastError);
+      if (done) done(chrome.runtime.lastError);
+      return;
+    }
     const settings = (data && data['oc-settings']) || {};
     // Snapshot the exact raw shape mutate() is about to run against, before
     // normalization or mutation touch it in place, so the drift check below compares
@@ -157,16 +173,47 @@ function updateSettings(mutate, done, attemptsLeft) {
     if (OculistSettingsMigration && typeof OculistSettingsMigration.normalizeOcSettings === 'function') {
       OculistSettingsMigration.normalizeOcSettings(settings);
     }
-    const result = mutate(settings);
+    let result;
+    try {
+      result = mutate(settings);
+    } catch (err) {
+      // mutate() may have left `settings` half-mutated — never write that. Surface the
+      // failure the way this file surfaces its other unexpected failures (see the
+      // importScripts catch above), and still let `done` fire exactly once.
+      console.error('Oculist: mutate() threw in updateSettings.', err);
+      if (done) done(err);
+      return;
+    }
     if (result === false) {
       if (done) done();
       return;
     }
     if (attemptsLeft <= 0) {
-      chrome.storage.sync.set({ 'oc-settings': settings }, done);
+      chrome.storage.sync.set({ 'oc-settings': settings }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Oculist: chrome.storage.sync.set failed in updateSettings.', chrome.runtime.lastError);
+          if (done) done(chrome.runtime.lastError);
+          return;
+        }
+        if (done) done();
+      });
       return;
     }
     chrome.storage.sync.get('oc-settings', (freshData) => {
+      if (chrome.runtime.lastError) {
+        // Same reasoning as the initial get() above: a failed confirming re-read must
+        // not be allowed to fall through to a write, whether it happens to look like a
+        // drift (recomputing against a bogus {}) or, in the empty-settings edge case,
+        // happens to match `basedOn` and would otherwise sail straight through to set().
+        // settings-migration.js's writeOcSettings() deliberately does the OPPOSITE here
+        // and proceeds — that path carries a user's explicit page-side save, where
+        // abandoning would silently discard a deliberate choice. This function's two
+        // callers are a self-healing seed (the flag stays unset and onInstalled reseeds
+        // next time) and a performanceMode heuristic, so abandoning costs nothing.
+        console.error('Oculist: chrome.storage.sync.get (confirming re-read) failed in updateSettings.', chrome.runtime.lastError);
+        if (done) done(chrome.runtime.lastError);
+        return;
+      }
       const freshRaw = (freshData && freshData['oc-settings']) || {};
       if (JSON.stringify(freshRaw) !== basedOn) {
         // Something else wrote between our get() and this confirming re-read.
@@ -174,7 +221,14 @@ function updateSettings(mutate, done, attemptsLeft) {
         updateSettings(mutate, done, attemptsLeft - 1);
         return;
       }
-      chrome.storage.sync.set({ 'oc-settings': settings }, done);
+      chrome.storage.sync.set({ 'oc-settings': settings }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Oculist: chrome.storage.sync.set failed in updateSettings.', chrome.runtime.lastError);
+          if (done) done(chrome.runtime.lastError);
+          return;
+        }
+        if (done) done();
+      });
     });
   });
 }
@@ -195,7 +249,15 @@ chrome.runtime.onInstalled.addListener((details) => {
   // Runs on update too, so existing installs pick the default up once. The flag inside
   // keeps it to exactly once. The performanceMode write below (when it runs) waits for
   // this one to finish first — see updateSettings — so neither write clobbers the other.
-  seedDefaultBlocklist(() => {
+  // oculist-6tp: seedDefaultBlocklist's write can fail (a throwing mutate, or a
+  // storage lastError on either its get or its set) — `err` is non-null on any of
+  // those paths. Onboarding still matters more than the seed landing, so the welcome
+  // tab opens either way; the failure is only surfaced via console.error, not by
+  // skipping onboarding for a first-run user.
+  seedDefaultBlocklist((err) => {
+    if (err) {
+      console.error('Oculist: seedDefaultBlocklist failed; proceeding with onboarding anyway.', err);
+    }
     if (details.reason === 'install') {
       chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 
