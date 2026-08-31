@@ -19,7 +19,7 @@ try {
 
   // Fail loudly if anything referenced by the HTML didn't make it into the zip.
   const zipped = execSync(`unzip -Z1 "${zipPath}"`, { encoding: 'utf8' }).split('\n').filter(Boolean);
-  const required = ['manifest.json', 'background.js', 'content.js', 'popup.html', 'popup.js', 'welcome.html', 'welcome.js', 'icon16.png', 'icon48.png', 'icon128.png'];
+  const required = ['manifest.json', 'background.js', 'settings-migration.js', 'content.js', 'popup.html', 'popup.js', 'welcome.html', 'welcome.js', 'icon16.png', 'icon48.png', 'icon128.png'];
   const missing = required.filter(f => !zipped.includes(f));
   if (missing.length) throw new Error(`Extension zip is missing required files: ${missing.join(', ')}`);
   console.log(`Extension zip created: dist/${zipName} (${zipped.length} files)`);

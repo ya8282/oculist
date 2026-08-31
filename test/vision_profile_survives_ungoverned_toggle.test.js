@@ -105,7 +105,9 @@ describe('Vision profile survives ungoverned setting toggles', () => {
       { timeout: POLL_TIMEOUT }
     );
     const stored = await readStoredSettings(popup);
-    assert.strictEqual(stored.visionProfile, 'eye-strain', 'persisted visionProfile must still be eye-strain');
+    // oculist-rnr.12: the persisted field is 'displayPreset' now, holding the functional
+    // key 'reduced-motion' for what the #vision-profile dropdown still labels 'eye-strain'.
+    assert.strictEqual(stored.displayPreset, 'reduced-motion', 'persisted displayPreset must still be reduced-motion');
     assert.strictEqual(stored.visionSettings.magnifier, true, 'the magnifier toggle itself must still take effect');
 
     await popup.close();
@@ -131,12 +133,12 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     // Wait for the async chrome.storage.sync.set() write to actually land before reading
     // it back.
     await popup.waitForFunction(
-      () => chrome.storage.sync.get('oc-settings').then((d) => !!(d['oc-settings'] && d['oc-settings'].visionProfile === 'custom')),
+      () => chrome.storage.sync.get('oc-settings').then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'custom')),
       null,
       { timeout: POLL_TIMEOUT }
     );
     const stored = await readStoredSettings(popup);
-    assert.strictEqual(stored.visionProfile, 'custom');
+    assert.strictEqual(stored.displayPreset, 'custom');
 
     await popup.close();
   });

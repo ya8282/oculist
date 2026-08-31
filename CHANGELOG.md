@@ -5,7 +5,7 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [Unreleased]
+## [1.7.0] — 2026-08-29
 
 ### Added
 
@@ -15,11 +15,6 @@ below the 1.5.0 heading is what landed across that span.
   hue rides your beacon colour within a bounded sweep.
 * **Cyber-Vision.** A new effect with scanlines, a sweeping bar, and thermal blocks over the
   match, plus targeting brackets and a readout showing the real match index and count.
-
-## [1.7.0] — 2026-08-25
-
-### Added
-
 * **Multi-term search lists.** The find bar now keeps a working list of search terms shown as
   chips under the input, with one term active at a time. Each chip shows its own hit count.
   Matches for the inactive terms stay visible on the page as dim, background-highlighted marks

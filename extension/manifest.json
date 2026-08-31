@@ -28,7 +28,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["settings-migration.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

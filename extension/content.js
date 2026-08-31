@@ -15,7 +15,7 @@
     scrollBehavior: 'smooth',
     disabledSites: [],
     performanceMode: false,
-    visionProfile: null,
+    displayPreset: null,
     visionSettings: {
       beaconSize: 'm',
       animationSpeed: 'normal',
@@ -41,9 +41,20 @@
   var SETTINGS_KEYS = [
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
-    'visionProfile', 'visionSettings', 'setupWizardCompleted',
+    'displayPreset', 'visionSettings', 'setupWizardCompleted',
     'seededDefaultBlocklist'
   ];
+
+  // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
+  // colorPalette clinical-value rewrite both used to live here as content.js-local copies.
+  // Moved into extension/settings-migration.js — the single canonical table/normaliser
+  // shared with popup.js and welcome.js, so there is exactly one place this can drift, and
+  // so a popup/welcome write can normalise before persisting instead of re-introducing the
+  // legacy field content.js had already cleaned up (review gap 1). content.js is
+  // manifest-injected with that file listed before this one (see manifest.json's
+  // content_scripts), so window.OculistSettingsMigration (set the same way window.__ocTest
+  // is, below) is already there by the time this line runs.
+  var OculistSettingsMigration = window.OculistSettingsMigration;
 
   // Every write we make echoes back through chrome.storage.onChanged in this same tab.
   // Recording each payload lets the listener recognise its own echo and ignore it. Value
@@ -500,11 +511,11 @@
     var ac = settings.activeColor || '#f59e0b';
     var bc = settings.beaconColor || '#fbbf24';
 
-    if (palette === 'deuteranopia') {
+    if (palette === 'amber-sky') {
       mc = '#fef08a'; ac = '#0284c7'; bc = '#0284c7';
-    } else if (palette === 'protanopia') {
+    } else if (palette === 'amber-indigo') {
       mc = '#fef08a'; ac = '#2563eb'; bc = '#2563eb';
-    } else if (palette === 'tritanopia') {
+    } else if (palette === 'rose-cyan') {
       mc = '#ffcbd1'; ac = '#06b6d4'; bc = '#06b6d4';
     } else if (palette === 'warm') {
       mc = '#fef08a'; ac = '#d97706'; bc = '#eab308';
@@ -2870,7 +2881,7 @@
     var colors = getEffectiveColors();
     var color = colors.beacon;
 
-    if (settings.visionProfile === 'eye-strain') {
+    if (settings.displayPreset === 'reduced-motion') {
       var scale = getBeaconScale();
       var cx = rect.left + rect.width / 2;
       var cy = rect.top + rect.height / 2;
@@ -3069,7 +3080,7 @@
     if (!rect || rect.width === 0 || rect.height === 0) return;
     
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
-    var isColorBlind = (palette === 'deuteranopia' || palette === 'protanopia' || palette === 'tritanopia');
+    var isColorBlind = (palette === 'amber-sky' || palette === 'amber-indigo' || palette === 'rose-cyan');
     if (!isColorBlind) return;
 
     var colors = getEffectiveColors();
@@ -4663,7 +4674,7 @@
     if (!wrap || searchRanges.length === 0) return;
 
     var palette = (settings.visionSettings && settings.visionSettings.colorPalette) ? settings.visionSettings.colorPalette : 'default';
-    var isColorBlind = (palette === 'deuteranopia' || palette === 'protanopia' || palette === 'tritanopia');
+    var isColorBlind = (palette === 'amber-sky' || palette === 'amber-indigo' || palette === 'rose-cyan');
     if (!isColorBlind) return;
 
     var colors = getEffectiveColors();
@@ -5006,10 +5017,10 @@
   }
 
   function getProfileConstraints() {
-    var p = settings.visionProfile;
+    var p = settings.displayPreset;
     return {
-      effectDisabled: !!(p === 'eye-strain'),
-      colorsDisabled: !!(p && (p === 'eye-strain' || p.indexOf('color-blind') === 0))
+      effectDisabled: !!(p === 'reduced-motion'),
+      colorsDisabled: !!(p && (p === 'reduced-motion' || p === 'rg-adjust-deut' || p === 'rg-adjust-prot' || p === 'by-adjust'))
     };
   }
 
@@ -5084,12 +5095,15 @@
     header.appendChild(resetBtn);
     settingsPanel.appendChild(header);
 
-    if (settings.visionProfile) {
+    if (settings.displayPreset) {
       var banner = document.createElement('div');
       banner.className = 'oc-settings-profile-banner';
       banner.style.cssText = 'background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.2); padding: 8px 12px; font-size: 11px; color: #fbbf24; margin: 8px 16px 0; border-radius: 6px; display: flex; align-items: center; gap: 6px; font-weight: 500;';
-      
-      var profileDisplay = settings.visionProfile === 'eye-strain' ? 'Eye Strain' : settings.visionProfile === 'low-vision' ? 'Low Vision' : 'Color Blind';
+
+      // oculist-rnr.12 (review fix, gap 3): reverted to the original clinical wording here —
+      // storage must be functional, but the UI banner is explicitly allowed to keep the named
+      // affordance (rnr.13 owns UI wording). Only the field name (displayPreset) changed.
+      var profileDisplay = settings.displayPreset === 'reduced-motion' ? 'Eye Strain' : settings.displayPreset === 'high-contrast' ? 'Low Vision' : 'Color Blind';
       banner.textContent = '⚠️ ' + profileDisplay + ' Profile overrides active settings.';
       settingsPanel.appendChild(banner);
     }
@@ -6079,15 +6093,15 @@
       '  --oc-border-width-thin: 1px;',
       '  --oc-border-width-medium: 2px;',
       '  --oc-border-width-thick: 4px;',
-      '  --oc-palette-deuteranopia-match: #fef08a;',
-      '  --oc-palette-deuteranopia-active: #0284c7;',
-      '  --oc-palette-deuteranopia-beacon: #0284c7;',
-      '  --oc-palette-protanopia-match: #fef08a;',
-      '  --oc-palette-protanopia-active: #2563eb;',
-      '  --oc-palette-protanopia-beacon: #2563eb;',
-      '  --oc-palette-tritanopia-match: #ffcbd1;',
-      '  --oc-palette-tritanopia-active: #06b6d4;',
-      '  --oc-palette-tritanopia-beacon: #06b6d4;',
+      '  --oc-palette-amber-sky-match: #fef08a;',
+      '  --oc-palette-amber-sky-active: #0284c7;',
+      '  --oc-palette-amber-sky-beacon: #0284c7;',
+      '  --oc-palette-amber-indigo-match: #fef08a;',
+      '  --oc-palette-amber-indigo-active: #2563eb;',
+      '  --oc-palette-amber-indigo-beacon: #2563eb;',
+      '  --oc-palette-rose-cyan-match: #ffcbd1;',
+      '  --oc-palette-rose-cyan-active: #06b6d4;',
+      '  --oc-palette-rose-cyan-beacon: #06b6d4;',
       '  --oc-palette-warm-match: #fef08a;',
       '  --oc-palette-warm-active: #d97706;',
       '  --oc-palette-warm-beacon: #eab308;',
@@ -7029,7 +7043,7 @@
       // carries magnifier/textLabels/borderStyle/colorPalette/customColors/motionSensitivity,
       // and matchColor/activeColor/beaconColor are the 'default' palette's own colours.
       // Everything else in SETTINGS_KEYS (disabledSites, effect, position, theme,
-      // scrollBehavior, performanceMode, visionProfile, ...) is either handled by its own
+      // scrollBehavior, performanceMode, displayPreset, ...) is either handled by its own
       // branch below or never read by the active-match overlays, so redrawing on it would
       // just be unnecessary DOM churn on an unrelated change.
       var OVERLAY_AFFECTING_KEYS = { visionSettings: 1, matchColor: 1, activeColor: 1, beaconColor: 1 };
@@ -7099,14 +7113,35 @@
   }
 
   chrome.storage.sync.get('oc-settings', function (data) {
+    // oculist-rnr.12 (review fix): normalisation now runs through the single shared
+    // OculistSettingsMigration.normalizeOcSettings() (extension/settings-migration.js),
+    // applied to `saved` — the object exactly as read from chrome.storage.sync — BEFORE
+    // it's merged into `settings` below. That ordering matters: `settings` already declares
+    // its own default `displayPreset: null` key, so checking presence on `settings` instead
+    // of on the raw `saved` payload would always look "already migrated" and silently keep
+    // a stale legacy visionProfile/colorPalette value (review gap 2). normalizeOcSettings()
+    // itself prefers an already-present 'displayPreset' over a legacy 'visionProfile' when
+    // both exist, so a user's fresh popup/welcome choice is never reverted by a stale
+    // legacy field a not-yet-updated surface re-persisted, and always deletes the legacy
+    // key either way — idempotent by construction, since a normalised object never has a
+    // 'visionProfile' key or a clinical colorPalette value for a later pass to re-detect.
+    var needsMigration = false;
     if (data && data['oc-settings']) {
       var saved = data['oc-settings'];
+      needsMigration = OculistSettingsMigration.normalizeOcSettings(saved);
       SETTINGS_KEYS.forEach(function (k) {
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
     }
     if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
+    if (needsMigration) {
+      // Reuses saveSettings()'s own pendingSelfWrites bookkeeping so the write this
+      // migration makes is recognized and swallowed as an echo by the
+      // chrome.storage.onChanged listener registered in boot() below, instead of being
+      // mistaken for a foreign change and tearing the (not-yet-open) panel down.
+      saveSettings();
+    }
     boot();
   });
 
