@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { TIMEOUT_SCALE, POLL_TIMEOUT } = require('./helpers/wait');
+const { TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -134,6 +134,17 @@ describe('Stale mount loadWorkList guard (oculist-3z6)', () => {
     });
   }
 
+  // LONG_TIMEOUT (not the default POLL_TIMEOUT): the only caller (below) uses this to wait
+  // for mount B's chip row after a fresh reopen — a real chrome.storage.session.get() round
+  // trip through the extension's storage backend, plus a full buildUI() render, the same
+  // storage-IO-bound cost category worklist_storage.test.js already budgets LONG_TIMEOUT
+  // for. (The other wait in this file, below — DELAY_MS + SETTLE_MARGIN — is not a budget
+  // for this same kind of work: it deliberately waits past mount A's own
+  // artificially-delayed callback, a fixed point in time this test controls, not a real
+  // storage round trip it is estimating. This is the first LONG_TIMEOUT use in this file.)
+  // Observed under contention: this call timed out at POLL_TIMEOUT (5000ms) waiting on a
+  // genuinely-still-in-flight restore (page.waitForFunction: Timeout 5000ms exceeded),
+  // not a stuck or broken predicate.
   function waitForChipTerms(expectedTerms) {
     return page.waitForFunction(
       (terms) => {
@@ -142,7 +153,7 @@ describe('Stale mount loadWorkList guard (oculist-3z6)', () => {
         return chips.length === terms.length && chips.every((c, i) => c === terms[i]);
       },
       expectedTerms,
-      { timeout: POLL_TIMEOUT }
+      { timeout: LONG_TIMEOUT }
     );
   }
 

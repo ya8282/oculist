@@ -81,6 +81,56 @@ describe('Working-list session storage (oc-worklist)', () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }
     }
+
+    // chrome.storage.session is unusable from a content script until background.js's
+    // service-worker startup call to setAccessLevel('TRUSTED_AND_UNTRUSTED_CONTEXTS')
+    // actually lands — an independent async path with no ordering guarantee relative to
+    // this content script's own boot (both fire off the same extension load, on separate
+    // timelines). Racing it fails fast and silent, not slow: a chrome.storage.session.set()
+    // issued before the grant lands is rejected within a couple of milliseconds with
+    // chrome.runtime.lastError "Access to storage is not allowed from this context.", and
+    // content.js's saveWorkList() deliberately swallows that error (production code must
+    // not throw on a browser lacking the access-level API) — so a write that loses this
+    // race is not delayed, it is silently and permanently dropped, and every later poll for
+    // it times out at the full budget waiting for data that was never written. Root-caused
+    // by instrumenting both sides directly: a standalone repro launching this same
+    // extension cold, timestamping content.js's saveWorkList() call against background.js's
+    // setAccessLevel() resolution, hit exactly this ordering on 2 of 15 cold launches (once
+    // by 9ms), each producing byte-identical "Access to storage is not allowed from this
+    // context." errors — this is flake #3 from oculist-z4s, reproduced on an idle machine
+    // with no artificial load. A bigger deadline on the write-landing poll below can never
+    // fix this: the data these tests wait for is never written at all, so they would still
+    // time out, just later. Wait out the real precondition once, here, before any test in
+    // this file touches chrome.storage.session, using a harmless probe key so nothing here
+    // depends on (or leaves behind) real working-list data.
+    {
+      const deadline = Date.now() + POLL_TIMEOUT;
+      for (;;) {
+        const denied = await new Promise((resolve, reject) => {
+          client
+            .send('Runtime.evaluate', {
+              expression:
+                "new Promise((resolve) => chrome.storage.session.get('__oc_access_probe__', " +
+                '() => resolve(chrome.runtime.lastError ? chrome.runtime.lastError.message : null)))',
+              contextId: isolatedContextId,
+              awaitPromise: true,
+              returnByValue: true,
+            })
+            .then((res) => {
+              if (res.exceptionDetails) {
+                reject(new Error('access-probe eval failed: ' + JSON.stringify(res.exceptionDetails)));
+                return;
+              }
+              resolve(res.result.value);
+            }, reject);
+        });
+        if (!denied) break;
+        if (Date.now() > deadline) {
+          throw new Error('chrome.storage.session access was never granted to the content script: ' + denied);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+    }
     // Confirms the content script (and its window.__ocTest.loadWorkList/saveWorkList
     // hooks) has actually mounted before any test tries to reach into its world. Retry
     // Control+f itself (a keypress a not-yet-attached listener would otherwise silently
