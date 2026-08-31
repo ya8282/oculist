@@ -25,8 +25,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
 
-function loadBackground({ backing, hardwareConcurrency, onTabsCreate }) {
+function loadBackground({ backing, hardwareConcurrency, onTabsCreate, onGetSnapshot }) {
   const calls = { get: 0, set: 0 };
   let onInstalledListener = null;
   const noopEvent = () => ({ addListener: () => {} });
@@ -39,6 +40,20 @@ function loadBackground({ backing, hardwareConcurrency, onTabsCreate }) {
     configurable: true,
     writable: true,
   });
+
+  // background.js loads settings-migration.js via importScripts() (real service worker
+  // API, not available in Node). Stand in for it: `self` is a classic service worker's
+  // global object, so settings-migration.js's own self/globalThis fallback (see its
+  // tail) attaches OculistSettingsMigration there when `window` is absent, same as it
+  // would for real — using Node's `global` object as the stand-in `self` makes that
+  // attachment visible to background.js's own top-level `self.OculistSettingsMigration`
+  // read. importScripts itself is just a synchronous require() of the real file, which
+  // is enough to trigger that attachment; Node's require cache means this only runs the
+  // module body once per process, but the self-assignment survives on `global` after that.
+  global.self = global;
+  global.importScripts = (file) => {
+    require(path.join(__dirname, '../extension', file));
+  };
   global.chrome = {
     runtime: {
       onInstalled: { addListener: (fn) => { onInstalledListener = fn; } },
@@ -54,6 +69,11 @@ function loadBackground({ backing, hardwareConcurrency, onTabsCreate }) {
         get: (key, cb) => {
           calls.get++;
           const snapshot = JSON.parse(JSON.stringify({ [key]: backing[key] }));
+          // Fires synchronously right after the snapshot is captured but before the
+          // callback's macrotask is even scheduled to run — i.e. exactly the gap a
+          // concurrent writer (the popup) can land in and still have this get()'s
+          // eventual callback deliver a snapshot that predates it.
+          if (onGetSnapshot) onGetSnapshot(calls.get, key);
           setTimeout(() => cb(snapshot), 0);
         },
         set: (obj, cb) => {
@@ -146,4 +166,53 @@ test('an already-seeded blocklist is not rewritten (user re-enabling github.com 
 
   assert.strictEqual(calls.set, 0, 'no write should happen once already seeded');
   assert.deepStrictEqual(backing['oc-settings'].disabledSites, [], 'disabledSites must be left untouched');
+});
+
+// Regression guard for oculist-hzr: seedDefaultBlocklist()'s get() is the first thing
+// onInstalled does. If another surface (the popup here) normalizes settings and writes
+// in the gap between that get() and its own set(), background used to write its stale,
+// pre-popup-write snapshot straight back — resurrecting a legacy field (visionProfile)
+// the popup's write had just deleted, because background's own read-modify-write cycle
+// never passed through normalizeOcSettings() the way every other surface does. The fix
+// (see background.js's updateSettings()) normalizes the snapshot in place before mutate()
+// runs, on every call through that one choke point.
+//
+// What this test does NOT claim to fix (see the file-level comment above and the
+// matching comment in background.js): chrome.storage.sync has no compare-and-swap, so
+// background's own set() below still clobbers the popup's write wholesale (its
+// 'colorProfile' field is expected to be lost here) — that residual cross-context race
+// is explicitly out of scope for oculist-hzr. The only invariant under test is that the
+// legacy field itself is never resurrected by background's write, regardless of what
+// else that write clobbers.
+test('a legacy visionProfile present at background\'s read is not resurrected by its write-back after a concurrent write deletes it', async () => {
+  const backing = { 'oc-settings': { disabledSites: [], visionProfile: 'legacy-deuteranopia' } };
+
+  const { fire } = loadBackground({
+    backing,
+    hardwareConcurrency: 8, // >= 4: keep this test to the single seedDefaultBlocklist write site
+    onGetSnapshot: (callIndex) => {
+      if (callIndex === 1) {
+        // The popup's own get->normalize->set cycle completes here: it has already
+        // deleted visionProfile by the time this write lands, in the gap between
+        // background's get() snapshot (already captured, above) and its set().
+        backing['oc-settings'] = { disabledSites: [], colorProfile: 'deuteranopia' };
+      }
+    },
+  });
+
+  fire({ reason: 'update' }); // 'update' skips the performanceMode branch — irrelevant to this race
+
+  await flush(6);
+
+  const settings = backing['oc-settings'];
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(settings, 'visionProfile'),
+    false,
+    'background must not resurrect the legacy visionProfile the popup deleted: ' + JSON.stringify(settings)
+  );
+  assert.ok(
+    Array.isArray(settings.disabledSites) && settings.disabledSites.includes('github.com'),
+    'the seed write itself must still land: ' + JSON.stringify(settings)
+  );
+  assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must still be set: ' + JSON.stringify(settings));
 });

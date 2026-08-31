@@ -44,6 +44,28 @@ if (chrome.runtime && chrome.runtime.onMessage &&
   });
 }
 
+// content.js, popup.js, and welcome.js all normalize a stored 'oc-settings' object
+// through settings-migration.js's normalizeOcSettings() before using or rewriting it
+// (see that file's header). This service worker is the one surface that read-modifies-
+// writes 'oc-settings' (updateSettings() below) without going through that module —
+// which lets it read a still-legacy object (e.g. a stale 'visionProfile') mid-flight
+// between another surface's get() and set(), and write that stale copy straight back,
+// resurrecting a field the other surface just deleted (oculist-hzr). manifest.json
+// declares this file as a classic (non-"type":"module") service worker, so
+// importScripts() — not import/require — is how it shares settings-migration.js with
+// content.js, matching that file's own self/globalThis fallback (it prefers `window`,
+// which a service worker never has, so it lands on `self`, the SW's global object).
+// Guarded the same way the setAccessLevel() call above is: a packaging mistake or a
+// browser without importScripts must not stop listener registration below or the
+// unconditional blocklist seed on install — it must just skip normalization.
+var OculistSettingsMigration = null;
+try {
+  importScripts('settings-migration.js');
+  OculistSettingsMigration = self.OculistSettingsMigration || null;
+} catch (err) {
+  console.error('Oculist: failed to load settings-migration.js.', err);
+}
+
 var BLOCKED_PREFIXES = [
   'chrome://', 'chrome-extension://', 'edge://', 'about:',
   'https://chrome.google.com/webstore', 'https://chromewebstore.google.com'
@@ -102,6 +124,16 @@ const DEFAULT_DISABLED_SITES = ['github.com'];
 function updateSettings(mutate, done) {
   chrome.storage.sync.get('oc-settings', (data) => {
     const settings = (data && data['oc-settings']) || {};
+    // Normalize the just-read snapshot before mutate() touches it, so a stale legacy
+    // field (e.g. 'visionProfile') this get() happened to catch mid-flight from another
+    // surface's write never gets carried into this write-back (oculist-hzr). Runs on
+    // every call through this one choke point, covering both write sites below
+    // (seedDefaultBlocklist and the install-branch performanceMode write) with a single
+    // call — no per-site duplication. A missing module (see the importScripts guard
+    // above) just means this is skipped; it never blocks the write itself.
+    if (OculistSettingsMigration && typeof OculistSettingsMigration.normalizeOcSettings === 'function') {
+      OculistSettingsMigration.normalizeOcSettings(settings);
+    }
     const result = mutate(settings);
     if (result === false) {
       if (done) done();
