@@ -129,16 +129,59 @@ document.addEventListener('DOMContentLoaded', () => {
     { tab: document.getElementById('step1-tab-named'), panel: document.getElementById('step1-panel-named') },
     { tab: document.getElementById('step1-tab-sample'), panel: document.getElementById('step1-panel-sample') }
   ];
-  step1Tabs.forEach(({ tab }) => {
-    tab.addEventListener('click', () => {
-      step1Tabs.forEach(({ tab: t, panel: p }) => {
-        const active = t === tab;
-        t.classList.toggle('active', active);
-        t.setAttribute('aria-selected', String(active));
-        p.hidden = !active;
-      });
+  // Single source of truth for switching the active step-1 tab: mouse click, arrow-key
+  // navigation, and resetWizardState() all funnel through this one function so there is
+  // exactly one place that flips .active/aria-selected/hidden/tabindex together (oculist-rnr.19).
+  // Also drives the WAI-ARIA APG roving-tabindex convention for the tablist: the selected
+  // tab gets tabindex="0" (the tablist's one Tab stop) and the unselected tab gets
+  // tabindex="-1" (removed from the Tab order, reachable only by arrowing over from the
+  // selected tab).
+  function selectStep1Tab(tab) {
+    step1Tabs.forEach(({ tab: t, panel: p }) => {
+      const active = t === tab;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', String(active));
+      t.setAttribute('tabindex', active ? '0' : '-1');
+      p.hidden = !active;
     });
+  }
+
+  step1Tabs.forEach(({ tab }) => {
+    tab.addEventListener('click', () => selectStep1Tab(tab));
   });
+
+  // APG tabs pattern keyboard support: ArrowRight/ArrowLeft move (and wrap, since there are
+  // only two tabs) between tabs, Home/End jump to the first/last. This is "automatic
+  // activation" mode (APG's recommended default when revealing the panel is cheap, which it
+  // is here) — the arrow key both moves focus AND selects/activates the newly focused tab.
+  // Only the keys above call preventDefault(); every other key (notably Tab, and Enter/Space
+  // which a <button> already activates natively) passes through untouched so focus still
+  // leaves the tablist normally and native button activation keeps working.
+  const step1Tablist = document.querySelector('.wizard-tabs');
+  if (step1Tablist) {
+    step1Tablist.addEventListener('keydown', (e) => {
+      const currentIndex = step1Tabs.findIndex(({ tab }) => tab === e.target);
+      if (currentIndex === -1) return;
+
+      let newIndex;
+      if (e.key === 'ArrowRight') {
+        newIndex = (currentIndex + 1) % step1Tabs.length;
+      } else if (e.key === 'ArrowLeft') {
+        newIndex = (currentIndex - 1 + step1Tabs.length) % step1Tabs.length;
+      } else if (e.key === 'Home') {
+        newIndex = 0;
+      } else if (e.key === 'End') {
+        newIndex = step1Tabs.length - 1;
+      } else {
+        return;
+      }
+
+      e.preventDefault();
+      const newTab = step1Tabs[newIndex].tab;
+      selectStep1Tab(newTab);
+      newTab.focus();
+    });
+  }
 
   // 2. Click option choices
   const stepsOptions = [
@@ -175,13 +218,9 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedProfile = 'none';
 
     // Step 1 always reopens on the named-condition shortcut tab, not wherever a prior run
-    // left it.
-    step1Tabs.forEach(({ tab, panel }, idx) => {
-      const active = idx === 0;
-      tab.classList.toggle('active', active);
-      tab.setAttribute('aria-selected', String(active));
-      panel.hidden = !active;
-    });
+    // left it. Goes through the same selectStep1Tab() the click/keyboard handlers use, so
+    // the roving tabindex (tabindex="0" on named, "-1" on sample) is restored too.
+    selectStep1Tab(step1Tabs[0].tab);
 
     // Default-select the first option in steps 1, 2, and 3, clearing any prior selection.
     ['#step-1 .wizard-option', '#step-2 .wizard-option', '#step-3 .wizard-option'].forEach((selector) => {

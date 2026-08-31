@@ -227,6 +227,60 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     await page.close();
   });
 
+  test('ArrowRight/ArrowLeft on the step-1 tablist move focus, selection, roving tabindex, and panel visibility, wrapping between the two tabs (oculist-rnr.19)', async () => {
+    const page = await openWelcome();
+
+    async function tabState() {
+      return page.evaluate(() => ({
+        activeId: document.activeElement && document.activeElement.id,
+        namedSelected: document.getElementById('step1-tab-named').getAttribute('aria-selected'),
+        sampleSelected: document.getElementById('step1-tab-sample').getAttribute('aria-selected'),
+        namedTabIndex: document.getElementById('step1-tab-named').getAttribute('tabindex'),
+        sampleTabIndex: document.getElementById('step1-tab-sample').getAttribute('tabindex'),
+        namedDisplay: getComputedStyle(document.getElementById('step1-panel-named')).display,
+        sampleDisplay: getComputedStyle(document.getElementById('step1-panel-sample')).display,
+      }));
+    }
+
+    // Named tab is selected (and is the tablist's sole tabindex="0" stop) by default; focus
+    // it directly the way a real Tab keypress into the tablist would land here.
+    await page.locator('#step1-tab-named').focus();
+
+    await page.keyboard.press('ArrowRight');
+    let state = await tabState();
+    assert.strictEqual(state.activeId, 'step1-tab-sample', 'ArrowRight must move DOM focus to the sample tab');
+    assert.strictEqual(state.sampleSelected, 'true', 'ArrowRight must select the sample tab');
+    assert.strictEqual(state.namedSelected, 'false', 'ArrowRight must deselect the named tab');
+    assert.strictEqual(state.sampleTabIndex, '0', 'the newly selected sample tab must become the roving tabindex="0" stop');
+    assert.strictEqual(state.namedTabIndex, '-1', 'the newly deselected named tab must become tabindex="-1"');
+    assert.notStrictEqual(state.sampleDisplay, 'none', 'the sample panel must actually render once ArrowRight selects its tab');
+    assert.strictEqual(state.namedDisplay, 'none', 'the named panel must become computed display:none once ArrowRight deselects its tab');
+
+    // Only two tabs exist, so ArrowRight again must wrap back around to the named tab.
+    await page.keyboard.press('ArrowRight');
+    state = await tabState();
+    assert.strictEqual(state.activeId, 'step1-tab-named', 'ArrowRight from the last tab must wrap around to the first tab');
+    assert.strictEqual(state.namedSelected, 'true');
+    assert.strictEqual(state.namedTabIndex, '0');
+    assert.strictEqual(state.sampleTabIndex, '-1');
+    assert.notStrictEqual(state.namedDisplay, 'none');
+    assert.strictEqual(state.sampleDisplay, 'none');
+
+    // ArrowLeft from the first tab must wrap the other direction, to the last (sample) tab —
+    // this is also the only way the sample tab remains keyboard-reachable at all under the
+    // roving-tabindex model, since it no longer has its own Tab stop.
+    await page.keyboard.press('ArrowLeft');
+    state = await tabState();
+    assert.strictEqual(state.activeId, 'step1-tab-sample', 'ArrowLeft from the first tab must wrap around to the last tab');
+    assert.strictEqual(state.sampleSelected, 'true');
+    assert.strictEqual(state.sampleTabIndex, '0');
+    assert.strictEqual(state.namedTabIndex, '-1');
+    assert.notStrictEqual(state.sampleDisplay, 'none');
+    assert.strictEqual(state.namedDisplay, 'none');
+
+    await page.close();
+  });
+
   test('running the wizard a second time works with no page error, and the banner reflects the new choice', async () => {
     const page = await openWelcome();
     const pageErrors = [];
