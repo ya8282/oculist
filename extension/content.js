@@ -165,9 +165,22 @@
   // If the extension context is gone (sendMessage throws) or background.js never answers
   // meaningfully, `next()` still runs — the caller having asked at all is what bounds this
   // to one retry, not the reply's content.
+  // chrome.runtime.sendMessage is always async in real Chrome, but a synchronous mock (as
+  // used against this exact function's own retry callers) invokes its reply callback on
+  // the SAME call stack as the try below. If next() throws from there, the throw is still
+  // on this stack and would otherwise land in the catch, which exists ONLY to handle
+  // sendMessage itself throwing synchronously (e.g. the extension context is gone) — a
+  // throw from next() is not that, and re-running next() from the catch would invoke it
+  // a second time. reachedCallback distinguishes the two: once set, the reply callback
+  // itself already ran, so any exception reaching the catch came from inside next(), not
+  // from sendMessage, and must be rethrown rather than reinterpreted as "sendMessage
+  // failed" — same "let it throw once" principle as loadWorkList's synchronous-path
+  // comment above.
   function retryAfterSessionAccessReady(next) {
+    var reachedCallback = false;
     try {
       chrome.runtime.sendMessage({ action: 'ensureSessionAccess' }, function () {
+        reachedCallback = true;
         // Reading lastError here only marks a missing receiver handled (e.g. background.js
         // torn down); either way, some real time has passed and there is nothing further
         // to wait for, so it is not treated differently from a normal reply.
@@ -175,6 +188,7 @@
         next();
       });
     } catch (err) {
+      if (reachedCallback) throw err;
       next();
     }
   }
@@ -205,9 +219,23 @@
   // call's own allowRetry=false forecloses a further denied+retry branch, so it is
   // itself forced through one of the callback-calling branches. Net: callback fires
   // exactly once across the original attempt, the retry, and every failure path.
+  // The try below exists to catch chrome.storage.session.get() itself throwing
+  // synchronously (an old/broken environment that fails before ever invoking its own
+  // callback) — it must NOT be understood to also cover the result callback passed to
+  // get(). get() is always async in real Chrome, but a synchronous mock invokes that
+  // callback on the SAME call stack as this try, so if the caller's own `callback` throws
+  // from inside it, the throw is still on this stack and would otherwise land in the catch
+  // below, which would mistake it for "our" get() failure and call callback(defaultWorkList())
+  // a second time. reachedResultHandler distinguishes the two: once set, the result
+  // callback already started running, so any exception reaching the catch originated from
+  // inside our own result handling (very likely the caller's callback), and must be
+  // rethrown rather than reinterpreted as a get() failure — same "let it throw once"
+  // principle as loadWorkList's synchronous-path comment above.
   function attemptLoadWorkList(callback, allowRetry) {
+    var reachedResultHandler = false;
     try {
       chrome.storage.session.get(WORK_LIST_KEY, function (data) {
+        reachedResultHandler = true;
         var err = chrome.runtime.lastError;
         if (err) {
           if (isSessionAccessDeniedError(err)) {
@@ -237,6 +265,7 @@
         callback(normalizeWorkList(data[WORK_LIST_KEY]));
       });
     } catch (err) {
+      if (reachedResultHandler) throw err;
       callback(defaultWorkList());
     }
   }
