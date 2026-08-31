@@ -2349,22 +2349,29 @@
     container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
     document.documentElement.appendChild(container);
 
-    // lastSpeedLinesContainerRect: the container's own live getBoundingClientRect(), taken
-    // right after it is placed in the document and never touched again on this element --
-    // its CSS (left/top/width/height/transform) is fixed for the rest of this beacon's life,
-    // so this rect stays correct for the container's entire lifetime on a static page. A
-    // test that needs the container's rendered position should read this instead of
-    // re-querying '.oc-beacon' near completion: this beacon's own container is removed by an
-    // independent wall-clock setTimeout(DUR) that empirically fires no later than, and
-    // usually strictly before, the rAF loop's own final "done" tick (that tick can only run
-    // on the next vsync-aligned callback at-or-after elapsed>=DUR, while the timer fires
-    // right at DUR) -- so a live '.oc-beacon' query taken anywhere near or after completion
-    // is racing that removal and can lose. Capturing here, long before either the completion
-    // tick or the removal timer can fire, sidesteps that race entirely instead of trying to
-    // win it.
+    // lastSpeedLinesContainerRect: the container's own position, taken right after it is
+    // placed in the document and never touched again on this element -- its CSS
+    // (left/top/width/height/transform) is fixed for the rest of this beacon's life, so
+    // this stays correct for the container's entire lifetime. A test that needs the
+    // container's rendered position should read this instead of re-querying '.oc-beacon'
+    // near completion: this beacon's own container is removed by an independent wall-clock
+    // setTimeout(DUR) that empirically fires no later than, and usually strictly before, the
+    // rAF loop's own final "done" tick (that tick can only run on the next vsync-aligned
+    // callback at-or-after elapsed>=DUR, while the timer fires right at DUR) -- so a live
+    // '.oc-beacon' query taken anywhere near or after completion is racing that removal and
+    // can lose. Capturing here, long before either the completion tick or the removal timer
+    // can fire, sidesteps that race entirely instead of trying to win it.
+    //
+    // Stored in DOCUMENT coordinates (viewport rect + the scroll offset at capture time),
+    // not viewport coordinates: getBoundingClientRect() is viewport-relative, and any scroll
+    // between this capture and a later read would shift the viewport-relative numbers by the
+    // scroll delta even though the container's actual document position never moves. A
+    // consumer must convert its own comparison point to document coordinates the same way
+    // (its own live rect + the scroll offset read at that same instant) so both sides stay
+    // in one coordinate space that cannot go stale under scrolling.
     window.__ocTest.lastSpeedLinesContainerRect = (function () {
       var r = container.getBoundingClientRect();
-      return { left: r.left, top: r.top };
+      return { left: r.left + window.scrollX, top: r.top + window.scrollY };
     })();
 
     var canvas = document.createElement('canvas');
