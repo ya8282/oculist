@@ -114,16 +114,39 @@ async function injectAndToggle(tabId) {
 const DEFAULT_DISABLED_SITES = ['github.com'];
 
 // chrome.storage.sync has no transaction or compare-and-swap primitive, so a write
-// from another context (the popup, or a concurrent extension update) can still land
-// in the gap between this get() and this set() — that residual window cannot be
-// closed without a CAS API Chrome doesn't offer. What this DOES buy: every write
-// goes through one fresh get() taken immediately before its own set(), so this file's
-// own multiple write sites never base a write on a snapshot an earlier write (of ours)
-// has already superseded. `mutate` may return `false` to skip the write entirely
-// (e.g. nothing to change) — in that case `done` still fires, but with no set() call.
-function updateSettings(mutate, done) {
+// from another context (the popup, a content script in an already-open tab, or a
+// concurrent extension update) can still land in the gap between this get() and this
+// set() — that residual window cannot be closed without a CAS API Chrome doesn't offer.
+// What this DOES buy, in two layers:
+//   1. Every write goes through one fresh get() taken immediately before its own
+//      set(), so this file's own multiple write sites never base a write on a
+//      snapshot an earlier write (of ours) has already superseded.
+//   2. oculist-b65: immediately before committing, re-read once more and compare it
+//      to the snapshot `mutate` actually ran against. If nothing else wrote in
+//      between, that confirms the plan is still valid and we proceed — the only
+//      window left open is the gap between that confirming get() and the set()
+//      itself, i.e. two back-to-back async calls with no work of ours in between,
+//      rather than the whole of mutate()'s work plus this get()'s original callback
+//      latency. If something DID write in between, we do not clobber it: recompute
+//      `mutate` fresh against whatever it wrote, up to MAX_SETTINGS_WRITE_ATTEMPTS
+//      total attempts, bounded by observed drift, never by elapsed time. This
+//      recovers a genuine concurrent write rather than merely narrowing the odds of
+//      losing it, but it is still not a CAS: a write landing in that last, much
+//      smaller gap — or a concurrent writer that never stops overwriting across every
+//      attempt — is not detected, and this file's own set() still wins if that
+//      happens. `mutate` may return `false` to skip the write entirely (e.g. nothing
+//      to change) — in that case `done` still fires, but with no set() call at all,
+//      and no confirming re-read either.
+const MAX_SETTINGS_WRITE_ATTEMPTS = 3;
+
+function updateSettings(mutate, done, attemptsLeft) {
+  if (attemptsLeft === undefined) attemptsLeft = MAX_SETTINGS_WRITE_ATTEMPTS - 1;
   chrome.storage.sync.get('oc-settings', (data) => {
     const settings = (data && data['oc-settings']) || {};
+    // Snapshot the exact raw shape mutate() is about to run against, before
+    // normalization or mutation touch it in place, so the drift check below compares
+    // like with like.
+    const basedOn = JSON.stringify(settings);
     // Normalize the just-read snapshot before mutate() touches it, so a stale legacy
     // field (e.g. 'visionProfile') this get() happened to catch mid-flight from another
     // surface's write never gets carried into this write-back (oculist-hzr). Runs on
@@ -139,7 +162,20 @@ function updateSettings(mutate, done) {
       if (done) done();
       return;
     }
-    chrome.storage.sync.set({ 'oc-settings': settings }, done);
+    if (attemptsLeft <= 0) {
+      chrome.storage.sync.set({ 'oc-settings': settings }, done);
+      return;
+    }
+    chrome.storage.sync.get('oc-settings', (freshData) => {
+      const freshRaw = (freshData && freshData['oc-settings']) || {};
+      if (JSON.stringify(freshRaw) !== basedOn) {
+        // Something else wrote between our get() and this confirming re-read.
+        // Recompute the mutation against that fresh state instead of clobbering it.
+        updateSettings(mutate, done, attemptsLeft - 1);
+        return;
+      }
+      chrome.storage.sync.set({ 'oc-settings': settings }, done);
+    });
   });
 }
 
