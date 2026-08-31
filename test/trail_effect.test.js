@@ -120,11 +120,16 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     );
   }
 
-  function evalInContentScript(expression) {
-    return client
+  // `target` defaults to the suite-level (client, isolatedContextId) pair for `page`.
+  // Passing an explicit { client, contextId } reaches a *different* tab's isolated
+  // world instead — used for page2's own CDP session in test 2 below.
+  function evalInContentScript(expression, target) {
+    const c = (target && target.client) || client;
+    const ctxId = (target && target.contextId) || isolatedContextId;
+    return c
       .send('Runtime.evaluate', {
         expression,
-        contextId: isolatedContextId,
+        contextId: ctxId,
         awaitPromise: true,
         returnByValue: true,
       })
@@ -181,13 +186,28 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     await waitForSettingsEcho(echoBefore);
   }
 
-  // Clears any leftover .oc-beacon nodes, presses Enter to (re-)fire the active beacon, and
-  // waits for a fresh .oc-beacon container to actually exist. animate() calls
-  // cancelBeacons() first, so this never accumulates parts across calls.
-  async function replay(pg) {
-    await pg.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
-    await pg.keyboard.press('Enter');
-    await pg.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+  // Cancels any in-flight beacon through the real production path
+  // (window.__ocTest.cancelBeacons(), the exact function animate() itself calls first — see
+  // cancelBeacons() in content.js) rather than ripping .oc-beacon nodes out of the DOM by
+  // hand: a manual DOM removal only deletes the elements, it does not touch the live WAAPI
+  // Animation objects hung off them, so a beacon cancelled mid-flight that way keeps
+  // animating (and its .finished handler keeps a reference alive) instead of actually
+  // stopping — the exact class of bug oculist-viv found and fixed the same way in
+  // speed_lines.test.js. Then presses Enter to (re-)fire the active beacon and waits for the
+  // .oc-trail-arrow arrowhead specifically — the element every caller of replay() actually
+  // asserts on — rather than the broader .oc-beacon class every part of this effect (the
+  // trailing line, the arrowhead, the absorption flash) shares; waiting on the shared class
+  // only proves *some* part mounted, not the one under test (oculist-8s5).
+  //
+  // Bound to `page` specifically, not a generic pg argument: it drives Enter through
+  // page.keyboard and cancels through the suite-level client/isolatedContextId pair that
+  // only reaches page's own isolated world. Every call site already only ever passes
+  // `page` — an unused pg parameter that silently ignored anything else would be a trap for
+  // whoever eventually calls this against page2's own CDP session instead.
+  async function replay() {
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.oc-trail-arrow', { timeout: POLL_TIMEOUT });
   }
 
   // Pulls out the L-shaped path's start/elbow/end points from the .oc-trail-arrow arrow's
@@ -243,7 +263,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     });
     await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
 
-    await replay(page);
+    await replay();
     const geom = await readTrailGeometry(page);
     assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
 
@@ -275,14 +295,57 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('with no mouse movement anywhere on the page, the path still starts at the find bar, not 0,0', async () => {
-    // A brand-new tab of the same persistent context: chrome.storage.sync's 'trail'
-    // effect selection (set in before()) is already shared, but this tab's content script
-    // instance has never received a single mousemove event, so lastMouseX/lastMouseY are
-    // genuinely null — the exact scenario a keyboard-only Ctrl+F, Enter user produces.
+    // A brand-new tab of the same persistent context. What matters here is that this tab's
+    // content script instance has never received a single mousemove event, so
+    // lastMouseX/lastMouseY are genuinely null — the exact scenario a keyboard-only
+    // Ctrl+F, Enter user produces. Note the effect selection is NOT reliably inherited from
+    // before()'s write; see the block below on why it is forced explicitly instead.
     const page2 = await ctx.newPage();
+
+    // Same reasoning as before()'s own CDP attachment for `page`: attach before
+    // navigating so the isolated-world execution-context-created event for *this* tab's
+    // content script instance is never missed.
+    const client2 = await ctx.newCDPSession(page2);
+    await client2.send('Page.enable');
+    await client2.send('Runtime.enable');
+    let isolatedContextId2;
+    client2.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId2 = c.id;
+      }
+    });
+
     try {
       await page2.goto(origin);
+      await waitForCondition(() => isolatedContextId2, Boolean, {
+        timeout: POLL_TIMEOUT,
+        message: 'never observed the content script isolated execution context for the fresh tab',
+      });
       await openFinder(page2);
+
+      // oculist-8s5: measured directly (reading chrome.storage.sync from page2's own
+      // isolated world at the instant of failure), the persisted 'oc-settings' object has no
+      // 'effect' key at all on a fresh profile: { disabledSites: [...], seededDefaultBlocklist:
+      // true } — 'trail' isn't stale, it was erased. The cause is a first-install lost update
+      // in background.js's own updateSettings() (get -> mutate -> set, no compare-and-swap,
+      // see oculist-b65): its default-blocklist seeding does a get() that snapshots the
+      // still-empty {} written before before()'s 'trail' write lands, then a set() that
+      // persists that snapshot (plus the seed mutation) back over the top, wiping 'effect'
+      // out from under it. A brand-new tab's content script then boots, finds no 'effect' key
+      // to apply, and keeps its in-memory default of 'hud' — so animate() dispatches to
+      // animateAnimeLaser (effectsRegistry.hud), not animateTrail, and .oc-trail-arrow is
+      // never created for this Enter press at all. That is also why the .oc-beacon ->
+      // .oc-trail-arrow wait tightening below is necessary but not sufficient on its own: with
+      // effect stuck at 'hud', the arrow would simply never mount and the tightened wait would
+      // time out instead of racing. window.__ocTest.setEffectKey() (already exposed for
+      // exactly this "exercise animate()'s own fallback" scenario, see content.js) is the
+      // load-bearing part of this fix — it sets settings.effect directly and synchronously in
+      // this tab's content script, bypassing chrome.storage.sync entirely, so the erasure in
+      // background.js (real product bug, filed as oculist-b65, out of scope for this test fix)
+      // can't reach it.
+      await evalInContentScript("window.__ocTest.setEffectKey('trail')", { client: client2, contextId: isolatedContextId2 });
+
       await page2.locator(INPUT).type('quarklet', { delay: 30 });
       await waitForMatchCount(page2);
 
@@ -295,9 +358,13 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       });
       await page2.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
 
-      await page2.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+      // Production cancellation path, not manual DOM removal — see replay()'s own comment
+      // above for why (oculist-viv's speed_lines finding applies here too). Waits on
+      // .oc-trail-arrow itself, the exact element the assertion below reads, rather than the
+      // broader .oc-beacon class every part of this effect shares (oculist-8s5).
+      await evalInContentScript('window.__ocTest.cancelBeacons()', { client: client2, contextId: isolatedContextId2 });
       await page2.keyboard.press('Enter');
-      await page2.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+      await page2.waitForSelector('.oc-trail-arrow', { timeout: POLL_TIMEOUT });
 
       const geom = await page2.evaluate(() => {
         const arrow = document.querySelector('.oc-trail-arrow');
@@ -339,7 +406,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('every .oc-beacon element is removed once the effect finishes (no leak)', async () => {
-    await replay(page);
+    await replay();
     assert.ok(
       (await page.locator('.oc-beacon').count()) > 0,
       'sanity check: the beacon must actually render before checking it is cleaned up'
@@ -348,13 +415,13 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('Lite Mode drops the trailing line, keeping only the arrowhead', async () => {
-    await replay(page);
+    await replay();
     assert.strictEqual(await page.locator('svg.oc-beacon').count(), 1, 'full mode must render the trailing line');
     assert.strictEqual(await page.locator('.oc-trail-arrow').count(), 1, 'full mode must render the arrowhead');
 
     try {
       await setSettings({ performanceMode: true });
-      await replay(page);
+      await replay();
       assert.strictEqual(
         await page.locator('svg.oc-beacon').count(),
         0,
@@ -402,7 +469,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       message: 'page never actually scrolled before the flash-geometry assertion',
     });
 
-    await replay(page);
+    await replay();
     await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
     const geom = await page.evaluate(() => {
@@ -444,7 +511,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('the absorption flash cannot fire early: its delay equals the travel duration', async () => {
-    await replay(page);
+    await replay();
     await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
     const timings = await page.evaluate(() => {
@@ -466,7 +533,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('the absorption flash runs exactly one iteration (WCAG 2.3.1 guard)', async () => {
-    await replay(page);
+    await replay();
     await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
     const iterations = await page.evaluate(() => {
@@ -480,7 +547,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   test('Lite Mode still produces the absorption flash', async () => {
     try {
       await setSettings({ performanceMode: true });
-      await replay(page);
+      await replay();
       await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
       assert.strictEqual(
         await page.locator(FLASH).count(),
@@ -493,7 +560,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('the absorption flash element is removed once its animation finishes (no leak)', async () => {
-    await replay(page);
+    await replay();
     await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   });
