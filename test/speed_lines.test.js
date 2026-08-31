@@ -532,6 +532,137 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: LONG_TIMEOUT });
   });
 
+  // oculist-47e: animateSpeedLines' early-return guard (rect missing or zero-sized) used to
+  // sit BEFORE every __ocTest hook was touched, so a skipped run left all ten hooks holding
+  // whatever the previous real run had last written. A test polling speedLinesDone === true
+  // would then resolve immediately off that stale prior-run flag and grade every other hook
+  // against the same stale run, never surfacing that the current run never fired at all --
+  // the same class of bug oculist-viv found for lastSpeedLinesContainerRect alone. This runs
+  // a real beacon first (so every hook holds genuine, non-default data), captures that
+  // state, then drives the guard through the extension's own normal call path -- no
+  // synthetic rect, no test-only export of the effect renderer itself. Six of the ten hooks
+  // (lastSpeedLinesContainerRect/lastSpeedLinesLaneBounds/lastSpeedLinesAnchor/
+  // lastSpeedLinesHighlightY reset to null, speedLinesDone to false, and
+  // lastSpeedLinesStreakCount to 0 -- never legitimately 0, since a real run assigns it
+  // 20 or 74 synchronously before it could be observed) are unambiguous "this
+  // run produced nothing" sentinels a real run never writes back into at setup. The
+  // remaining four (speedLinesFrameCount/lastSpeedLinesLaneAlphaMax/
+  // lastSpeedLinesElseAlphaMax/speedLinesHighlightDrawCount) reset to 0, which a REAL run
+  // also holds momentarily at its own setup before its first frame -- 0 alone cannot
+  // distinguish "skipped" from "started, first frame not drawn yet", so those four are safe
+  // to read only because speedLinesDone gates every consumer (asserted last, below).
+  test('a skipped run (zero-size rect) resets every hook instead of leaving the previous run\'s data', async () => {
+    await replay();
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesDone', (v) => v === true, {
+      timeout: LONG_TIMEOUT,
+      message: 'speed lines beacon never reached its final frame',
+    });
+
+    const readHooks = `
+      ({
+        containerRect: window.__ocTest.lastSpeedLinesContainerRect,
+        streakCount: window.__ocTest.lastSpeedLinesStreakCount,
+        frameCount: window.__ocTest.speedLinesFrameCount,
+        laneAlphaMax: window.__ocTest.lastSpeedLinesLaneAlphaMax,
+        elseAlphaMax: window.__ocTest.lastSpeedLinesElseAlphaMax,
+        laneBounds: window.__ocTest.lastSpeedLinesLaneBounds,
+        anchor: window.__ocTest.lastSpeedLinesAnchor,
+        highlightY: window.__ocTest.lastSpeedLinesHighlightY,
+        highlightDrawCount: window.__ocTest.speedLinesHighlightDrawCount,
+        done: window.__ocTest.speedLinesDone
+      })
+    `;
+
+    const before = await evalInContentScript(readHooks);
+
+    // Sanity check: the real run above must have actually left every hook holding real
+    // data -- otherwise the assertions below could pass vacuously against an
+    // already-default value instead of proving the guard resets anything.
+    assert.ok(before.containerRect, 'sanity check: expected a real container rect from the prior run');
+    assert.ok(before.streakCount > 0, 'sanity check: expected a nonzero streak count from the prior run');
+    assert.ok(before.frameCount > 0, 'sanity check: expected a nonzero frame count from the prior run');
+    assert.ok(before.laneAlphaMax > 0, 'sanity check: expected a nonzero lane alpha max from the prior run');
+    assert.ok(before.elseAlphaMax > 0, 'sanity check: expected a nonzero else alpha max from the prior run');
+    assert.ok(before.laneBounds, 'sanity check: expected lane bounds from the prior run');
+    assert.ok(before.anchor, 'sanity check: expected an anchor from the prior run');
+    assert.strictEqual(typeof before.highlightY, 'number', 'sanity check: expected a numeric highlightY from the prior run');
+    assert.ok(before.highlightDrawCount > 0, 'sanity check: expected a nonzero highlight draw count from the prior run');
+    assert.strictEqual(before.done, true, 'sanity check: expected the prior run to have completed');
+
+    // Drive the SAME early-return guard through the extension's real, normal call path
+    // instead of a synthetic rect or an exported test-only closure. Make the already-active
+    // match's own element genuinely zero-sized -- font-size:0 is verified (in real
+    // Chromium) to yield a getBoundingClientRect of {width:0, height:0} while the element
+    // stays display:inline/visibility:visible, so it remains indexed and remains the active
+    // match; no chip/term change is needed. Then re-fire that SAME active match exactly the
+    // way replay() above does (cancelBeacons() + Enter): findNext() ->
+    // highlightActiveRange(true) -> animate(freshRect) in content.js reaches this guard
+    // with a rect read fresh off the real DOM at fire time, not a manufactured one.
+    await page.evaluate(() => { document.querySelector('#target').style.fontSize = '0'; });
+    try {
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.keyboard.press('Enter');
+
+      // No '.oc-beacon' will ever appear -- the guard returns before the container is
+      // created -- so this cannot reuse replay()'s own waitForSelector('.oc-beacon'). Poll
+      // speedLinesFrameCount specifically instead: it can only go from the prior run's
+      // nonzero value back to 0 by this reset running, since no real run is possible once
+      // the element is zero-sized.
+      const after = await waitForContentScriptValue(evalInContentScript, readHooks, (v) => v.frameCount === 0, {
+        timeout: POLL_TIMEOUT,
+        message: 'the zero-size-match run never reset speedLinesFrameCount',
+      });
+
+      assert.strictEqual(
+        after.containerRect,
+        null,
+        `expected a skipped run to null out lastSpeedLinesContainerRect instead of leaving the prior run's ${JSON.stringify(before.containerRect)}`
+      );
+      assert.strictEqual(
+        after.streakCount,
+        0,
+        `expected a skipped run to zero lastSpeedLinesStreakCount instead of leaving the prior run's ${before.streakCount}`
+      );
+      assert.strictEqual(
+        after.frameCount,
+        0,
+        `expected a skipped run to zero speedLinesFrameCount instead of leaving the prior run's ${before.frameCount}`
+      );
+      assert.strictEqual(after.laneAlphaMax, 0, 'expected a skipped run to zero lastSpeedLinesLaneAlphaMax');
+      assert.strictEqual(after.elseAlphaMax, 0, 'expected a skipped run to zero lastSpeedLinesElseAlphaMax');
+      assert.strictEqual(
+        after.laneBounds,
+        null,
+        `expected a skipped run to null out lastSpeedLinesLaneBounds instead of leaving the prior run's ${JSON.stringify(before.laneBounds)}`
+      );
+      assert.strictEqual(
+        after.anchor,
+        null,
+        `expected a skipped run to null out lastSpeedLinesAnchor instead of leaving the prior run's ${JSON.stringify(before.anchor)}`
+      );
+      assert.strictEqual(
+        after.highlightY,
+        null,
+        `expected a skipped run to null out lastSpeedLinesHighlightY instead of leaving the prior run's ${before.highlightY}`
+      );
+      assert.strictEqual(
+        after.highlightDrawCount,
+        0,
+        `expected a skipped run to zero speedLinesHighlightDrawCount instead of leaving the prior run's ${before.highlightDrawCount}`
+      );
+      // The load-bearing assertion: a test that polls speedLinesDone === true to detect
+      // completion must NOT be satisfied by a skipped run. Leaving this false means such a
+      // wait times out loudly instead of resolving off the prior run's stale true.
+      assert.strictEqual(
+        after.done,
+        false,
+        "expected a skipped run to leave speedLinesDone false rather than reporting the prior run's stale completion"
+      );
+    } finally {
+      await page.evaluate(() => { document.querySelector('#target').style.fontSize = ''; });
+    }
+  });
+
   // Deliberately last: Escape closes the finder for the rest of the suite (__ocDestroy()
   // calls cancelBeacons()), so no later test can reopen it within this shared session.
   test('cancelBeacons() stops the rAF loop mid-flight (proves container.__rafId is wired)', async () => {
