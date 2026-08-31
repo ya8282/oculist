@@ -24,7 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -119,6 +119,17 @@ describe('OS-level media query flips refresh the injected CSS with no other user
     });
   }
 
+  // Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+  // confirmed against this Playwright version that a promise-returning predicate resolves
+  // immediately on the (truthy) Promise object rather than being awaited (see
+  // test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+  // trip from Node on every poll tick instead.
+  function readStoredSettings(target) {
+    return target.evaluate(
+      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+    );
+  }
+
   test('an OS colour-scheme flip updates the injected dialog CSS with no click or reload afterward', async () => {
     page = await ctx.newPage();
     await page.goto(origin);
@@ -205,19 +216,10 @@ describe('OS-level media query flips refresh the injected CSS with no other user
       el.value = '#ffffff';
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await popup.waitForFunction(
-      () =>
-        chrome.storage.sync.get('oc-settings').then((d) => {
-          const s = d['oc-settings'];
-          return !!(
-            s &&
-            s.visionSettings &&
-            s.visionSettings.customColors &&
-            s.visionSettings.customColors.matchColor === '#ffffff'
-          );
-        }),
-      null,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      (s) => !!(s && s.visionSettings && s.visionSettings.customColors && s.visionSettings.customColors.matchColor === '#ffffff'),
+      { timeout: POLL_TIMEOUT, message: "oc-settings.visionSettings.customColors.matchColor never became '#ffffff'" }
     );
     await popup.close();
     await page.bringToFront();

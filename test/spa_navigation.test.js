@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -34,6 +34,17 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
 const INPUT = '#oc-wrap >> .oc-input';
 const COUNT = '#oc-wrap >> .oc-count';
+
+// Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
+// confirmed against this Playwright version that a promise-returning predicate resolves
+// immediately on the (truthy) Promise object rather than being awaited (see
+// test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
+// trip from Node on every poll tick instead.
+function readStoredSettings(target) {
+  return target.evaluate(
+    () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
+  );
+}
 
 describe('Finder survives SPA navigation that swaps the body', () => {
   let server, ctx, page;
@@ -144,15 +155,12 @@ describe('Finder survives SPA navigation that swaps the body', () => {
     await popup.selectOption('#vision-profile', 'color-blind-deuteranopia');
     // Wait for the write to actually land before tearing the popup page down, instead of
     // guessing how long the async chrome.storage.sync.set() call takes.
-    await popup.waitForFunction(
-      () =>
-        chrome.storage.sync
-          .get('oc-settings')
-          // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
-          // translation of the 'color-blind-deuteranopia' dropdown option ('rg-adjust-deut').
-          .then((d) => !!(d['oc-settings'] && d['oc-settings'].displayPreset === 'rg-adjust-deut')),
-      null,
-      { timeout: POLL_TIMEOUT }
+    await waitForCondition(
+      () => readStoredSettings(popup),
+      // oculist-rnr.12: persisted field is 'displayPreset', holding the functional
+      // translation of the 'color-blind-deuteranopia' dropdown option ('rg-adjust-deut').
+      (stored) => !!(stored && stored.displayPreset === 'rg-adjust-deut'),
+      { timeout: POLL_TIMEOUT, message: "oc-settings.displayPreset never became 'rg-adjust-deut'" }
     );
     await popup.close();
     await page.bringToFront();
