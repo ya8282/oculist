@@ -28,6 +28,12 @@
   // Frozen (oculist-rnr.22): this table is exported and aliased by reference elsewhere
   // (popup.js's LEGACY_TO_FUNCTIONAL_PRESET) — freezing keeps any future write through an
   // alias from silently corrupting the canonical copy that content.js also reads.
+  // Object.freeze() is shallow — this is sufficient today because every value here is a
+  // string (freezing already blocks reassigning any key), but it stops protecting the
+  // instant a value here ever becomes an object of its own (a nested write wouldn't be
+  // caught). Not deep-frozen pre-emptively (oculist-rnr.24): there is no such value today,
+  // and a deep-freeze helper for a hazard that doesn't exist yet is speculative machinery.
+  // Revisit if a value here ever stops being a plain string.
   var LEGACY_DISPLAY_PRESET_MAP = Object.freeze({
     'low-vision': 'high-contrast',
     'color-blind-deuteranopia': 'rg-adjust-deut',

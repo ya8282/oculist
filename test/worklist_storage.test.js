@@ -903,5 +903,57 @@ describe('Working-list session storage (oc-worklist)', () => {
         'a normal read/write must never send the ensureSessionAccess ready-ping'
       );
     });
+
+    test('(e) a synchronous get() callback whose caller callback throws still calls back exactly once (oculist-idd)', async () => {
+      // Real chrome.storage.session.get() is always async, so attemptLoadWorkList's try
+      // around it never sees the caller's own callback throw on the same stack. But this
+      // mock invokes its callback SYNCHRONOUSLY (the same shape tests (a)/(c) above use for
+      // the denial case), which puts a throw from the caller's callback on the same call
+      // stack as attemptLoadWorkList's try. Before oculist-idd, that try's catch treated the
+      // throw as "our" get() failure and called callback(defaultWorkList()) a second time —
+      // this asserts exactly one invocation, and that the throw still propagates once
+      // rather than being swallowed by a second call.
+      await closeOverlay();
+
+      const outcome = await evalInContentScript(
+        '(' +
+          function () {
+            return new Promise((resolve) => {
+              var origGet = chrome.storage.session.get.bind(chrome.storage.session);
+              chrome.storage.session.get = function (key, cb) {
+                // No stored value, but delivered synchronously.
+                cb({});
+              };
+              var callbackCalls = 0;
+              var thrownMessage = null;
+              try {
+                window.__ocTest.loadWorkList(function () {
+                  callbackCalls++;
+                  throw new Error('oculist-idd-caller-callback-threw');
+                });
+              } catch (err) {
+                thrownMessage = err && err.message;
+              } finally {
+                chrome.storage.session.get = origGet;
+              }
+              resolve({ callbackCalls: callbackCalls, thrownMessage: thrownMessage });
+            });
+          }.toString() +
+          ')()'
+      );
+
+      assert.strictEqual(
+        outcome.callbackCalls,
+        1,
+        'loadWorkList must invoke its callback exactly once, even when that callback throws ' +
+          'synchronously from inside a synchronous get() completion'
+      );
+      assert.strictEqual(
+        outcome.thrownMessage,
+        'oculist-idd-caller-callback-threw',
+        'the caller callback\'s own throw must propagate once, not be swallowed by a second ' +
+          'default-list callback invocation'
+      );
+    });
   });
 });
