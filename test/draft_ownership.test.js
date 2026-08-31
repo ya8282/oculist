@@ -23,6 +23,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -205,17 +206,6 @@ describe('Draft input vs. active chip ownership', () => {
       const el = root.querySelector('.oc-chip-term.active');
       return el ? el.textContent : null;
     });
-  }
-
-  // Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
-  // confirmed against this Playwright version that a promise-returning predicate resolves
-  // immediately on the (truthy) Promise object rather than being awaited (see
-  // test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
-  // trip from Node on every poll tick instead.
-  function readStoredSettings(target) {
-    return target.evaluate(
-      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-    );
   }
 
   function rangeTexts(registryName) {

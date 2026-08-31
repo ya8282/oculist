@@ -173,12 +173,31 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     await waitForSettingsEcho(echoBefore);
   }
 
-  // Clears any leftover .oc-beacon nodes, presses Enter to (re-)fire the active beacon
+  // Cancels any still-running previous beacon through the extension's own cancellation
+  // path (window.__ocTest.cancelBeacons(), the exact function animate() itself calls first —
+  // see cancelBeacons() in content.js), then presses Enter to (re-)fire the active beacon
   // (goToNext()/replay path — the only match on the page, so every Enter re-fires the same
-  // active match), and waits for a fresh .oc-beacon container to actually exist. animate()
-  // calls cancelBeacons() first, so this never accumulates parts across calls.
+  // active match), and waits for a fresh .oc-beacon container to actually exist.
+  //
+  // This used to rip the previous run's .oc-beacon nodes out of the DOM directly
+  // (document.querySelectorAll('.oc-beacon').forEach(el => el.remove())) instead of going
+  // through cancelBeacons(). cancelBeacons() finds its targets via querySelectorAll('.oc-
+  // beacon') too, so once the test had already removed those nodes itself, animate()'s own
+  // cancelBeacons() call (content.js's very first statement on every replay) found nothing
+  // left to cancel — the previous run's rAF loop (hung off the now-detached container's own
+  // __rafId) kept ticking forever against a node no longer in the document. That orphaned
+  // loop would eventually reach its own final frame and flip window.__ocTest.speedLinesDone
+  // to true — potentially AFTER the new run had already reset that same flag to false at its
+  // own start — so a later wait for speedLinesDone could observe the stale previous run's
+  // completion instead of the current run's, and read state while the current run was still
+  // mid-flight (oculist-viv). Routing through the real cancelBeacons() here instead means the
+  // previous run's nodes are still present in the DOM at the moment it runs (this always
+  // fires before the new Enter press, not after), so it genuinely cancels the outstanding
+  // rAF/WAAPI work and removes the nodes itself, exactly as a second real search would.
+  // Calling it here even when nothing is left to cancel is harmless: cancelBeacons() itself
+  // simply finds zero .oc-beacon nodes and no-ops.
   async function replay() {
-    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.keyboard.press('Enter');
     await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
   }
@@ -341,34 +360,35 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
         timeout: LONG_TIMEOUT,
         message: 'speed lines beacon never reached its final frame in Lite Mode',
       });
-      // The demonstrated flake here is the bead's own "7 !== 5": frames and draws read as
-      // two SEPARATE round trips off a live, still-running rAF loop, so a frame could land
-      // in between them and manufacture a false mismatch — the exact race
-      // readFrameAndDrawCounts() below already closes for its own early/late samples in
-      // the persistence test above.
-      // Reading frames/draws/highlightY/independent-anchor together in one atomic
-      // evaluation, right when 'done' is observed, eliminates that race structurally: no
-      // round trip can land between the two counters any more, so they can never disagree
-      // on a still-running effect. It also NARROWS, but does not eliminate, a second,
-      // separate risk: .oc-beacon is removed by an independent wall-clock setTimeout in
-      // content.js, and the previous four-round-trip version left a wider real-time gap in
-      // which that teardown could in principle beat this read. Measuring the actual gap at
-      // fault time (elapsed/DUR encoded into a probe run here) put this read mid-flight —
-      // elapsed ~354ms of a 760ms DUR, i.e. teardown roughly 400ms out — and a deliberate
-      // teardown-timing probe at DUR*0.2 still passed; independent anchor reads are still a
-      // live getBoundingClientRect() on the real #target/.oc-beacon elements, not
-      // effect-internal state, same as elementCenterInContainer's own math, just taken
-      // through this already-open isolated-world channel instead of a fourth, slower
-      // round trip via Playwright's own page.evaluate().
+      // Two races were stacked here (oculist-viv). First: frames and draws read as two
+      // SEPARATE round trips off a live, still-running rAF loop, so a frame could land in
+      // between them and manufacture a false mismatch — closed by reading
+      // frames/draws/highlightY/independent-anchor together in one atomic evaluation, right
+      // when 'done' is observed, the same way readFrameAndDrawCounts() already does for its
+      // own early/late samples in the persistence test above.
+      //
+      // Second, and the one that actually mattered once replay() genuinely cancelled the
+      // previous run (see replay() above): '.oc-beacon' is removed by an independent
+      // wall-clock setTimeout(DUR) in content.js. Measuring the actual firing order showed
+      // that timer reliably wins the race against the rAF loop's own final "done" tick — that
+      // tick can only run on the next vsync-aligned callback at-or-after elapsed>=DUR, while
+      // the timer fires right at DUR — so even capturing a rect at the exact moment
+      // speedLinesDone flips true was already too late; the container was already gone. The
+      // container's CSS position never changes after it's created (position:absolute, fixed
+      // left/top/transform for its whole life), so content.js now captures its rect once,
+      // right after it's appended to the document (see lastSpeedLinesContainerRect in
+      // content.js) — long before either the completion tick or the removal timer can
+      // possibly fire, not at the finish line where the race was already lost. Reading that
+      // captured rect here instead of re-querying '.oc-beacon' removes the race structurally.
+      // '#target' itself is never touched by content.js and is safe to query live at any time.
       const result = await evalInContentScript(`
         (function () {
           var el = document.querySelector('#target');
-          var container = document.querySelector('.oc-beacon');
+          var containerRect = window.__ocTest.lastSpeedLinesContainerRect;
           var independent = null;
-          if (el && container) {
+          if (el && containerRect) {
             var r = el.getBoundingClientRect();
-            var c = container.getBoundingClientRect();
-            independent = { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+            independent = { x: r.left + r.width / 2 - containerRect.left, y: r.top + r.height / 2 - containerRect.top };
           }
           return {
             frames: window.__ocTest.speedLinesFrameCount,

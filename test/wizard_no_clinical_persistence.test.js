@@ -17,6 +17,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName } = require('./helpers/accessible_name');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -51,12 +52,6 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     await page.click('#start-wizard');
     await page.waitForSelector('#step-1.active');
     return page;
-  }
-
-  function readStoredSettings(page) {
-    return page.evaluate(
-      () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-    );
   }
 
   // Deadline-bounded poll (test/helpers/wait.js) for the async chrome.storage.sync.set()

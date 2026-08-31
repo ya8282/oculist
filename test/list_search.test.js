@@ -16,6 +16,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName } = require('./helpers/accessible_name');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -44,17 +45,6 @@ const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
 const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
 const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
 const COUNT = '#oc-wrap >> .oc-count';
-
-// Deliberately NOT page.waitForFunction(() => chrome.storage.sync.get(...).then(...)) —
-// confirmed against this Playwright version that a promise-returning predicate resolves
-// immediately on the (truthy) Promise object rather than being awaited (see
-// test/wizard_no_clinical_persistence.test.js). This awaits a real page.evaluate() round
-// trip from Node on every poll tick instead.
-function readStoredSettings(target) {
-  return target.evaluate(
-    () => new Promise((resolve) => chrome.storage.sync.get('oc-settings', (d) => resolve(d['oc-settings'])))
-  );
-}
 
 describe('performListSearch() and per-term chip counts', () => {
   let server, ctx, page, client, isolatedContextId, extId;

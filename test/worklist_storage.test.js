@@ -644,4 +644,264 @@ describe('Working-list session storage (oc-worklist)', () => {
       );
     });
   });
+
+  // oculist-ex1: chrome.storage.session is DEFINED but DENIED to a content script until
+  // background.js's own setAccessLevel() call lands — a race the before() hook above
+  // already waits out so every test above it never hits. These tests below reproduce the
+  // denial deterministically instead of waiting on real (rare, ~2/15) timing: each one
+  // monkeypatches chrome.storage.session.get/set *inside the content script's own isolated
+  // world* to fabricate exactly the failure real Chrome produces during the race —
+  // chrome.runtime.lastError set to "Access to storage is not allowed from this context."
+  // for the duration of one synchronous callback invocation, mirroring how Chrome itself
+  // exposes lastError only around the callback it is attached to. Every monkeypatch
+  // restores the original function itself (in a finally/at the point it decides no more
+  // interception is needed), so no test here leaves the isolated world's chrome.storage.*
+  // permanently altered for tests that run after it.
+  describe('storage.session access-level denial retry (oculist-ex1)', () => {
+    const DENIED_MESSAGE = 'Access to storage is not allowed from this context.';
+
+    async function setStoredWorkList(list) {
+      await evalInContentScript(
+        `new Promise((resolve, reject) => {
+          chrome.storage.session.set({ 'oc-worklist': ${JSON.stringify(list)} }, function () {
+            var deadline = Date.now() + ${LONG_TIMEOUT};
+            (function poll() {
+              chrome.storage.session.get('oc-worklist', function (data) {
+                var stored = data && data['oc-worklist'];
+                if (stored && stored.terms && stored.terms.length === ${list.terms.length}) {
+                  resolve(true);
+                  return;
+                }
+                if (Date.now() > deadline) { reject(new Error('storage write never landed')); return; }
+                setTimeout(poll, 30);
+              });
+            })();
+          });
+        })`
+      );
+    }
+
+    test('(a) a read denied by an unsettled access-level grant retries once and returns the STORED list, not the default', async () => {
+      await closeOverlay();
+      const saved = { terms: ['retry-alpha', 'retry-beta'], activeIndex: 0 };
+      await setStoredWorkList(saved);
+
+      const outcome = await evalInContentScript(
+        '(' +
+          function (deniedMessage, deadlineMs) {
+            return new Promise((resolve, reject) => {
+              var origGet = chrome.storage.session.get.bind(chrome.storage.session);
+              var origSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+              var getCalls = 0;
+              var ensureCalls = 0;
+              // Stay installed for the whole test (so the counter also sees the retry's
+              // own get() call) — only the FIRST call fabricates the denial; every call
+              // after that forwards to the real get().
+              chrome.storage.session.get = function (key, cb) {
+                getCalls++;
+                if (getCalls === 1 && key === 'oc-worklist') {
+                  chrome.runtime.lastError = { message: deniedMessage };
+                  try { cb(); } finally { delete chrome.runtime.lastError; }
+                  return;
+                }
+                return origGet(key, cb);
+              };
+              chrome.runtime.sendMessage = function (msg, cb) {
+                if (msg && msg.action === 'ensureSessionAccess') ensureCalls++;
+                return origSendMessage(msg, cb);
+              };
+              var settled = false;
+              var deadline = Date.now() + deadlineMs;
+              var watchdog = setInterval(function () {
+                if (settled) { clearInterval(watchdog); return; }
+                if (Date.now() > deadline) {
+                  clearInterval(watchdog);
+                  chrome.storage.session.get = origGet;
+                  chrome.runtime.sendMessage = origSendMessage;
+                  reject(new Error('loadWorkList never called back'));
+                }
+              }, 30);
+              var callbackCalls = 0;
+              window.__ocTest.loadWorkList(function (list) {
+                callbackCalls++;
+                settled = true;
+                chrome.storage.session.get = origGet;
+                chrome.runtime.sendMessage = origSendMessage;
+                resolve({ list: list, getCalls: getCalls, ensureCalls: ensureCalls, callbackCalls: callbackCalls });
+              });
+            });
+          }.toString() +
+          `)(${JSON.stringify(DENIED_MESSAGE)}, ${LONG_TIMEOUT})`
+      );
+
+      assert.deepStrictEqual(
+        outcome.list,
+        saved,
+        'a denied-then-retried read must return the stored list, not the default'
+      );
+      assert.strictEqual(outcome.getCalls, 2, 'exactly one retry: two total storage.session.get calls');
+      assert.strictEqual(outcome.ensureCalls, 1, 'the retry must be gated on the background ready-ping, exactly once');
+      assert.strictEqual(outcome.callbackCalls, 1, 'loadWorkList must invoke its callback exactly once');
+    });
+
+    test('(b) a write denied by an unsettled access-level grant retries once and lands', async () => {
+      await closeOverlay();
+      await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
+      const list = { terms: ['write-retry-alpha', 'write-retry-beta'], activeIndex: 1 };
+
+      const outcome = await evalInContentScript(
+        '(' +
+          function (deniedMessage, listArg, settleMs) {
+            return new Promise((resolve) => {
+              var origSet = chrome.storage.session.set.bind(chrome.storage.session);
+              var origSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+              var setCalls = 0;
+              var ensureCalls = 0;
+              chrome.storage.session.set = function (obj, cb) {
+                setCalls++;
+                if (setCalls === 1) {
+                  chrome.runtime.lastError = { message: deniedMessage };
+                  try { if (cb) cb(); } finally { delete chrome.runtime.lastError; }
+                  return Promise.resolve();
+                }
+                return origSet(obj, cb);
+              };
+              chrome.runtime.sendMessage = function (msg, cb) {
+                if (msg && msg.action === 'ensureSessionAccess') ensureCalls++;
+                return origSendMessage(msg, cb);
+              };
+              window.__ocTest.saveWorkList(listArg);
+              setTimeout(function () {
+                chrome.storage.session.set = origSet;
+                chrome.runtime.sendMessage = origSendMessage;
+                resolve({ setCalls: setCalls, ensureCalls: ensureCalls });
+              }, settleMs);
+            });
+          }.toString() +
+          `)(${JSON.stringify(DENIED_MESSAGE)}, ${JSON.stringify(list)}, 500)`
+      );
+
+      assert.strictEqual(outcome.setCalls, 2, 'exactly one retry: two total storage.session.set calls');
+      assert.strictEqual(outcome.ensureCalls, 1, 'the retry must be gated on the background ready-ping');
+
+      // Confirm the retried write genuinely landed in chrome.storage.session, not just that
+      // set() was called twice.
+      const stored = await evalInContentScript(
+        `new Promise((resolve, reject) => {
+          var deadline = Date.now() + ${LONG_TIMEOUT};
+          (function poll() {
+            chrome.storage.session.get('oc-worklist', function (data) {
+              var stored = data && data['oc-worklist'];
+              if (stored && stored.terms && stored.terms.length === 2) { resolve(stored); return; }
+              if (Date.now() > deadline) { reject(new Error('retried write never landed')); return; }
+              setTimeout(poll, 30);
+            });
+          })();
+        })`
+      );
+      assert.deepStrictEqual(stored, list);
+    });
+
+    test('(c) a permanently denied read degrades to the default and calls back exactly once, without looping', async () => {
+      await closeOverlay();
+      const saved = { terms: ['must-not-appear'], activeIndex: 0 };
+      await setStoredWorkList(saved);
+
+      const outcome = await evalInContentScript(
+        '(' +
+          function (deniedMessage, settleMs) {
+            return new Promise((resolve) => {
+              var origGet = chrome.storage.session.get.bind(chrome.storage.session);
+              var origSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+              var getCalls = 0;
+              var ensureCalls = 0;
+              var callbackCalls = 0;
+              // Never restore: every get('oc-worklist') call is denied, simulating a
+              // permanent denial (old Chrome without setAccessLevel, or a policy that
+              // always refuses).
+              chrome.storage.session.get = function (key, cb) {
+                getCalls++;
+                chrome.runtime.lastError = { message: deniedMessage };
+                try { cb(); } finally { delete chrome.runtime.lastError; }
+              };
+              chrome.runtime.sendMessage = function (msg, cb) {
+                if (msg && msg.action === 'ensureSessionAccess') ensureCalls++;
+                return origSendMessage(msg, cb);
+              };
+              window.__ocTest.loadWorkList(function (list) {
+                callbackCalls++;
+                // Wait past the bounded retry window to prove there is no second retry / no
+                // unbounded loop, then restore and report the final snapshot.
+                setTimeout(function () {
+                  chrome.storage.session.get = origGet;
+                  chrome.runtime.sendMessage = origSendMessage;
+                  resolve({ list: list, getCalls: getCalls, ensureCalls: ensureCalls, callbackCalls: callbackCalls });
+                }, settleMs);
+              });
+            });
+          }.toString() +
+          `)(${JSON.stringify(DENIED_MESSAGE)}, 500)`
+      );
+
+      assert.deepStrictEqual(
+        outcome.list,
+        { terms: [], activeIndex: -1 },
+        'a permanently denied read must degrade to the default, not the stored list'
+      );
+      assert.strictEqual(outcome.getCalls, 2, 'bounded to exactly one retry attempt, not an unbounded loop');
+      assert.strictEqual(outcome.ensureCalls, 1, 'the ready-ping is sent once, not repeatedly');
+      assert.strictEqual(
+        outcome.callbackCalls,
+        1,
+        'loadWorkList must invoke its callback exactly once even on permanent denial'
+      );
+    });
+
+    test('(d) a normal (never-denied) read/write is unaffected and never sends the ready-ping', async () => {
+      await closeOverlay();
+      const list = { terms: ['normal-alpha'], activeIndex: 0 };
+
+      const outcome = await evalInContentScript(
+        '(' +
+          function (listArg, deadlineMs) {
+            return new Promise((resolve, reject) => {
+              var origSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+              var ensureCalls = 0;
+              chrome.runtime.sendMessage = function (msg, cb) {
+                if (msg && msg.action === 'ensureSessionAccess') ensureCalls++;
+                return origSendMessage(msg, cb);
+              };
+              window.__ocTest.saveWorkList(listArg);
+              var deadline = Date.now() + deadlineMs;
+              (function pollWrite() {
+                chrome.storage.session.get('oc-worklist', function (data) {
+                  var stored = data && data['oc-worklist'];
+                  if (stored && stored.terms && stored.terms.length === 1) {
+                    window.__ocTest.loadWorkList(function (loaded) {
+                      chrome.runtime.sendMessage = origSendMessage;
+                      resolve({ loaded: loaded, ensureCalls: ensureCalls });
+                    });
+                    return;
+                  }
+                  if (Date.now() > deadline) {
+                    chrome.runtime.sendMessage = origSendMessage;
+                    reject(new Error('write never landed'));
+                    return;
+                  }
+                  setTimeout(pollWrite, 30);
+                });
+              })();
+            });
+          }.toString() +
+          `)(${JSON.stringify(list)}, ${LONG_TIMEOUT})`
+      );
+
+      assert.deepStrictEqual(outcome.loaded, list);
+      assert.strictEqual(
+        outcome.ensureCalls,
+        0,
+        'a normal read/write must never send the ensureSessionAccess ready-ping'
+      );
+    });
+  });
 });
