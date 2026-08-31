@@ -2320,6 +2320,24 @@
     container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
     document.documentElement.appendChild(container);
 
+    // lastSpeedLinesContainerRect: the container's own live getBoundingClientRect(), taken
+    // right after it is placed in the document and never touched again on this element --
+    // its CSS (left/top/width/height/transform) is fixed for the rest of this beacon's life,
+    // so this rect stays correct for the container's entire lifetime on a static page. A
+    // test that needs the container's rendered position should read this instead of
+    // re-querying '.oc-beacon' near completion: this beacon's own container is removed by an
+    // independent wall-clock setTimeout(DUR) that empirically fires no later than, and
+    // usually strictly before, the rAF loop's own final "done" tick (that tick can only run
+    // on the next vsync-aligned callback at-or-after elapsed>=DUR, while the timer fires
+    // right at DUR) -- so a live '.oc-beacon' query taken anywhere near or after completion
+    // is racing that removal and can lose. Capturing here, long before either the completion
+    // tick or the removal timer can fire, sidesteps that race entirely instead of trying to
+    // win it.
+    window.__ocTest.lastSpeedLinesContainerRect = (function () {
+      var r = container.getBoundingClientRect();
+      return { left: r.left, top: r.top };
+    })();
+
     var canvas = document.createElement('canvas');
     var dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.round(vw * dpr));
