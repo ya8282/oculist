@@ -2307,6 +2307,31 @@
   // current viewport width, clamped vertically against document height, instead of a small
   // fixed mockup stage).
   function animateSpeedLines(rect) {
+    // Reset every speed-lines __ocTest hook before the guard below can return early, so a
+    // skipped run (rect missing or zero-sized) can never be graded against the previous
+    // run's leftover values (oculist-47e; same gap oculist-viv found and fixed for
+    // lastSpeedLinesContainerRect alone, generalised here to the full hook set).
+    // lastSpeedLinesContainerRect/lastSpeedLinesLaneBounds/lastSpeedLinesAnchor/
+    // lastSpeedLinesHighlightY reset to null and speedLinesDone to false — unambiguous
+    // "this run produced nothing" sentinels a real run never writes back into at its own
+    // setup, so a wait on speedLinesDone times out loudly instead of resolving off a stale
+    // true, and reading a property off any of the null ones throws instead of silently
+    // reporting the prior run's geometry. speedLinesFrameCount/lastSpeedLinesLaneAlphaMax/
+    // lastSpeedLinesElseAlphaMax/speedLinesHighlightDrawCount reset to 0, same as a real
+    // run's own setup before its first frame — 0 alone cannot tell "skipped" apart from
+    // "started, no frame drawn yet", so those four are safe to read only because
+    // speedLinesDone gates every consumer.
+    window.__ocTest.lastSpeedLinesContainerRect = null;
+    window.__ocTest.lastSpeedLinesStreakCount = 0;
+    window.__ocTest.speedLinesFrameCount = 0;
+    window.__ocTest.lastSpeedLinesLaneAlphaMax = 0;
+    window.__ocTest.lastSpeedLinesElseAlphaMax = 0;
+    window.__ocTest.lastSpeedLinesLaneBounds = null;
+    window.__ocTest.lastSpeedLinesAnchor = null;
+    window.__ocTest.lastSpeedLinesHighlightY = null;
+    window.__ocTest.speedLinesHighlightDrawCount = 0;
+    window.__ocTest.speedLinesDone = false;
+
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
     var mw = rect.width;
