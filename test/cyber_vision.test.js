@@ -412,7 +412,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     assert.strictEqual(axNode.name, undefined, `expected the readout to carry no computed accessible name, got ${JSON.stringify(axNode.name)}`);
   });
 
-  // Deliberately does not press Escape — no test after this one needs the finder to stay
+  // Does not press Escape — the scroll-cancellation test below it still needs the finder
   // open, and replay()'s own beacon-clear step already exercises the ordinary self-removal
   // path this test is verifying.
   test('every .oc-beacon element is removed once the effect finishes (no leak)', async () => {
@@ -430,5 +430,76 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       { timeout: POLL_TIMEOUT, message: 'expected every .oc-beacon element to be removed once Cyber-Vision finishes' }
     );
     assert.strictEqual(finalCount, 0, `expected zero .oc-beacon elements after completion, observed ${finalCount}`);
+  });
+
+  // oculist-qii: fadeActiveBeacons() (content.js, called from handleScroll()) is the
+  // second of the two paths that remove a .oc-beacon element, and until this fix did so
+  // with a bare .remove() — never cancelling the container's __waapiAnims first. A WAAPI
+  // animation does NOT stop on its own when its target is detached from the document
+  // (verified empirically; see cancelBeacons()'s own comment in content.js): playState
+  // stays 'running' and currentTime keeps advancing on a removed element unless .cancel()
+  // is called explicitly. Cyber-Vision is a WAAPI-driven effect (every tint/sweep/thermal/
+  // bracket/readout animation is hung off container.__waapiAnims), so it is the
+  // complementary case to chrono_tunnel.test.js's rAF/__rafId coverage of the same fix.
+  //
+  // Snapshots the live Animation objects *before* the scroll and holds onto those
+  // references so their playState can still be read after the container itself is
+  // detached and gone — document.getAnimations() would not necessarily surface animations
+  // on an already-detached element, so the references have to be captured while the
+  // beacon is still live (mirrors test/waapi_beacon_cancel.test.js's
+  // snapshotBeaconAnimations()).
+  test('a real scroll mid-flight cancels every WAAPI animation via fadeActiveBeacons(), not just removes the element', async () => {
+    // This suite's page is exactly one viewport tall (scrollHeight === innerHeight), so a
+    // real wheel scroll has nothing to scroll — window.scrollY would stay 0 and this test
+    // would silently pass for the wrong reason (every animation reaching its own natural
+    // 'finished' state, not fadeActiveBeacons() cancelling them). Padding the page taller
+    // makes the scroll genuine before anything else runs.
+    //
+    // Centre the match first so this replay() never itself needs to auto-scroll the page
+    // into view — highlightActiveRange() (content.js) only calls triggerAutoScrollFlag()
+    // when the match is NOT already fully in the viewport, and that flag makes
+    // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
+    // first guarantees replay()'s own Enter never sets it.
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px';
+      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+
+    await replay();
+
+    const snapshotCount = await page.evaluate(() => {
+      const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+      const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
+      window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
+      return window.__waapiSnapshot.length;
+    });
+    assert.ok(snapshotCount > 0, 'sanity check: expected at least one live WAAPI animation under a .oc-beacon element, got 0');
+
+    const before = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+    assert.ok(
+      before.some((s) => s === 'running'),
+      `sanity check: expected at least one animation 'running' before the scroll, got ${JSON.stringify(before)}`
+    );
+
+    // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
+    // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
+    // path handleScroll() is wired to.
+    const scrollYBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.move(600, 400);
+    await page.mouse.wheel(0, 300);
+    await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
+
+    // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
+    // window for the container to actually be gone before reading the animation states.
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+      timeout: POLL_TIMEOUT,
+    });
+
+    const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+    assert.ok(
+      after.every((s) => s !== 'running'),
+      `expected every WAAPI animation to be genuinely cancelled (not just detached) after a scroll-driven ` +
+        `fadeActiveBeacons() removal; observed playStates ${JSON.stringify(after)}`
+    );
   });
 });

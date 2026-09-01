@@ -402,6 +402,79 @@ describe('Chrono Tunnel: slit-scan ring field rushing past the match', () => {
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: LONG_TIMEOUT });
   });
 
+  // oculist-qii: fadeActiveBeacons() (content.js, called from handleScroll()) is the
+  // second of the two paths that remove a .oc-beacon element, and until this fix did so
+  // without ever cancelling container.__rafId first — a container detached mid-flight was
+  // permanently unreachable afterward (cancelBeacons() finds its targets via
+  // document.querySelectorAll('.oc-beacon')), so the rAF loop it left running spun forever
+  // against a detached canvas. This drives the real bug repro: a real scroll
+  // (page.mouse.wheel, not a synthetic 'scroll' dispatch) while the beacon is live, and
+  // asserts the frame loop actually stops rather than merely asserting the element is gone.
+  test('a real scroll mid-flight stops the rAF loop via fadeActiveBeacons(), not just removes the element', async () => {
+    // This suite's page is exactly one viewport tall (scrollHeight === innerHeight), so a
+    // real wheel scroll has nothing to scroll — window.scrollY would stay 0 and this test
+    // would silently pass for the wrong reason (the effect's own natural DUR completion
+    // stopping the frame counter, not fadeActiveBeacons()). Padding the page taller makes
+    // the scroll genuine before anything else runs.
+    //
+    // Centre the match first so this replay() never itself needs to auto-scroll the page
+    // into view — highlightActiveRange() (content.js) only calls triggerAutoScrollFlag()
+    // when the match is NOT already fully in the viewport, and that flag makes
+    // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
+    // first guarantees replay()'s own Enter never sets it.
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px';
+      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+
+    await replay();
+
+    // Let a couple of real frames render first, so a stuck-at-zero counter can't pass by
+    // accident.
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.chronoFrameCount', (v) => v >= 2, {
+      timeout: POLL_TIMEOUT,
+      message: 'chrono tunnel never rendered its first frames',
+    });
+
+    // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
+    // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
+    // path handleScroll() is wired to.
+    const scrollYBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.move(600, 400);
+    await page.mouse.wheel(0, 300);
+    await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
+
+    // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
+    // window for the container to actually be gone before reading the frame count.
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+      timeout: POLL_TIMEOUT,
+    });
+
+    const afterRemoval = await evalInContentScript('window.__ocTest.chronoFrameCount');
+
+    // Positively confirm the frame counter never grows again: wait (up to the same
+    // POLL_TIMEOUT budget used everywhere else in this suite) for it to exceed its
+    // post-removal value. If fadeActiveBeacons() actually cancelled the rAF loop, that wait
+    // times out — which is the success case here — rather than resolving.
+    let grew = false;
+    try {
+      await waitForContentScriptValue(
+        evalInContentScript,
+        'window.__ocTest.chronoFrameCount',
+        (v) => v > afterRemoval,
+        { timeout: POLL_TIMEOUT }
+      );
+      grew = true;
+    } catch (e) {
+      if (!/timed out/.test(e.message)) throw e;
+    }
+    assert.strictEqual(
+      grew,
+      false,
+      `expected the rAF loop to have stopped after a scroll-driven fadeActiveBeacons() removal; frame count kept growing past ${afterRemoval}`
+    );
+  });
+
   // Deliberately last: Escape closes the finder for the rest of the suite (__ocDestroy()
   // calls cancelBeacons()), so no later test can reopen it within this shared session.
   test('cancelBeacons() stops the rAF loop mid-flight (proves container.__rafId is wired)', async () => {
