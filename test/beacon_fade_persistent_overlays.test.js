@@ -199,15 +199,24 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.keyboard.press('Enter');
 
-    // Waiting on a bare '.oc-beacon' is not enough, for two reasons that compound.
+    // Waiting on a bare '.oc-beacon' is not enough.
     //
-    // The cancelBeacons() above empties the DOM, and the preceding test leaves the match
-    // scrolled out of the viewport, so this Enter takes highlightActiveRange()'s
-    // smooth-scroll branch and does not draw anything until 'scrollend' fires ~360ms
-    // later. Then onScrollEnd fires TWICE, ~47ms apart, and animate() runs its
-    // cancelBeacons()-plus-full-redraw both times -- so the DOM churns again right after
-    // the first draw. A waitForSelector('.oc-beacon') resolving on that first draw hands
-    // the count below elements that are about to be torn down.
+    // The cancelBeacons() above empties the DOM. On the first call (the full-motion test
+    // above), nothing has scrolled yet and the match is already inside the viewport, so
+    // this Enter takes highlightActiveRange()'s fully-in-viewport branch and draws after
+    // a flat 50ms setTimeout. On the second call (reduced motion), the first test's own
+    // scroll-to-fade wheeling has left the match scrolled out of the viewport instead, so
+    // that Enter takes the smooth-scroll branch and does not draw anything until
+    // 'scrollend' fires ~360ms later.
+    //
+    // Either way, animate() (content.js) does its cancelBeacons()-plus-redraw in one
+    // synchronous task -- drawActiveOverlays() and the effect itself (run(), or
+    // animateReducedMotion() on the reduced-motion path) both append
+    // their elements before that task yields -- so a bare waitForSelector('.oc-beacon')
+    // would in fact resolve with both the persistent overlay and the transient beacon
+    // already present. This wait is not guarding against a hazard that currently exists;
+    // it is more precision than strictly necessary, kept so the elements tagged below are
+    // unambiguously the settled ones.
     //
     // So wait for the state this test actually needs -- one persistent overlay AND one
     // transient beacon, both present -- and then for the DOM to stop churning, so the
@@ -218,6 +227,16 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     // path and found it removes and redraws in a single script turn, never dropping a
     // frame. The delay is the smooth-scroll wait above, and the empty window is this
     // helper's own cancelBeacons().)
+    //
+    // (A still-earlier version of this comment also said 'scrollend' fired TWICE, ~47ms
+    // apart, so animate()'s cancelBeacons()-plus-redraw ran a second time right after the
+    // first draw and this helper had to wait out that second churn cycle too. That was
+    // wrong: oculist-7k0 (commit 03d7f97) found the double draw was never a doubled
+    // native 'scrollend' -- that listener is {once:true} and cannot re-fire -- but an
+    // orphaned scrollDebounceTimer: whichever of the native scrollend or the 80ms
+    // debounce won the race removed both listeners but never cancelled the other path's
+    // already-scheduled timer. The fix makes onScrollEnd idempotent, so a scrolled
+    // navigation now draws exactly once and there is no second churn cycle to wait out.)
     await page.evaluate(() => {
       window.__ocBeaconChurn = performance.now();
       if (window.__ocBeaconChurnObserver) window.__ocBeaconChurnObserver.disconnect();
