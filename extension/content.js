@@ -5038,6 +5038,28 @@
         });
       }
     } else {
+      // oculist-7uc: same hazard oculist-rbx fixed at the smooth-scroll branch entry above,
+      // reached via a third path — a navigation superseding an in-flight smooth scroll whose
+      // OWN match is already in the viewport takes this branch instead, so without this
+      // teardown the superseded navigation's four handles (and its still-running native
+      // scrollIntoView animation) are left live and its orphaned timer/scrollend can still
+      // animate() a stale rect over the draw below.
+      if (activeScrollTimeout) {
+        clearTimeout(activeScrollTimeout);
+        activeScrollTimeout = null;
+      }
+      if (activeScrollEndHandler) {
+        window.removeEventListener('scrollend', activeScrollEndHandler);
+        activeScrollEndHandler = null;
+      }
+      if (activeScrollDebounceHandler) {
+        window.removeEventListener('scroll', activeScrollDebounceHandler);
+        activeScrollDebounceHandler = null;
+      }
+      if (activeScrollDebounceTimer) {
+        clearTimeout(activeScrollDebounceTimer);
+        activeScrollDebounceTimer = null;
+      }
       if (shouldAnimate) {
         setTimeout(function () {
           var freshRect = activeRange.getBoundingClientRect();
