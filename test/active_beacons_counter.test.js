@@ -311,36 +311,40 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
     const preCount = await evalInContentScript('window.__ocTest.getActiveBeacons()');
     assert.strictEqual(preCount, 1, `sanity check: expected activeBeacons to be 1 before scrolling, got ${preCount}`);
 
-    // PAGE's own content fits inside the 800px viewport with nothing left to scroll
-    // (by design — none of the other tests in this file need scroll room), so a wheel
-    // event here would be a no-op without extra height to scroll into.
-    await page.evaluate(() => {
-      var spacer = document.createElement('div');
-      spacer.style.height = '2000px';
-      document.body.appendChild(spacer);
-    });
+    try {
+      // PAGE's own content fits inside the 800px viewport with nothing left to scroll
+      // (by design — none of the other tests in this file need scroll room), so a wheel
+      // event here would be a no-op without extra height to scroll into.
+      await page.evaluate(() => {
+        var spacer = document.createElement('div');
+        spacer.style.height = '2000px';
+        document.body.appendChild(spacer);
+      });
 
-    // fadeActiveBeacons() (handleScroll's entry point) sets opacity:0 with a 50ms
-    // transition, then removes the element once that transition lands.
-    //
-    // The timeout here is deliberately far below the reduced-motion beacon's own
-    // lifetime (2500ms for the arrows+spotlight variant, 3000ms for the plain glow):
-    // those runs self-remove on their WAAPI anim.finished, so a generous POLL_TIMEOUT
-    // would be satisfied by natural completion and this wait would pass with or without
-    // the fade. Keeping it under a second means only the scroll-triggered fade can
-    // satisfy it.
-    const FADE_TIMEOUT = 1000;
-    await page.mouse.wheel(0, 400);
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
-      timeout: FADE_TIMEOUT,
-    });
+      // fadeActiveBeacons() (handleScroll's entry point) sets opacity:0 with a 50ms
+      // transition, then removes the element once that transition lands.
+      //
+      // The timeout here is deliberately far below the reduced-motion beacon's own
+      // lifetime (2500ms for the arrows+spotlight variant, 3000ms for the plain glow):
+      // those runs self-remove on their WAAPI anim.finished, so a generous POLL_TIMEOUT
+      // would be satisfied by natural completion and this wait would pass with or without
+      // the fade. Keeping it under a second means only the scroll-triggered fade can
+      // satisfy it.
+      const FADE_TIMEOUT = 1000;
+      await page.mouse.wheel(0, 400);
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+        timeout: FADE_TIMEOUT,
+      });
 
-    const postCount = await evalInContentScript('window.__ocTest.getActiveBeacons()');
-    assert.strictEqual(
-      postCount,
-      0,
-      `expected fadeActiveBeacons() to zero activeBeacons and remove the reduced-motion ` +
-        `beacon on scroll, got ${postCount}`
-    );
+      const postCount = await evalInContentScript('window.__ocTest.getActiveBeacons()');
+      assert.strictEqual(
+        postCount,
+        0,
+        `expected fadeActiveBeacons() to zero activeBeacons and remove the reduced-motion ` +
+          `beacon on scroll, got ${postCount}`
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
   });
 });

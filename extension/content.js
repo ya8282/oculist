@@ -932,6 +932,7 @@
   var activeScrollTimeout      = null;
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
+  var activeScrollDebounceTimer = null;
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
@@ -4970,6 +4971,15 @@
               window.removeEventListener('scroll', activeScrollDebounceHandler);
               activeScrollDebounceHandler = null;
             }
+            // oculist-rbx: the debounce TIMER (as opposed to the listener that schedules
+            // it) is closed over per-navigation and has no other module-level handle, so a
+            // superseded navigation's already-scheduled 80ms timer survives the listener
+            // teardown above and can still fire onScrollEnd for a match that is no longer
+            // active, animate()-ing a stale rect.
+            if (activeScrollDebounceTimer) {
+              clearTimeout(activeScrollDebounceTimer);
+              activeScrollDebounceTimer = null;
+            }
 
             var scrollTimeout = null;
             // ponytail: native 'scrollend' and the scroll-debounce timer can both
@@ -4982,6 +4992,7 @@
               if (scrollTimeout) clearTimeout(scrollTimeout);
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
               if (activeScrollTimeout === scrollTimeout) activeScrollTimeout = null;
+              if (activeScrollDebounceTimer === scrollDebounceTimer) activeScrollDebounceTimer = null;
               window.removeEventListener('scrollend', onScrollEnd);
               window.removeEventListener('scroll', onScrollEndDebounced);
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
@@ -4994,6 +5005,7 @@
             var onScrollEndDebounced = function () {
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
               scrollDebounceTimer = setTimeout(onScrollEnd, 80);
+              activeScrollDebounceTimer = scrollDebounceTimer;
             };
 
             scrollTimeout = setTimeout(onScrollEnd, 600);
