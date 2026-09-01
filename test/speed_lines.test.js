@@ -579,6 +579,44 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   // under 200ms instead of 5s.
   const WS4_FRAME_BUDGET = 10;
 
+  // oculist-s6g: shared page-side script for both WS4_FRAME_BUDGET confirmation windows
+  // below (the removal-ordering case just below and the cancelBeacons() case at the bottom
+  // of this suite). Two weaknesses, both fixed here:
+  //
+  // 1. HANG INSTEAD OF FAIL. The promise used to resolve only from inside a real rAF
+  // callback, and evalInContentScript has no timeout of its own -- if rAF were ever
+  // suspended (hidden tab, page navigation), the promise would never settle and node:test
+  // has no default per-test timeout, so the failure mode was an indefinite hang rather than
+  // a diagnosable failure. RAF_STARVATION_TIMEOUT adds a page-side setTimeout escape that
+  // rejects instead, bounded well over an order of magnitude above the ~183ms this window
+  // normally takes to run its course, so it never fires on the success path (the timer is
+  // cleared the instant the rAF ticks resolve first) but still turns a genuine stall into a
+  // rejected, diagnosable promise instead of a hang.
+  //
+  // 2. Callers must independently confirm the counter froze for the reason under test, not
+  // an unrelated one -- otherwise this check passes vacuously. The sign differs per site:
+  // the cancel case asserts speedLinesDone === false (the loop was genuinely interrupted,
+  // not already finished on its own), while the removal-ordering case asserts the opposite,
+  // speedLinesDone === true, because there natural completion IS the mechanism under test
+  // and the confound is an unrelated path having yanked the container early.
+  const RAF_STARVATION_TIMEOUT = 3000;
+  function ws4FrameBudgetScript() {
+    return `
+      new Promise(function (resolve, reject) {
+        var remaining = ${WS4_FRAME_BUDGET};
+        var starved = setTimeout(function () {
+          reject(new Error('rAF starved waiting for ${WS4_FRAME_BUDGET} more animation frames (none arrived within ${RAF_STARVATION_TIMEOUT}ms)'));
+        }, ${RAF_STARVATION_TIMEOUT});
+        function tick() {
+          if (remaining <= 0) { clearTimeout(starved); resolve(window.__ocTest.speedLinesFrameCount); return; }
+          remaining--;
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })
+    `;
+  }
+
   test('the container is removed only after the rAF loop\'s own final frame, never before', async () => {
     await replay();
     await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
@@ -594,6 +632,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     await evalInContentScript(`
       (function () {
         window.__ocWs4RemovalFrameCount = null;
+        window.__ocWs4RemovalWasDone = null;
         var container = document.querySelector('.oc-beacon-transient');
         var mo = new MutationObserver(function (records) {
           for (var i = 0; i < records.length; i++) {
@@ -601,6 +640,10 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
             for (var j = 0; j < removed.length; j++) {
               if (removed[j] === container) {
                 window.__ocWs4RemovalFrameCount = window.__ocTest.speedLinesFrameCount;
+                // oculist-s6g: captured in the same observer callback (same tick) as the
+                // frame count above, not a separate later read, so this can't itself race
+                // frame()'s completion branch.
+                window.__ocWs4RemovalWasDone = window.__ocTest.speedLinesDone;
                 mo.disconnect();
                 return;
               }
@@ -619,21 +662,25 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     );
     assert.ok(atRemoval > 0, `sanity check: expected a nonzero frame count at the removal instant, got ${atRemoval}`);
 
+    // oculist-s6g: prove removal is traceable to frame()'s OWN completion branch (which sets
+    // speedLinesDone and removes the container in the same tick, see content.js) rather than
+    // some unrelated path -- cancelBeacons()/fadeActiveBeacons() also remove this same
+    // container class without ever touching speedLinesDone. If something else had yanked the
+    // container early, the frame count would still freeze afterward too (that path also
+    // cancels the rAF loop), which would let the "no growth" assertion below pass for the
+    // wrong reason. speedLinesDone being true here rules that out.
+    const wasDoneAtRemoval = await evalInContentScript('window.__ocWs4RemovalWasDone');
+    assert.strictEqual(
+      wasDoneAtRemoval,
+      true,
+      `expected the beacon to have reached its own natural completion (speedLinesDone === true) at the instant the container was removed, but observed ${wasDoneAtRemoval} -- removal must be caused by frame()'s own completion branch, not an unrelated cancellation path`
+    );
+
     // Positively confirm the frame counter never grows past its value at the removal instant:
     // let WS4_FRAME_BUDGET more real animation frames tick from inside the page, then read the
     // counter. If removal genuinely happens strictly after the last frame, no further frame()
     // call is ever scheduled, so the counter comes back unchanged — the success case here.
-    const afterBudget = await evalInContentScript(`
-      new Promise(function (resolve) {
-        var remaining = ${WS4_FRAME_BUDGET};
-        function tick() {
-          if (remaining <= 0) { resolve(window.__ocTest.speedLinesFrameCount); return; }
-          remaining--;
-          requestAnimationFrame(tick);
-        }
-        requestAnimationFrame(tick);
-      })
-    `);
+    const afterBudget = await evalInContentScript(ws4FrameBudgetScript());
     assert.strictEqual(
       afterBudget,
       atRemoval,
@@ -787,7 +834,23 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     await page.keyboard.press('Escape'); // -> window.__ocDestroy() -> cancelBeacons()
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
 
-    const afterCancel = await evalInContentScript('window.__ocTest.speedLinesFrameCount');
+    // Read both in the same round trip so neither can race the other.
+    const { frameCount: afterCancel, done: doneAtCancel } = await evalInContentScript(
+      '({ frameCount: window.__ocTest.speedLinesFrameCount, done: window.__ocTest.speedLinesDone })'
+    );
+
+    // oculist-s6g: prove the beacon was still genuinely mid-flight -- not already finished on
+    // its own -- at the moment cancelBeacons() ran. destroyBeacon() (what cancelBeacons()
+    // calls) never touches speedLinesDone; only frame()'s own completion branch sets it true.
+    // So this staying false here means the loop was actually interrupted rather than having
+    // already reached DUR naturally. If DUR had already elapsed before Escape landed, the
+    // counter below would freeze anyway regardless of whether cancelBeacons() cancelled
+    // anything, and the assertion after it would pass for the wrong reason.
+    assert.strictEqual(
+      doneAtCancel,
+      false,
+      `expected the beacon to still be mid-flight (speedLinesDone === false) when cancelBeacons() ran, but it had already reached ${doneAtCancel} -- the natural-completion confound this guards against`
+    );
 
     // oculist-mxn: this used to poll for a full POLL_TIMEOUT (5s) on its success path, the
     // same shape oculist-j5n fixed above. Positively confirm the frame counter never grows
@@ -797,17 +860,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     // and no frame() call is ever scheduled again, or it didn't and the counter grows every
     // single frame — so the same budget carries an even wider margin here. If the loop
     // genuinely stopped, the counter comes back unchanged, which is the success case here.
-    const afterBudget = await evalInContentScript(`
-      new Promise(function (resolve) {
-        var remaining = ${WS4_FRAME_BUDGET};
-        function tick() {
-          if (remaining <= 0) { resolve(window.__ocTest.speedLinesFrameCount); return; }
-          remaining--;
-          requestAnimationFrame(tick);
-        }
-        requestAnimationFrame(tick);
-      })
-    `);
+    const afterBudget = await evalInContentScript(ws4FrameBudgetScript());
     assert.strictEqual(
       afterBudget,
       afterCancel,
