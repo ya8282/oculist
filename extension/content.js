@@ -3860,10 +3860,13 @@
           // term happens to be a substring/superstring of it. Routed through the shared
           // helper (rather than a narrower `child !== wrap` identity check) so any future
           // Oculist node mounted under body is excluded automatically instead of
-          // silently self-matching. The extra cost per element is a couple of cheap
-          // string/classList comparisons on top of the classList.contains() this branch
-          // already did, not a closest()/getComputedStyle() walk, so it stays cheap on
-          // this hot path.
+          // silently self-matching. Since oculist-39z that helper is a closest() walk,
+          // so the cost here is O(depth) per element rather than the O(1) classList
+          // comparisons it used to be — still well under the getComputedStyle() this
+          // loop already pays per element, but no longer free. The walk itself never
+          // changes the answer on this path: traverse() roots at document.body and every
+          // Oculist node except wrap mounts on documentElement or head, so nothing with
+          // an Oculist ancestor is ever passed in.
           if (!SKIP_TAGS[child.tagName] && !isOculistNode(child)) {
             if (child.shadowRoot) {
               traverse(child.shadowRoot);
@@ -4355,18 +4358,25 @@
   // detach, so highlights "vanish" without any visible error. A debounced
   // MutationObserver re-runs the last search whenever the page mutates.
 
+  // Roots that define "ours" — anything at or under one of these is an oculist node.
+  // A closest() ancestor walk (rather than an identity/class check on the node itself)
+  // is what lets this recognise beacon-descendant elements (e.g. Cyber-Vision's
+  // oc-cv-readout, a child of .oc-beacon) and their text-node children, not just the
+  // roots themselves. Never widen this to a bare class-prefix match ("oc-*") — real
+  // page content is never inside #oc-wrap or a .oc-beacon, so anchoring on these roots
+  // is what keeps genuine page mutations from being swallowed.
+  var OCULIST_ROOT_SELECTOR = '#oc-wrap, #oc-global-highlight-styles, .oc-beacon, .oc-viewport-marker';
+
   function isOculistNode(node) {
     if (!node) return false;
     if (node === wrap) return true;
-    if (node.nodeType === 1) {
-      if (node.id === 'oc-wrap' || node.id === 'oc-global-highlight-styles') return true;
-      if (typeof node.classList === 'undefined') return false;
-      // Beacons and viewport markers are mounted on documentElement, which the observer
-      // now watches, so both have to be recognised or our own drawing retriggers a scan.
-      if (node.classList.contains('oc-beacon')) return true;
-      if (node.classList.contains('oc-viewport-marker')) return true;
-    }
-    return false;
+    // Text nodes have no closest() of their own — walk from the parent element instead.
+    // A detached removed text node's parentElement is null and this correctly finds
+    // nothing; isOculistMutation() covers that case separately via m.target, which is
+    // the (still-attached) parent element the removal happened on.
+    var el = node.nodeType === 1 ? node : (node.nodeType === 3 ? node.parentElement : null);
+    if (!el || typeof el.closest !== 'function') return false;
+    return el.closest(OCULIST_ROOT_SELECTOR) !== null;
   }
 
   // A mutation is ours if it happened inside our UI, or if every node it added or
