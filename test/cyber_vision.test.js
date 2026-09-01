@@ -613,42 +613,50 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
     });
 
-    await replay();
+    try {
+      await replay();
 
-    const snapshotCount = await page.evaluate(() => {
-      const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
-      const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
-      window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
-      return window.__waapiSnapshot.length;
-    });
-    assert.ok(snapshotCount > 0, 'sanity check: expected at least one live WAAPI animation under a .oc-beacon element, got 0');
+      const snapshotCount = await page.evaluate(() => {
+        const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+        const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
+        window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
+        return window.__waapiSnapshot.length;
+      });
+      assert.ok(snapshotCount > 0, 'sanity check: expected at least one live WAAPI animation under a .oc-beacon element, got 0');
 
-    const before = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
-    assert.ok(
-      before.some((s) => s === 'running'),
-      `sanity check: expected at least one animation 'running' before the scroll, got ${JSON.stringify(before)}`
-    );
+      const before = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+      assert.ok(
+        before.some((s) => s === 'running'),
+        `sanity check: expected at least one animation 'running' before the scroll, got ${JSON.stringify(before)}`
+      );
 
-    // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
-    // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
-    // path handleScroll() is wired to.
-    const scrollYBefore = await page.evaluate(() => window.scrollY);
-    await page.mouse.move(600, 400);
-    await page.mouse.wheel(0, 300);
-    await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
+      // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
+      // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
+      // path handleScroll() is wired to.
+      const scrollYBefore = await page.evaluate(() => window.scrollY);
+      await page.mouse.move(600, 400);
+      await page.mouse.wheel(0, 300);
+      await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
 
-    // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
-    // window for the container to actually be gone before reading the animation states.
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
-      timeout: POLL_TIMEOUT,
-    });
+      // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
+      // window for the container to actually be gone before reading the animation states.
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+        timeout: POLL_TIMEOUT,
+      });
 
-    const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
-    assert.ok(
-      after.every((s) => s !== 'running'),
-      `expected every WAAPI animation to be genuinely cancelled (not just detached) after a scroll-driven ` +
-        `fadeActiveBeacons() removal; observed playStates ${JSON.stringify(after)}`
-    );
+      const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+      assert.ok(
+        after.every((s) => s !== 'running'),
+        `expected every WAAPI animation to be genuinely cancelled (not just detached) after a scroll-driven ` +
+          `fadeActiveBeacons() removal; observed playStates ${JSON.stringify(after)}`
+      );
+    } finally {
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.body.style.paddingBottom = '';
+        delete window.__waapiSnapshot;
+      });
+    }
   });
 
   // oculist-xi4: reviewer residual from oculist-3ae. That fix's `container.isConnected`
@@ -671,40 +679,47 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     });
     await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
 
-    await armScrollRace();
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
-
-    await waitForContentScriptValue(evalInContentScript, 'window.__ocRaceScrollFired', (v) => v === true, {
-      timeout: POLL_TIMEOUT,
-      message: 'the scroll scheduled inside the settle-timer race window never fired',
-    });
-
-    // Sanity: the scroll actually cancelled a real, live run (a container really did exist,
-    // really did fade, and really was removed) rather than this racing against nothing.
-    const finalCount = await waitForCondition(
-      () => page.evaluate(() => document.querySelectorAll('.oc-beacon').length),
-      (count) => count === 0,
-      { timeout: POLL_TIMEOUT, message: 'expected the scroll-cancelled beacon to still be removed once its fade finished' }
-    );
-    assert.strictEqual(finalCount, 0, `expected zero .oc-beacon elements after the scroll-cancelled fade, observed ${finalCount}`);
-
-    // Positively confirm the flag stays false through and past the original settle deadline,
-    // rather than checking it once at an arbitrary moment — mirrors the stale-timer test
-    // above: a timeout here IS the passing outcome, a resolve is the bug.
-    let resurrected = false;
     try {
-      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === true, {
+      await armScrollRace();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocRaceScrollFired', (v) => v === true, {
         timeout: POLL_TIMEOUT,
+        message: 'the scroll scheduled inside the settle-timer race window never fired',
       });
-      resurrected = true;
-    } catch (e) {
-      if (!/timed out/.test(e.message)) throw e;
+
+      // Sanity: the scroll actually cancelled a real, live run (a container really did exist,
+      // really did fade, and really was removed) rather than this racing against nothing.
+      const finalCount = await waitForCondition(
+        () => page.evaluate(() => document.querySelectorAll('.oc-beacon').length),
+        (count) => count === 0,
+        { timeout: POLL_TIMEOUT, message: 'expected the scroll-cancelled beacon to still be removed once its fade finished' }
+      );
+      assert.strictEqual(finalCount, 0, `expected zero .oc-beacon elements after the scroll-cancelled fade, observed ${finalCount}`);
+
+      // Positively confirm the flag stays false through and past the original settle deadline,
+      // rather than checking it once at an arbitrary moment — mirrors the stale-timer test
+      // above: a timeout here IS the passing outcome, a resolve is the bug.
+      let resurrected = false;
+      try {
+        await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === true, {
+          timeout: POLL_TIMEOUT,
+        });
+        resurrected = true;
+      } catch (e) {
+        if (!/timed out/.test(e.message)) throw e;
+      }
+      assert.strictEqual(
+        resurrected,
+        false,
+        "expected cyberVisionBracketsSettled to stay false for a run cancelled by a scroll mid-fade, not resurrected by its own settle timer firing while the container was still isConnected but already cancelled"
+      );
+    } finally {
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.body.style.paddingBottom = '';
+      });
     }
-    assert.strictEqual(
-      resurrected,
-      false,
-      "expected cyberVisionBracketsSettled to stay false for a run cancelled by a scroll mid-fade, not resurrected by its own settle timer firing while the container was still isConnected but already cancelled"
-    );
   });
 });
