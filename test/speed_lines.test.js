@@ -20,7 +20,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { elementCenterInContainer } = require('./helpers/effect_anchor');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -599,7 +599,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   // not already finished on its own), while the removal-ordering case asserts the opposite,
   // speedLinesDone === true, because there natural completion IS the mechanism under test
   // and the confound is an unrelated path having yanked the container early.
-  const RAF_STARVATION_TIMEOUT = 3000;
+  const RAF_STARVATION_TIMEOUT = 3000 * TIMEOUT_SCALE;
   function ws4FrameBudgetScript() {
     return `
       new Promise(function (resolve, reject) {
