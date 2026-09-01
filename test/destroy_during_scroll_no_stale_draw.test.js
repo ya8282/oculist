@@ -20,7 +20,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -164,15 +164,49 @@ describe('closing and reopening mid-scroll does not draw a stale rect on the fre
     });
   }
 
-  // Waits for the redraw count to have gone quiet for QUIET_MS after having seen at least
-  // one draw (match1's immediate, in-view draw). The stale draw this bug produces (if any)
-  // lands well within a couple hundred ms of the close+reopen, so a short quiet window is
-  // enough — no multi-second wait needed.
-  async function waitForRedrawCountToSettle() {
+  // oculist-6jw (issue 1): registers our own 'scroll' listener in the isolated world as a
+  // live proxy for the content script's own onScrollEndDebounced listener (added by the
+  // smooth-scroll branch just before it calls scrollIntoView()) having already (re-)armed
+  // activeScrollDebounceTimer. That variable is a closure local with no test-reachable
+  // getter — adding one is a production-code change, out of scope for this test-only fix —
+  // but both listeners run inside the same synchronous 'scroll' dispatch on the same
+  // window, so observing ours fire is equivalent evidence that the debounce timer is now
+  // armed. Same idiom as armSettingsEcho/waitForSettingsEcho used elsewhere in this suite
+  // (e.g. active_beacons_counter.test.js) for the analogous chrome.storage.onChanged case.
+  async function armScrollDebounceProbe() {
+    await evalInContentScript(
+      'window.__ocScrollProbeCount = 0;' +
+        'window.addEventListener("scroll", function () { window.__ocScrollProbeCount++; });'
+    );
+  }
+
+  // Waits until at least one 'scroll' event has landed since armScrollDebounceProbe() ran,
+  // i.e. the debounce timer is now armed — replacing a fixed dwell that could elapse before
+  // the smooth-scroll animation had emitted a single 'scroll' event on a slow/idle run,
+  // leaving nothing for __ocDestroy() to leak and letting the test pass vacuously even
+  // against a reverted production fix (oculist-tz6 reviewer note). Bounded so a scroll that
+  // never emits an event fails loudly instead of hanging.
+  async function waitForScrollDebounceArmed() {
+    return waitForContentScriptValue(evalInContentScript, 'window.__ocScrollProbeCount', (v) => v > 0, {
+      timeout: POLL_TIMEOUT,
+      message: 'no scroll event observed — the smooth-scroll debounce timer was never armed',
+    });
+  }
+
+  // Waits for the redraw count to have gone quiet for QUIET_MS, measured from whichever is
+  // later: `sinceMs` (when the close+reopen was kicked off) or the most recent draw.
+  // oculist-6jw (issue 2): this used to require `window.__ocRedrawCount > 0` and measure
+  // quiet only from the last draw — which depended on match1's own in-view draw landing "by
+  // now" to ever become true at all, and, once callers started synchronizing on that draw
+  // explicitly beforehand (see the test below), could go stale enough to report "quiet"
+  // before a stale draw fired by this bug had a chance to land. Anchoring to `sinceMs`
+  // removes both problems: a correct run with zero further draws still settles instead of
+  // hanging, and a stale draw arriving after `sinceMs` still pushes the quiet window out.
+  async function waitForRedrawCountToSettle(sinceMs) {
     const QUIET_MS = 400;
     await page.waitForFunction(
-      (quiet) => window.__ocRedrawCount > 0 && performance.now() - window.__ocRedrawAt > quiet,
-      QUIET_MS,
+      (args) => performance.now() - Math.max(args.since, window.__ocRedrawAt) > args.quiet,
+      { since: sinceMs, quiet: QUIET_MS },
       { timeout: POLL_TIMEOUT }
     );
     return page.evaluate(() => window.__ocRedrawCount);
@@ -198,15 +232,28 @@ describe('closing and reopening mid-scroll does not draw a stale rect on the fre
     await armRedrawCounter();
 
     // Enter #1: commits the typed term as a chip, landing on match1 — already in view, no
-    // scroll branch, draws once immediately.
+    // scroll branch. Its draw is not immediate: it goes through the same bare 50ms
+    // immediate-draw timer the fully-in-viewport branch always arms.
     await page.keyboard.press('Enter');
-    // Enter #2: findNext() to match2 — out of view, takes the smooth-scroll branch and
-    // starts a long scrollIntoView animation, arming the 80ms scroll-debounce timer.
-    await page.keyboard.press('Enter');
-    // A short real-clock delay lands inside match2's still-running scroll animation, where
-    // its debounce timer is scheduled but not yet fired — the exact window this bug needs.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // oculist-6jw (issue 2): synchronize on match1's draw explicitly instead of assuming it
+    // has landed by some later arbitrary moment. Enter #2 below disowns (but does not
+    // cancel) this timer if it is still pending, and __ocDestroy() further down can
+    // legitimately cancel a disowned-but-not-yet-fired one — so without waiting here, this
+    // draw landing at all (and thus the `count === 1` assertion below being meaningful)
+    // would depend on timing rather than being guaranteed.
+    await page.waitForFunction(() => window.__ocRedrawCount >= 1, null, { timeout: POLL_TIMEOUT });
 
+    await armScrollDebounceProbe();
+    // Enter #2: findNext() to match2 — out of view, takes the smooth-scroll branch and
+    // starts a long scrollIntoView animation, arming the 80ms scroll-debounce timer once a
+    // real 'scroll' event lands.
+    await page.keyboard.press('Enter');
+    // oculist-6jw (issue 1): poll until the debounce timer is actually armed instead of a
+    // fixed dwell — see waitForScrollDebounceArmed()'s comment for why a fixed sleep can
+    // false-negative here.
+    await waitForScrollDebounceArmed();
+
+    const closeStartedAt = await page.evaluate(() => performance.now());
     // Close, then reopen, via window.__ocToggle() directly — the same function the Ctrl+F
     // command and the 'toggle'/'destroy' runtime messages invoke. Pre-fix, __ocDestroy()
     // leaves match2's orphaned scroll-debounce timer armed; it fires later and paints a
@@ -220,7 +267,7 @@ describe('closing and reopening mid-scroll does not draw a stale rect on the fre
     const reopenedInputValue = await page.locator(INPUT).inputValue();
     assert.strictEqual(reopenedInputValue, '', 'the reopened overlay must start with an empty, un-searched input');
 
-    const count = await waitForRedrawCountToSettle();
+    const count = await waitForRedrawCountToSettle(closeStartedAt);
 
     assert.strictEqual(
       count,
