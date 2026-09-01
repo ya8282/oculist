@@ -405,4 +405,120 @@ describe('WAAPI beacon animations are genuinely cancelled (not just detached) on
       await setVisionSettings({ magnifier: false });
     }
   });
+
+  // oculist-egy: drawActiveMatchLabel/drawActiveMatchMagnifier each replace a
+  // pre-existing same-id overlay by id-lookup before drawing a fresh one (a new match
+  // navigated to while the previous one's overlay is still fading/lifting in). Both of
+  // their only real callers (drawActiveOverlays(), reached exclusively from
+  // animate()/repositionActiveOverlays()) call cancelBeacons() immediately beforehand,
+  // so — unlike the effectsRegistry leak oculist-qii/this suite's WAAPI_EFFECTS loop
+  // covers — a real second navigation through simulated Enter keypresses can never
+  // actually land on a pre-existing #oc-active-match-label/#oc-active-match-magnifier to
+  // replace: cancelBeacons() has already destroyed it first. That makes each function's
+  // own internal "replace an existing same-id overlay" branch unreachable through
+  // simulated navigation alone — exposing the real closures directly (same
+  // test-reachability reasoning as window.__ocTest.cancelBeacons, see its own comment
+  // above) and calling them twice back-to-back with no intervening cancelBeacons() is
+  // what exercises that branch on its own terms.
+  test('drawActiveMatchLabel: replacing an existing label mid-fade cancels its WAAPI animation, not just detaches it', async () => {
+    try {
+      // No setSettings({ effect: ... }) here: drawActiveMatchLabel does not read
+      // settings.effect at all, and (unlike the shared before()'s initial state) a
+      // same-value set() from an earlier test in this file would never actually fire
+      // chrome.storage.onChanged, hanging armSettingsEcho()'s wait.
+      await setVisionSettings({ textLabels: true });
+      // Neutralize any incidental auto-redraw setVisionSettings() above may have
+      // triggered via repositionActiveOverlays() (textLabels is one of content.js's
+      // OVERLAY_AFFECTING_KEYS, same as magnifier above) so the "first" draw below is
+      // unambiguously the first, not a second replacing an already-live one.
+      await cancelBeaconsMidFlight();
+
+      const drawLabel = () =>
+        evalInContentScript(
+          "(function () { var rect = document.getElementById('target').getBoundingClientRect(); window.__ocTest.drawActiveMatchLabel(rect); return true; })()"
+        );
+
+      await drawLabel();
+      await page.waitForSelector('#oc-active-match-label', { timeout: POLL_TIMEOUT });
+
+      const snapshotCount = await snapshotBeaconAnimations();
+      assert.ok(snapshotCount > 0, "sanity check: expected the first label's fade-in animation to exist, got 0");
+      const before = await readSnapshotStates();
+      assert.ok(
+        before.some((s) => s === 'running'),
+        `sanity check: expected the first label's animation to be 'running' before replacement, got ${JSON.stringify(before)}`
+      );
+
+      // "Navigate to a second match" while the first label's 250ms fade-in is still
+      // running: replaces it.
+      await drawLabel();
+
+      const after = await readSnapshotStates();
+      assert.ok(
+        after.every((s) => s === 'idle'),
+        `expected the replaced label's animation to be genuinely cancelled (idle), not just detached, got ${JSON.stringify(after)}`
+      );
+      assert.strictEqual(
+        await page.locator('#oc-active-match-label').count(),
+        1,
+        'expected exactly one label element after replacement'
+      );
+    } finally {
+      await cancelBeaconsMidFlight();
+      await setVisionSettings({ textLabels: false });
+    }
+  });
+
+  test('drawActiveMatchMagnifier: replacing an existing card mid-lift cancels its WAAPI animations (card + connector), not just detaches it', async () => {
+    try {
+      // No setSettings({ effect: ... }) here: drawActiveMatchMagnifier does not read
+      // settings.effect at all (see the label test above for why a same-value set()
+      // would hang armSettingsEcho() anyway).
+      await setVisionSettings({ magnifier: true });
+      // Same neutralization as the label test above and the earlier magnifier test's own
+      // comment: clears any incidental auto-redraw from the setVisionSettings() change
+      // itself, so the "first" draw below is unambiguously the first.
+      await cancelBeaconsMidFlight();
+
+      const drawMagnifier = () =>
+        evalInContentScript(
+          "(function () { var rect = document.getElementById('target').getBoundingClientRect(); window.__ocTest.drawActiveMatchMagnifier(rect); return true; })()"
+        );
+
+      await drawMagnifier();
+      await page.waitForSelector('#oc-active-match-magnifier', { timeout: POLL_TIMEOUT });
+
+      const snapshotCount = await snapshotBeaconAnimations();
+      assert.ok(
+        snapshotCount > 0,
+        "sanity check: expected the first card's lift animation (and its connector child's fade animation) to exist, got 0"
+      );
+      const before = await readSnapshotStates();
+      assert.ok(
+        before.some((s) => s === 'running'),
+        `sanity check: expected at least one of the first card's animations to be 'running' before replacement, got ${JSON.stringify(before)}`
+      );
+
+      // "Navigate to a second match" while the first card's up-to-470ms lift is still
+      // running: replaces it. __waapiAnims lives on the card (drawActiveMatchMagnifier's
+      // own id'd element), not the connector — the connector is a child of the card, and
+      // both the card's own lift animation and the connector's fade animation are hung
+      // off card.__waapiAnims, per content.js's own comment there.
+      await drawMagnifier();
+
+      const after = await readSnapshotStates();
+      assert.ok(
+        after.every((s) => s === 'idle'),
+        `expected every one of the replaced card's animations (card + connector) to be genuinely cancelled (idle), not just detached, got ${JSON.stringify(after)}`
+      );
+      assert.strictEqual(
+        await page.locator('#oc-active-match-magnifier').count(),
+        1,
+        'expected exactly one magnifier card element after replacement'
+      );
+    } finally {
+      await cancelBeaconsMidFlight();
+      await setVisionSettings({ magnifier: false });
+    }
+  });
 });
