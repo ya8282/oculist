@@ -317,6 +317,7 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
       // event here would be a no-op without extra height to scroll into.
       await page.evaluate(() => {
         var spacer = document.createElement('div');
+        spacer.className = 'oc-test-spacer';
         spacer.style.height = '2000px';
         document.body.appendChild(spacer);
       });
@@ -344,7 +345,10 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
           `beacon on scroll, got ${postCount}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.evaluate(() => {
+        document.querySelectorAll('.oc-test-spacer').forEach((el) => el.remove());
+        window.scrollTo(0, 0);
+      });
     }
   });
 });
