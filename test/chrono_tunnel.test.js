@@ -511,52 +511,59 @@ describe('Chrono Tunnel: slit-scan ring field rushing past the match', () => {
       document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
     });
 
-    await replay();
-
-    // Let a couple of real frames render first, so a stuck-at-zero counter can't pass by
-    // accident.
-    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.chronoFrameCount', (v) => v >= 2, {
-      timeout: POLL_TIMEOUT,
-      message: 'chrono tunnel never rendered its first frames',
-    });
-
-    // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
-    // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
-    // path handleScroll() is wired to.
-    const scrollYBefore = await page.evaluate(() => window.scrollY);
-    await page.mouse.move(600, 400);
-    await page.mouse.wheel(0, 300);
-    await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
-
-    // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
-    // window for the container to actually be gone before reading the frame count.
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
-      timeout: POLL_TIMEOUT,
-    });
-
-    const afterRemoval = await evalInContentScript('window.__ocTest.chronoFrameCount');
-
-    // Positively confirm the frame counter never grows again: wait (up to the same
-    // POLL_TIMEOUT budget used everywhere else in this suite) for it to exceed its
-    // post-removal value. If fadeActiveBeacons() actually cancelled the rAF loop, that wait
-    // times out — which is the success case here — rather than resolving.
-    let grew = false;
     try {
-      await waitForContentScriptValue(
-        evalInContentScript,
-        'window.__ocTest.chronoFrameCount',
-        (v) => v > afterRemoval,
-        { timeout: POLL_TIMEOUT }
+      await replay();
+
+      // Let a couple of real frames render first, so a stuck-at-zero counter can't pass by
+      // accident.
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.chronoFrameCount', (v) => v >= 2, {
+        timeout: POLL_TIMEOUT,
+        message: 'chrono tunnel never rendered its first frames',
+      });
+
+      // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
+      // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
+      // path handleScroll() is wired to.
+      const scrollYBefore = await page.evaluate(() => window.scrollY);
+      await page.mouse.move(600, 400);
+      await page.mouse.wheel(0, 300);
+      await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
+
+      // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
+      // window for the container to actually be gone before reading the frame count.
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+        timeout: POLL_TIMEOUT,
+      });
+
+      const afterRemoval = await evalInContentScript('window.__ocTest.chronoFrameCount');
+
+      // Positively confirm the frame counter never grows again: wait (up to the same
+      // POLL_TIMEOUT budget used everywhere else in this suite) for it to exceed its
+      // post-removal value. If fadeActiveBeacons() actually cancelled the rAF loop, that wait
+      // times out — which is the success case here — rather than resolving.
+      let grew = false;
+      try {
+        await waitForContentScriptValue(
+          evalInContentScript,
+          'window.__ocTest.chronoFrameCount',
+          (v) => v > afterRemoval,
+          { timeout: POLL_TIMEOUT }
+        );
+        grew = true;
+      } catch (e) {
+        if (!/timed out/.test(e.message)) throw e;
+      }
+      assert.strictEqual(
+        grew,
+        false,
+        `expected the rAF loop to have stopped after a scroll-driven fadeActiveBeacons() removal; frame count kept growing past ${afterRemoval}`
       );
-      grew = true;
-    } catch (e) {
-      if (!/timed out/.test(e.message)) throw e;
+    } finally {
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.body.style.paddingBottom = '';
+      });
     }
-    assert.strictEqual(
-      grew,
-      false,
-      `expected the rAF loop to have stopped after a scroll-driven fadeActiveBeacons() removal; frame count kept growing past ${afterRemoval}`
-    );
   });
 
   // Deliberately last: Escape closes the finder for the rest of the suite (__ocDestroy()
