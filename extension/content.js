@@ -1034,6 +1034,12 @@
   // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
   // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
   function destroyBeacon(b) {
+    // Set here as well as at fadeActiveBeacons()'s fade start (oculist-xi4) so the marker
+    // means "this run is cancelled" rather than "cancelled via the fade path". Redundant
+    // for a caller that only checks isConnected, since remove() below settles that
+    // immediately — but a timer callback reading __ocCancelled alone would otherwise miss
+    // every cancellation that came through cancelBeacons().
+    b.__ocCancelled = true;
     if (b.__rafId) { cancelAnimationFrame(b.__rafId); b.__rafId = null; }
     if (b.__waapiAnims) {
       for (var j = 0; j < b.__waapiAnims.length; j++) {
@@ -3064,18 +3070,21 @@
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
     //
-    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle,
-    // so it is not cancelled if this run's container is removed early (a new search calls
-    // animate() -> cancelBeacons() synchronously before every run, including the one that
-    // reset the hook above; a scroll mid-effect calls fadeActiveBeacons()). Both paths
-    // detach the container via destroyBeacon() before this timer can fire in that
-    // scenario, so the isConnected check below tells a stale timer (its container already
-    // detached) apart from a live one (still attached, genuinely settled) and stops the
-    // stale timer from clobbering a later run's fresh `false` back to `true` (oculist-3ae
-    // review 2).
+    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle, so
+    // it is not cancelled if this run is cancelled early. Two independent paths can cancel
+    // it: a new search calls animate() -> cancelBeacons() synchronously before every run
+    // (including the one that reset the hook above), which detaches the container via
+    // destroyBeacon() immediately — isConnected alone already tells that stale timer (its
+    // container already detached) apart from a live one (oculist-3ae review 2). A scroll
+    // mid-effect calls fadeActiveBeacons() instead, which does NOT detach synchronously: it
+    // fades opacity for 50ms and only removes the container afterward, so this timer can
+    // fire with the container still isConnected even though the run was already cancelled
+    // (oculist-xi4). __ocCancelled is set synchronously the instant fadeActiveBeacons()
+    // starts that fade, so checking it alongside isConnected catches this second path too,
+    // without needing the container to have actually been removed yet.
     window.__ocTest.cyberVisionBracketsSettled = false;
     setTimeout(function () {
-      if (container.isConnected) {
+      if (container.isConnected && !container.__ocCancelled) {
         window.__ocTest.cyberVisionBracketsSettled = true;
       }
     }, BRACKET_DELAY + BRACKET_DUR * 0.3);
@@ -5004,6 +5013,12 @@
     activeBeacons = 0;
     for (var i = 0; i < beacons.length; i++) {
       var b = beacons[i];
+      // Marked the instant the fade starts, not at removal 50ms later (oculist-xi4) — this
+      // beacon is logically cancelled right now, but stays isConnected for another 50ms, and
+      // any settle-style flag a beacon schedules off its own duration (animateCyberVision's
+      // cyberVisionBracketsSettled) needs a way to tell "cancelled, still attached" apart
+      // from "genuinely still live" that does not depend on detachment.
+      b.__ocCancelled = true;
       b.style.transition = 'opacity 50ms ease-out';
       b.style.opacity = '0';
     }

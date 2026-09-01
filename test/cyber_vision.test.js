@@ -235,6 +235,46 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     });
   }
 
+  // oculist-xi4: arms a race between a scroll dispatch and this run's own settle timer,
+  // entirely from inside the isolated content-script world (the same execution context and
+  // timer wheel content.js's own setTimeout calls use), so the two stay correlated even under
+  // system load instead of racing across the Node<->CDP round trip a real page.mouse.wheel()
+  // would add. A real hardware scroll cannot be timed to land inside fadeActiveBeacons()'s
+  // fixed 50ms fade-to-removal window reliably (this suite has already been bitten by exactly
+  // that kind of flake), but dispatching the 'scroll' Event that handleScroll() listens for
+  // (content.js) is the real call path regardless of whether the event came from a wheel or
+  // from script — handleScroll() only reacts to the event firing, not to any scroll delta.
+  //
+  // Watches for the beacon container's own creation (a MutationObserver microtask fires
+  // essentially the instant animateCyberVision() finishes running, i.e. at the same moment its
+  // settle setTimeout above is registered) rather than trusting a Node-side timestamp, then
+  // schedules the scroll for SETTLE_MS - MARGIN_MS out from that moment: 25ms before the
+  // ~710ms settle deadline (BRACKET_DELAY 440 + BRACKET_DUR 900 * 0.3 at this suite's default
+  // 'normal' animationSpeed — the same figure the stale-timer test above relies on), landing
+  // it in the middle of the 50ms window with ~25ms of slack on both sides. Resolves
+  // synchronously (no awaited inner promise) so arming can never race the Enter keypress that
+  // follows it; completion is observed separately via window.__ocRaceScrollFired.
+  async function armScrollRace() {
+    await evalInContentScript(`
+      (function () {
+        window.__ocRaceScrollFired = false;
+        var SETTLE_MS = 440 + 900 * 0.3;
+        var MARGIN_MS = 25;
+        var obs = new MutationObserver(function () {
+          var container = document.querySelector('.oc-beacon-transient');
+          if (!container) return;
+          obs.disconnect();
+          setTimeout(function () {
+            window.dispatchEvent(new Event('scroll'));
+            window.__ocRaceScrollFired = true;
+          }, SETTLE_MS - MARGIN_MS);
+        });
+        obs.observe(document.documentElement, { childList: true });
+        return true;
+      })()
+    `);
+  }
+
   // Content.js's own corner ordering (top-left, top-right, bottom-left, bottom-right — see
   // the `corners` array in animateCyberVision, content.js:2848-2853) matches document/
   // creation order, which querySelectorAll preserves. Each bracket has two of its four CSS
@@ -608,6 +648,63 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       after.every((s) => s !== 'running'),
       `expected every WAAPI animation to be genuinely cancelled (not just detached) after a scroll-driven ` +
         `fadeActiveBeacons() removal; observed playStates ${JSON.stringify(after)}`
+    );
+  });
+
+  // oculist-xi4: reviewer residual from oculist-3ae. That fix's `container.isConnected`
+  // guard tells a stale timer's container apart from a live one, but isConnected only goes
+  // false once the container is actually removed — and fadeActiveBeacons() (unlike
+  // cancelBeacons(), which detaches synchronously) removes on a 50ms fade-then-timeout, not
+  // synchronously. A run cancelled by a scroll (with no later search to cancelBeacons() it)
+  // is therefore still isConnected for up to 50ms after it was cancelled. If this run's own
+  // settle timer fires inside that window, the isConnected-only guard cannot tell it apart
+  // from a genuinely live run and flips cyberVisionBracketsSettled true anyway, for a run
+  // that no longer represents anything on screen. See armScrollRace() above for how the
+  // timing is made deterministic instead of racing a real hardware scroll.
+  test("a run cancelled by a scroll mid-fade never resurrects cyberVisionBracketsSettled inside fadeActiveBeacons()'s 50ms removal window", async () => {
+    // Same centring as the WAAPI-cancel test above, and for the same reason: replay()'s own
+    // Enter must never trigger highlightActiveRange()'s triggerAutoScrollFlag(), which would
+    // make handleScroll() ignore the scroll this test fires (isAutoScrolling, content.js).
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px';
+      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+
+    await armScrollRace();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocRaceScrollFired', (v) => v === true, {
+      timeout: POLL_TIMEOUT,
+      message: 'the scroll scheduled inside the settle-timer race window never fired',
+    });
+
+    // Sanity: the scroll actually cancelled a real, live run (a container really did exist,
+    // really did fade, and really was removed) rather than this racing against nothing.
+    const finalCount = await waitForCondition(
+      () => page.evaluate(() => document.querySelectorAll('.oc-beacon').length),
+      (count) => count === 0,
+      { timeout: POLL_TIMEOUT, message: 'expected the scroll-cancelled beacon to still be removed once its fade finished' }
+    );
+    assert.strictEqual(finalCount, 0, `expected zero .oc-beacon elements after the scroll-cancelled fade, observed ${finalCount}`);
+
+    // Positively confirm the flag stays false through and past the original settle deadline,
+    // rather than checking it once at an arbitrary moment — mirrors the stale-timer test
+    // above: a timeout here IS the passing outcome, a resolve is the bug.
+    let resurrected = false;
+    try {
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === true, {
+        timeout: POLL_TIMEOUT,
+      });
+      resurrected = true;
+    } catch (e) {
+      if (!/timed out/.test(e.message)) throw e;
+    }
+    assert.strictEqual(
+      resurrected,
+      false,
+      "expected cyberVisionBracketsSettled to stay false for a run cancelled by a scroll mid-fade, not resurrected by its own settle timer firing while the container was still isConnected but already cancelled"
     );
   });
 });
