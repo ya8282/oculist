@@ -367,6 +367,12 @@
   // (zero-width/zero-height rect) run.
   window.__ocTest.getActiveBeacons = function () { return activeBeacons; };
 
+  // Which of animate()'s three motion branches a run will take. Exposed so a test that
+  // only means something under one of them can assert it is actually in that branch,
+  // instead of silently exercising a different one when its setup does not take
+  // (oculist-9t5). Read-only; effectiveMotion() itself is unchanged.
+  window.__ocTest.getEffectiveMotion = function () { return effectiveMotion(); };
+
   // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
   // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
   // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
@@ -3643,6 +3649,19 @@
     }
 
     if (motion === 'reduced') {
+      // oculist-9t5: raise the same "have we drawn since the last reset" flag the
+      // full-motion site below raises (identical zero-rect guard, oculist-5rv), so
+      // fadeActiveBeacons()'s scroll-path check no longer short-circuits before it can
+      // fade a reduced-motion beacon out. Without this, a reduced-motion beacon just
+      // sits there until its own multi-second WAAPI animation finishes — the
+      // displayPreset==='reduced-motion' variant's full-viewport spotlight overlay is
+      // position:fixed and centered on a one-shot viewport-coordinate point, so it goes
+      // visibly stale (points at the wrong place) the moment the page scrolls under it.
+      // Fading it out on scroll, same as the full-motion path, is itself a much smaller
+      // dose of motion than leaving a mispositioned overlay on screen — and a brief
+      // opacity fade is already how this codebase treats "acceptable motion" under
+      // 'reduced' elsewhere (see the magnifier's fade-in comment above).
+      if (rect && rect.width !== 0 && rect.height !== 0) activeBeacons++;
       animateReducedMotion(rect);
       return;
     }

@@ -22,12 +22,26 @@
 // content script's isolated execution context via CDP, and real getBoundingClientRect()
 // zero-sizing (font-size:0) only exists in a real layout engine.
 //
-// One shared context/session across all three tests, run in a fixed order:
+// oculist-9t5: the reduced-motion branch in animate() returns before ever reaching the
+// effectsRegistry activeBeacons++ site above, so a reduced-motion beacon left the counter
+// at 0 while a real .oc-beacon sat in the DOM. fadeActiveBeacons() (handleScroll's entry
+// point) opens with `if (activeBeacons === 0) return;`, so it short-circuited before ever
+// fading a reduced-motion beacon out on scroll — not a permanent artifact (cancelBeacons()
+// still clears it on the next search/navigation), but a real asymmetry with the
+// full-motion path's scroll-fade. History check: the reduced-motion branch (oculist-l6m's
+// VA-01..VA-09 suite) was bolted onto animate() three weeks after activeBeacons/
+// fadeActiveBeacons already existed (fb666b53 predates 823dfb8), with no comment and no
+// wiring into either — the same shape of oversight oculist-5rv later fixed for the
+// zero-rect case, not a documented accessibility decision. The fix raises the flag on the
+// reduced-motion site too, guarded by the identical zero-rect condition as the
+// full-motion site (oculist-5rv).
+//
+// One shared context/session across all four tests, run in a fixed order:
 // (b) normal-size run first (establishes the counter actually increments on a real draw
 // and leaves a real .oc-beacon behind for the next test to observe being cleared), then
-// (a) the zero-size regression case, then (c) reduced motion (independent of the other two,
-// placed last so it can leave visionSettings changed without needing to restore it for a
-// later test in this file).
+// (a) the zero-size regression case, then (c) and (d) reduced motion (independent of the
+// other two, placed last so they can leave visionSettings changed without needing to
+// restore it for a later test in this file).
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -246,7 +260,7 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
     }
   });
 
-  test('(c) the reduced-motion path never touches activeBeacons, and still draws its own beacon', async () => {
+  test('(c) the reduced-motion path raises activeBeacons on a real draw, same as full motion (oculist-9t5)', async () => {
     await setVisionSettings({ motionSensitivity: 'reduced' });
 
     // Explicit reset (rather than relying on test (a) having left it at 0) so this
@@ -262,8 +276,71 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
     const count = await evalInContentScript('window.__ocTest.getActiveBeacons()');
     assert.strictEqual(
       count,
+      1,
+      `expected the reduced-motion path's own animate() call site (guarded by the same ` +
+        `zero-rect condition as the full-motion site, oculist-5rv) to raise activeBeacons ` +
+        `to 1 on a real draw, got ${count} — without this, fadeActiveBeacons() short-circuits ` +
+        `on the scroll path and a reduced-motion beacon is never faded out (oculist-9t5)`
+    );
+  });
+
+  test('(d) a reduced-motion beacon is faded out on scroll, same as a full-motion one (oculist-9t5)', async () => {
+    // Deliberately no setVisionSettings() call here: chrome.storage.sync.set() does not
+    // fire onChanged for a write that doesn't actually change the stored value, so
+    // re-asserting motionSensitivity: 'reduced' (already set by test (c), immediately
+    // before this one) would hang waitForSettingsEcho(). Relies on (c) leaving
+    // visionSettings in 'reduced' — see the header comment on why (c)/(d) are ordered
+    // last and share that state.
+    //
+    // Because that reliance is invisible, assert it outright. Run under a name filter
+    // that skips (c), or reorder/rename (c), and this test would otherwise still pass
+    // green while silently exercising the FULL-motion path instead — a false green on
+    // the one property it exists to check.
+    const mode = await evalInContentScript('window.__ocTest.getEffectiveMotion()');
+    assert.strictEqual(
+      mode,
+      'reduced',
+      `this test only means anything on the reduced-motion branch, but animate() would take ` +
+        `the ${JSON.stringify(mode)} branch — test (c) must run first and leave motionSensitivity set`
+    );
+
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+
+    const preCount = await evalInContentScript('window.__ocTest.getActiveBeacons()');
+    assert.strictEqual(preCount, 1, `sanity check: expected activeBeacons to be 1 before scrolling, got ${preCount}`);
+
+    // PAGE's own content fits inside the 800px viewport with nothing left to scroll
+    // (by design — none of the other tests in this file need scroll room), so a wheel
+    // event here would be a no-op without extra height to scroll into.
+    await page.evaluate(() => {
+      var spacer = document.createElement('div');
+      spacer.style.height = '2000px';
+      document.body.appendChild(spacer);
+    });
+
+    // fadeActiveBeacons() (handleScroll's entry point) sets opacity:0 with a 50ms
+    // transition, then removes the element once that transition lands.
+    //
+    // The timeout here is deliberately far below the reduced-motion beacon's own
+    // lifetime (2500ms for the arrows+spotlight variant, 3000ms for the plain glow):
+    // those runs self-remove on their WAAPI anim.finished, so a generous POLL_TIMEOUT
+    // would be satisfied by natural completion and this wait would pass with or without
+    // the fade. Keeping it under a second means only the scroll-triggered fade can
+    // satisfy it.
+    const FADE_TIMEOUT = 1000;
+    await page.mouse.wheel(0, 400);
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+      timeout: FADE_TIMEOUT,
+    });
+
+    const postCount = await evalInContentScript('window.__ocTest.getActiveBeacons()');
+    assert.strictEqual(
+      postCount,
       0,
-      `expected the reduced-motion path (which returns out of animate() before ever reaching the effectsRegistry increment) to leave activeBeacons at 0, got ${count}`
+      `expected fadeActiveBeacons() to zero activeBeacons and remove the reduced-motion ` +
+        `beacon on scroll, got ${postCount}`
     );
   });
 });
