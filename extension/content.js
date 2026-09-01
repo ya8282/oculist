@@ -1034,6 +1034,12 @@
   // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
   // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
   function destroyBeacon(b) {
+    // Set here as well as at fadeActiveBeacons()'s fade start (oculist-xi4) so the marker
+    // means "this run is cancelled" rather than "cancelled via the fade path". Redundant
+    // for a caller that only checks isConnected, since remove() below settles that
+    // immediately — but a timer callback reading __ocCancelled alone would otherwise miss
+    // every cancellation that came through cancelBeacons().
+    b.__ocCancelled = true;
     if (b.__rafId) { cancelAnimationFrame(b.__rafId); b.__rafId = null; }
     if (b.__waapiAnims) {
       for (var j = 0; j < b.__waapiAnims.length; j++) {
@@ -2406,13 +2412,14 @@
     // (left/top/width/height/transform) is fixed for the rest of this beacon's life, so
     // this stays correct for the container's entire lifetime. A test that needs the
     // container's rendered position should read this instead of re-querying '.oc-beacon'
-    // near completion: this beacon's own container is removed by an independent wall-clock
-    // setTimeout(DUR) that empirically fires no later than, and usually strictly before, the
-    // rAF loop's own final "done" tick (that tick can only run on the next vsync-aligned
-    // callback at-or-after elapsed>=DUR, while the timer fires right at DUR) -- so a live
-    // '.oc-beacon' query taken anywhere near or after completion is racing that removal and
-    // can lose. Capturing here, long before either the completion tick or the removal timer
-    // can fire, sidesteps that race entirely instead of trying to win it.
+    // near completion: this beacon's own container is removed in frame()'s own completion
+    // branch below (mirroring animateChronoTunnel, oculist-3ae/oculist-ws4), strictly after
+    // the last frame that will ever run -- but it can also be removed early, before this run
+    // completes, by cancelBeacons()/fadeActiveBeacons() on a new search or a scroll. Either
+    // way, a live '.oc-beacon' query taken anywhere near or after completion risks finding
+    // the element already detached. Capturing here, right after the container is placed and
+    // long before any of those removal paths can run, sidesteps that risk entirely instead
+    // of trying to win a race against it.
     //
     // Stored in DOCUMENT coordinates (viewport rect + the scroll offset at capture time),
     // not viewport coordinates: getBoundingClientRect() is viewport-relative, and any scroll
@@ -2485,8 +2492,10 @@
     // directly instead of racing a second, independent requestAnimationFrame poll against
     // this one for a chance to rasterise the canvas at a lucky instant (that race is what
     // starved the old pixel-sampling test under parallel load). speedLinesDone flips once
-    // this run reaches its final frame, giving the test a deterministic completion signal
-    // that isn't tied to wall-clock container removal.
+    // this run reaches its final frame, giving the test a deterministic completion signal.
+    // Since oculist-ws4 it is also the signal that ORDERS removal: the completion branch
+    // sets it and then removes the container in the same tick, so no frame can run after
+    // the container is gone.
     //
     // lastSpeedLinesLaneBounds pins *where* the clear lane actually is, in the same local
     // canvas-y space as everything else in this function: top/bot are the exact laneTop/
@@ -2634,15 +2643,37 @@
       } else {
         ctx.clearRect(0, 0, W, H);
         window.__ocTest.speedLinesDone = true;
+        // Removal used to be an independently-timed setTimeout(DUR) fired right after the
+        // first rAF; that timer consistently fired ~8-16ms before this completing frame, so
+        // exactly one more frame() ran after the container was already detached, one frame
+        // of stale hook writes past the point a reader would expect this run to be over
+        // (oculist-3ae review 1 found this for animateChronoTunnel; same idiom here).
+        // Removing here instead, in frame()'s own completion branch, puts removal strictly
+        // after the last frame that will ever run, by construction of this single rAF loop,
+        // instead of racing a second, unrelated clock against it. There is no
+        // cancelAnimationFrame call here — none is needed, since taking this branch means no
+        // further frame is ever scheduled.
+        //
+        // Three things can still remove this container before this branch runs:
+        // cancelBeacons() and fadeActiveBeacons() (both via destroyBeacon(), since the
+        // container carries .oc-beacon and .oc-beacon-transient) on a new search or a
+        // scroll, or this branch itself on normal completion. Whichever fires first wins;
+        // container.remove() on an already-detached node is a harmless no-op.
+        //
+        // Accepted trade (mirrors oculist-3ae review 2): if the tab is hidden, rAF is
+        // suspended by the browser and this branch never runs until the tab is shown again,
+        // so the container now persists attached instead of being removed by the old
+        // wall-clock timer. On resume, one frame runs and removes it — at most one frame of
+        // stale streaks, self-healing. The offsetting benefit: while suspended, the
+        // container stays reachable by cancelBeacons() (it is still in the DOM), where the
+        // old timer would eventually have detached it regardless of tab visibility,
+        // permanently outside cancelBeacons()'s reach.
+        container.remove();
       }
     }
 
     animFrameId = requestAnimationFrame(frame);
     container.__rafId = animFrameId;
-
-    setTimeout(function () {
-      container.remove();
-    }, DUR);
   }
 
   // Chrono Tunnel: a slit-scan tunnel of rotating polygons rushing outward past the
@@ -3064,18 +3095,21 @@
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
     //
-    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle,
-    // so it is not cancelled if this run's container is removed early (a new search calls
-    // animate() -> cancelBeacons() synchronously before every run, including the one that
-    // reset the hook above; a scroll mid-effect calls fadeActiveBeacons()). Both paths
-    // detach the container via destroyBeacon() before this timer can fire in that
-    // scenario, so the isConnected check below tells a stale timer (its container already
-    // detached) apart from a live one (still attached, genuinely settled) and stops the
-    // stale timer from clobbering a later run's fresh `false` back to `true` (oculist-3ae
-    // review 2).
+    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle, so
+    // it is not cancelled if this run is cancelled early. Two independent paths can cancel
+    // it: a new search calls animate() -> cancelBeacons() synchronously before every run
+    // (including the one that reset the hook above), which detaches the container via
+    // destroyBeacon() immediately — isConnected alone already tells that stale timer (its
+    // container already detached) apart from a live one (oculist-3ae review 2). A scroll
+    // mid-effect calls fadeActiveBeacons() instead, which does NOT detach synchronously: it
+    // fades opacity for 50ms and only removes the container afterward, so this timer can
+    // fire with the container still isConnected even though the run was already cancelled
+    // (oculist-xi4). __ocCancelled is set synchronously the instant fadeActiveBeacons()
+    // starts that fade, so checking it alongside isConnected catches this second path too,
+    // without needing the container to have actually been removed yet.
     window.__ocTest.cyberVisionBracketsSettled = false;
     setTimeout(function () {
-      if (container.isConnected) {
+      if (container.isConnected && !container.__ocCancelled) {
         window.__ocTest.cyberVisionBracketsSettled = true;
       }
     }, BRACKET_DELAY + BRACKET_DUR * 0.3);
@@ -3390,8 +3424,16 @@
     if (!rect || rect.width === 0 || rect.height === 0) return;
     if (!settings.visionSettings || !settings.visionSettings.textLabels) return;
 
+    // Unreachable today, kept defensively (oculist-egy): every caller reaches this
+    // through drawActiveOverlays(), and both of ITS callers run cancelBeacons() one
+    // statement earlier, which already destroys every .oc-beacon including this label.
+    // So `existing` is always null in production. The guard stays because it enforces
+    // id uniqueness — one added caller of drawActiveOverlays() and two elements would
+    // share #oc-active-match-label, which is worse than the leak. destroyBeacon() and
+    // not a bare remove() so that if it ever does run, the label's live 250ms fade-in
+    // Animation is cancelled rather than left 'running' on a detached node.
     var existing = document.getElementById('oc-active-match-label');
-    if (existing) existing.remove();
+    if (existing) destroyBeacon(existing);
 
     var label = document.createElement('div');
     label.id = 'oc-active-match-label';
@@ -3442,6 +3484,15 @@
     })];
   }
 
+  // Same test-reachability reasoning as window.__ocTest.cancelBeacons above: both of
+  // drawActiveMatchLabel's real callers (drawActiveOverlays(), reached only from
+  // animate()/repositionActiveOverlays()) call cancelBeacons() immediately beforehand, so
+  // a real second draw never actually lands on a pre-existing #oc-active-match-label — the
+  // internal destroyBeacon(existing) guard above only fires through a call path a test
+  // cannot reach via simulated navigation alone. Exposing the real closure directly lets a
+  // test call it twice back-to-back to exercise that guard on its own terms.
+  window.__ocTest.drawActiveMatchLabel = drawActiveMatchLabel;
+
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
   // entry: the registry's run(rect) contract only gets a rect, with no access to the
   // matched text, so this is called directly from drawActiveOverlays() instead, where it
@@ -3453,8 +3504,15 @@
   // back to the plain label — magnifier off, zero matches, or a match whose text collapses
   // to nothing after whitespace trimming all decline without leaving anything behind.
   function drawActiveMatchMagnifier(rect) {
+    // Unreachable today, kept defensively — same reasoning as drawActiveMatchLabel's
+    // guard above (oculist-egy). It also sits ahead of the decline guards below on
+    // purpose, so a call that declines to draw still clears a stale card.
+    // destroyBeacon() and not a bare remove() because `existing` is the card, and both
+    // the card's own lift/fade Animation and its connector child's fade Animation are
+    // hung off card.__waapiAnims (see the "connector is a child of card" comments
+    // below), so a bare remove() would strand up to a 470ms lift still 'running'.
     var existing = document.getElementById('oc-active-match-magnifier');
-    if (existing) existing.remove();
+    if (existing) destroyBeacon(existing);
 
     if (!rect || rect.width === 0 || rect.height === 0) return false;
     if (!settings.visionSettings || !settings.visionSettings.magnifier) return false;
@@ -3634,6 +3692,14 @@
 
     return true;
   }
+
+  // Same test-reachability reasoning as window.__ocTest.drawActiveMatchLabel above:
+  // drawActiveMatchMagnifier's own internal destroyBeacon(existing) guard only fires
+  // through a call path (a bare second draw with no intervening cancelBeacons()) a test
+  // cannot reach via simulated navigation alone, since its real caller always runs
+  // cancelBeacons() first. Exposing the real closure directly lets a test call it twice
+  // back-to-back to exercise that guard on its own terms.
+  window.__ocTest.drawActiveMatchMagnifier = drawActiveMatchMagnifier;
 
   // The OS-level preference is a downgrade-only signal: it can turn 'full' into
   // 'reduced', but it never overrides an explicit 'reduced'/'off' upward. Matching
@@ -3860,10 +3926,13 @@
           // term happens to be a substring/superstring of it. Routed through the shared
           // helper (rather than a narrower `child !== wrap` identity check) so any future
           // Oculist node mounted under body is excluded automatically instead of
-          // silently self-matching. The extra cost per element is a couple of cheap
-          // string/classList comparisons on top of the classList.contains() this branch
-          // already did, not a closest()/getComputedStyle() walk, so it stays cheap on
-          // this hot path.
+          // silently self-matching. Since oculist-39z that helper is a closest() walk,
+          // so the cost here is O(depth) per element rather than the O(1) classList
+          // comparisons it used to be — still well under the getComputedStyle() this
+          // loop already pays per element, but no longer free. The walk itself never
+          // changes the answer on this path: traverse() roots at document.body and every
+          // Oculist node except wrap mounts on documentElement or head, so nothing with
+          // an Oculist ancestor is ever passed in.
           if (!SKIP_TAGS[child.tagName] && !isOculistNode(child)) {
             if (child.shadowRoot) {
               traverse(child.shadowRoot);
@@ -4355,18 +4424,25 @@
   // detach, so highlights "vanish" without any visible error. A debounced
   // MutationObserver re-runs the last search whenever the page mutates.
 
+  // Roots that define "ours" — anything at or under one of these is an oculist node.
+  // A closest() ancestor walk (rather than an identity/class check on the node itself)
+  // is what lets this recognise beacon-descendant elements (e.g. Cyber-Vision's
+  // oc-cv-readout, a child of .oc-beacon) and their text-node children, not just the
+  // roots themselves. Never widen this to a bare class-prefix match ("oc-*") — real
+  // page content is never inside #oc-wrap or a .oc-beacon, so anchoring on these roots
+  // is what keeps genuine page mutations from being swallowed.
+  var OCULIST_ROOT_SELECTOR = '#oc-wrap, #oc-global-highlight-styles, .oc-beacon, .oc-viewport-marker';
+
   function isOculistNode(node) {
     if (!node) return false;
     if (node === wrap) return true;
-    if (node.nodeType === 1) {
-      if (node.id === 'oc-wrap' || node.id === 'oc-global-highlight-styles') return true;
-      if (typeof node.classList === 'undefined') return false;
-      // Beacons and viewport markers are mounted on documentElement, which the observer
-      // now watches, so both have to be recognised or our own drawing retriggers a scan.
-      if (node.classList.contains('oc-beacon')) return true;
-      if (node.classList.contains('oc-viewport-marker')) return true;
-    }
-    return false;
+    // Text nodes have no closest() of their own — walk from the parent element instead.
+    // A detached removed text node's parentElement is null and this correctly finds
+    // nothing; isOculistMutation() covers that case separately via m.target, which is
+    // the (still-attached) parent element the removal happened on.
+    var el = node.nodeType === 1 ? node : (node.nodeType === 3 ? node.parentElement : null);
+    if (!el || typeof el.closest !== 'function') return false;
+    return el.closest(OCULIST_ROOT_SELECTOR) !== null;
   }
 
   // A mutation is ours if it happened inside our UI, or if every node it added or
@@ -4962,6 +5038,12 @@
     activeBeacons = 0;
     for (var i = 0; i < beacons.length; i++) {
       var b = beacons[i];
+      // Marked the instant the fade starts, not at removal 50ms later (oculist-xi4) — this
+      // beacon is logically cancelled right now, but stays isConnected for another 50ms, and
+      // any settle-style flag a beacon schedules off its own duration (animateCyberVision's
+      // cyberVisionBracketsSettled) needs a way to tell "cancelled, still attached" apart
+      // from "genuinely still live" that does not depend on detachment.
+      b.__ocCancelled = true;
       b.style.transition = 'opacity 50ms ease-out';
       b.style.opacity = '0';
     }
