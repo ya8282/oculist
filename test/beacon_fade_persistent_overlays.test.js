@@ -211,16 +211,10 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     //
     // Either way, animate() (content.js) does its cancelBeacons()-plus-redraw in one
     // synchronous task -- drawActiveOverlays() and the effect itself (run(), or
-    // animateReducedMotion() on the reduced-motion path) both append
-    // their elements before that task yields -- so a bare waitForSelector('.oc-beacon')
-    // would in fact resolve with both the persistent overlay and the transient beacon
-    // already present. This wait is not guarding against a hazard that currently exists;
-    // it is more precision than strictly necessary, kept so the elements tagged below are
-    // unambiguously the settled ones.
-    //
-    // So wait for the state this test actually needs -- one persistent overlay AND one
-    // transient beacon, both present -- and then for the DOM to stop churning, so the
-    // elements tagged below are the settled ones that survive to the assertions.
+    // animateReducedMotion() on the reduced-motion path) both append their elements
+    // before that task yields -- so waiting for one persistent overlay AND one transient
+    // beacon to both be present is already the settled state; there is no partially-drawn
+    // DOM state in between to wait out.
     //
     // (An earlier version of this comment blamed a vision-settings change for leaving a
     // ~390ms hole with nothing drawn. That was wrong: oculist-2c5 measured the settings
@@ -230,36 +224,21 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     //
     // (A still-earlier version of this comment also said 'scrollend' fired TWICE, ~47ms
     // apart, so animate()'s cancelBeacons()-plus-redraw ran a second time right after the
-    // first draw and this helper had to wait out that second churn cycle too. That was
-    // wrong: oculist-7k0 (commit 03d7f97) found the double draw was never a doubled
-    // native 'scrollend' -- that listener is {once:true} and cannot re-fire -- but an
-    // orphaned scrollDebounceTimer: whichever of the native scrollend or the 80ms
-    // debounce won the race removed both listeners but never cancelled the other path's
-    // already-scheduled timer. The fix makes onScrollEnd idempotent, so a scrolled
-    // navigation now draws exactly once and there is no second churn cycle to wait out.)
-    await page.evaluate(() => {
-      window.__ocBeaconChurn = performance.now();
-      if (window.__ocBeaconChurnObserver) window.__ocBeaconChurnObserver.disconnect();
-      window.__ocBeaconChurnObserver = new MutationObserver((recs) => {
-        for (const r of recs) {
-          for (const n of [...r.addedNodes, ...r.removedNodes]) {
-            if (n.classList && n.classList.contains('oc-beacon')) {
-              window.__ocBeaconChurn = performance.now();
-              return;
-            }
-          }
-        }
-      });
-      window.__ocBeaconChurnObserver.observe(document.documentElement, { childList: true, subtree: true });
-    });
-
-    const QUIET_MS = 250;
+    // first draw and this helper had to wait out that second churn cycle too, via a
+    // MutationObserver-based quiet-period wait. That was wrong twice over: oculist-7k0
+    // (commit 03d7f97) found the double draw was never a doubled native 'scrollend' --
+    // that listener is {once:true} and cannot re-fire -- but an orphaned
+    // scrollDebounceTimer, and made onScrollEnd idempotent so a scrolled navigation now
+    // draws exactly once. oculist-r1w then measured the churn observer directly across
+    // repeated runs of both tests below and found both elements appended in one batch,
+    // ~50ms after cancelBeacons(), with no further ADDS -- the only later mutation is the
+    // fade's own removal. There is no second churn cycle left to
+    // wait out, so the quiet-period wait was removed.)
     await page.waitForFunction(
-      (quiet) =>
+      () =>
         document.querySelector('.oc-beacon:not(.oc-beacon-transient)') &&
-        document.querySelector('.oc-beacon-transient') &&
-        performance.now() - window.__ocBeaconChurn > quiet,
-      QUIET_MS,
+        document.querySelector('.oc-beacon-transient'),
+      null,
       { timeout: POLL_TIMEOUT }
     );
 
