@@ -3349,7 +3349,10 @@
     });
   }
 
-  function drawActiveMatchBorder(rect) {
+  // skipEntrance draws straight at opacity:1 with no fade — used by
+  // repositionActiveOverlays() (oculist-rrn), which redraws for a settings/resize change
+  // that didn't move the match and shouldn't blink it.
+  function drawActiveMatchBorder(rect, skipEntrance) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
     var borderStyle = (settings.visionSettings && settings.visionSettings.borderStyle) ? settings.visionSettings.borderStyle : 'none';
     if (borderStyle === 'none') return;
@@ -3377,17 +3380,19 @@
       'pointer-events:none',
       'z-index:2147483640',
       'box-shadow:0 0 8px ' + color,
-      'opacity:0'
+      'opacity:' + (skipEntrance ? '1' : '0')
     ].join(';');
     document.documentElement.appendChild(borderEl);
 
-    borderEl.__waapiAnims = [borderEl.animate([
-      { opacity: 0 },
-      { opacity: 1 }
-    ], {
-      duration: 200,
-      fill: 'forwards'
-    })];
+    if (!skipEntrance) {
+      borderEl.__waapiAnims = [borderEl.animate([
+        { opacity: 0 },
+        { opacity: 1 }
+      ], {
+        duration: 200,
+        fill: 'forwards'
+      })];
+    }
   }
 
   function drawActiveMatchShape(rect) {
@@ -3420,7 +3425,8 @@
     document.documentElement.appendChild(shape);
   }
 
-  function drawActiveMatchLabel(rect) {
+  // skipEntrance: see drawActiveMatchBorder above.
+  function drawActiveMatchLabel(rect, skipEntrance) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
     if (!settings.visionSettings || !settings.visionSettings.textLabels) return;
 
@@ -3456,7 +3462,7 @@
       'pointer-events:none',
       'white-space:nowrap',
       'box-shadow:0 4px 10px rgba(0,0,0,0.4)',
-      'opacity:0'
+      'opacity:' + (skipEntrance ? '1' : '0')
     ].join(';');
 
     label.textContent = 'Match #' + (activeIndex + 1) + ' of ' + searchRanges.length;
@@ -3475,13 +3481,15 @@
     label.style.left = lx + 'px';
     label.style.top = ly + 'px';
 
-    label.__waapiAnims = [label.animate([
-      { opacity: 0 },
-      { opacity: 1 }
-    ], {
-      duration: 250,
-      fill: 'forwards'
-    })];
+    if (!skipEntrance) {
+      label.__waapiAnims = [label.animate([
+        { opacity: 0 },
+        { opacity: 1 }
+      ], {
+        duration: 250,
+        fill: 'forwards'
+      })];
+    }
   }
 
   // Same test-reachability reasoning as window.__ocTest.cancelBeacons above: both of
@@ -3503,7 +3511,8 @@
   // the match. Returns whether it actually drew a card so the caller knows whether to fall
   // back to the plain label — magnifier off, zero matches, or a match whose text collapses
   // to nothing after whitespace trimming all decline without leaving anything behind.
-  function drawActiveMatchMagnifier(rect) {
+  // skipEntrance: see drawActiveMatchBorder above.
+  function drawActiveMatchMagnifier(rect, skipEntrance) {
     // Unreachable today, kept defensively — same reasoning as drawActiveMatchLabel's
     // guard above (oculist-egy). It also sits ahead of the decline guards below on
     // purpose, so a call that declines to draw still clears a stale card.
@@ -3563,7 +3572,7 @@
     // 'off' at its final opacity:1 instead of flipping it after the fact avoids that
     // transition firing and keeps 'off' genuinely static, with zero animations.
     var motion = effectiveMotion();
-    var initialOpacity = motion === 'off' ? '1' : '0';
+    var initialOpacity = (motion === 'off' || skipEntrance) ? '1' : '0';
 
     var card = document.createElement('div');
     card.id = 'oc-active-match-magnifier';
@@ -3649,8 +3658,9 @@
     card.style.left = cx + 'px';
     card.style.top = cy + 'px';
 
-    if (motion === 'off') {
-      // Opacity is already baked into the initial cssText above — nothing left to do.
+    if (motion === 'off' || skipEntrance) {
+      // Opacity (and, for the zoom-lift case, the identity transform default) is
+      // already baked into the initial styles above — nothing left to animate.
       return true;
     }
 
@@ -3727,20 +3737,20 @@
   // The accessibility overlays (border, label, shape) are absolutely positioned in
   // document coordinates from a one-shot rect, so any reflow strands them. Split out
   // from animate() so a resize can redraw them in place without replaying the beacon.
-  function drawActiveOverlays(rect) {
+  function drawActiveOverlays(rect, skipEntrance) {
     var motion = effectiveMotion();
 
     // Draw accessibility overlays (border + label) if motion is not completely off
     if (motion !== 'off') {
-      drawActiveMatchBorder(rect);
+      drawActiveMatchBorder(rect, skipEntrance);
     }
 
     // The magnifier absorbs the "N of M" counter when it draws — both want the same
     // space above the match, so exactly one of them may. Falls back to the plain label
     // when the magnifier declines (off, or a match whose text collapsed to nothing).
-    var magnifierDrawn = drawActiveMatchMagnifier(rect);
+    var magnifierDrawn = drawActiveMatchMagnifier(rect, skipEntrance);
     if (!magnifierDrawn) {
-      drawActiveMatchLabel(rect);
+      drawActiveMatchLabel(rect, skipEntrance);
     }
     drawActiveMatchShape(rect);
 
@@ -3754,6 +3764,14 @@
   // does not re-run the beacon effect: that is transient, and replaying it on every
   // resize is noise for exactly the low-vision and reduced-motion users who rely on
   // these overlays.
+  //
+  // oculist-rrn: also the entry point for an overlay-affecting vision-settings change
+  // (see the settings-change caller below), and neither case moves the match relative
+  // to the page — so this redraws with skipEntrance=true, drawing the border/label/
+  // magnifier straight at their final opacity/position instead of destroy-then-recreate
+  // replaying each one's entrance fade/lift. The cancelBeacons() below is what makes
+  // add/remove of an overlay (e.g. toggling textLabels) land with no orphans — not the
+  // draw* functions' same-id guards, which are dead under this call graph (oculist-egy).
   function repositionActiveOverlays() {
     if (!wrap || activeIndex < 0 || activeIndex >= searchRanges.length) return;
     var range = searchRanges[activeIndex];
@@ -3766,7 +3784,7 @@
     }
     if (!rect || rect.width === 0 || rect.height === 0) return;
     cancelBeacons();
-    drawActiveOverlays(rect);
+    drawActiveOverlays(rect, true);
   }
 
   function animate(rect) {
