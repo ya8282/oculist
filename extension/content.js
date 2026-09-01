@@ -4972,8 +4972,15 @@
             }
 
             var scrollTimeout = null;
+            // ponytail: native 'scrollend' and the scroll-debounce timer can both
+            // fire for one navigation (~47ms apart); this flag makes the handler
+            // idempotent so animate() only tears down/redraws once per navigation.
+            var scrollEndFired = false;
             var onScrollEnd = function () {
+              if (scrollEndFired) return;
+              scrollEndFired = true;
               if (scrollTimeout) clearTimeout(scrollTimeout);
+              if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
               if (activeScrollTimeout === scrollTimeout) activeScrollTimeout = null;
               window.removeEventListener('scrollend', onScrollEnd);
               window.removeEventListener('scroll', onScrollEndDebounced);
