@@ -933,6 +933,29 @@
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
   var activeScrollDebounceTimer = null;
+
+  // Tears down every handle for the in-flight scroll-to-match (timeout,
+  // scrollend listener, scroll-debounce listener, and the debounce's own
+  // pending timer) and nulls each so a stale one is never mistaken for live.
+  function clearActiveScrollHandles() {
+    if (activeScrollTimeout) {
+      clearTimeout(activeScrollTimeout);
+      activeScrollTimeout = null;
+    }
+    if (activeScrollEndHandler) {
+      window.removeEventListener('scrollend', activeScrollEndHandler);
+      activeScrollEndHandler = null;
+    }
+    if (activeScrollDebounceHandler) {
+      window.removeEventListener('scroll', activeScrollDebounceHandler);
+      activeScrollDebounceHandler = null;
+    }
+    if (activeScrollDebounceTimer) {
+      clearTimeout(activeScrollDebounceTimer);
+      activeScrollDebounceTimer = null;
+    }
+  }
+
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
@@ -984,27 +1007,12 @@
       clearTimeout(domObserverTimer);
       domObserverTimer = null;
     }
-    if (activeScrollTimeout) {
-      clearTimeout(activeScrollTimeout);
-      activeScrollTimeout = null;
-    }
-    if (activeScrollEndHandler) {
-      window.removeEventListener('scrollend', activeScrollEndHandler);
-      activeScrollEndHandler = null;
-    }
-    if (activeScrollDebounceHandler) {
-      window.removeEventListener('scroll', activeScrollDebounceHandler);
-      activeScrollDebounceHandler = null;
-    }
     // oculist-tz6: same hazard oculist-rbx fixed at the smooth-scroll branch entry — the
-    // debounce TIMER (as opposed to the listener above that schedules it) has no other
+    // debounce TIMER (as opposed to the listener that schedules it) has no other
     // module-level handle, so a still-pending 80ms timer from a torn-down navigation
-    // survives this teardown and can fire onScrollEnd into a freshly rebuilt overlay
+    // survives a listener-only teardown and can fire onScrollEnd into a freshly rebuilt overlay
     // (window.__ocToggle() calls buildUI() right after this in the same module instance).
-    if (activeScrollDebounceTimer) {
-      clearTimeout(activeScrollDebounceTimer);
-      activeScrollDebounceTimer = null;
-    }
+    clearActiveScrollHandles();
 
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
@@ -4968,27 +4976,12 @@
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
-            if (activeScrollTimeout) {
-              clearTimeout(activeScrollTimeout);
-              activeScrollTimeout = null;
-            }
-            if (activeScrollEndHandler) {
-              window.removeEventListener('scrollend', activeScrollEndHandler);
-              activeScrollEndHandler = null;
-            }
-            if (activeScrollDebounceHandler) {
-              window.removeEventListener('scroll', activeScrollDebounceHandler);
-              activeScrollDebounceHandler = null;
-            }
             // oculist-rbx: the debounce TIMER (as opposed to the listener that schedules
             // it) is closed over per-navigation and has no other module-level handle, so a
-            // superseded navigation's already-scheduled 80ms timer survives the listener
-            // teardown above and can still fire onScrollEnd for a match that is no longer
+            // superseded navigation's already-scheduled 80ms timer survives a listener-only
+            // teardown and can still fire onScrollEnd for a match that is no longer
             // active, animate()-ing a stale rect.
-            if (activeScrollDebounceTimer) {
-              clearTimeout(activeScrollDebounceTimer);
-              activeScrollDebounceTimer = null;
-            }
+            clearActiveScrollHandles();
 
             var scrollTimeout = null;
             // ponytail: native 'scrollend' and the scroll-debounce timer can both
@@ -5044,22 +5037,7 @@
       // teardown the superseded navigation's four handles (and its still-running native
       // scrollIntoView animation) are left live and its orphaned timer/scrollend can still
       // animate() a stale rect over the draw below.
-      if (activeScrollTimeout) {
-        clearTimeout(activeScrollTimeout);
-        activeScrollTimeout = null;
-      }
-      if (activeScrollEndHandler) {
-        window.removeEventListener('scrollend', activeScrollEndHandler);
-        activeScrollEndHandler = null;
-      }
-      if (activeScrollDebounceHandler) {
-        window.removeEventListener('scroll', activeScrollDebounceHandler);
-        activeScrollDebounceHandler = null;
-      }
-      if (activeScrollDebounceTimer) {
-        clearTimeout(activeScrollDebounceTimer);
-        activeScrollDebounceTimer = null;
-      }
+      clearActiveScrollHandles();
       if (shouldAnimate) {
         setTimeout(function () {
           var freshRect = activeRange.getBoundingClientRect();
