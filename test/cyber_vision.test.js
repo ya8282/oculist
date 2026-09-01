@@ -608,12 +608,12 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // when the match is NOT already fully in the viewport, and that flag makes
     // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
     // first guarantees replay()'s own Enter never sets it.
-    await page.evaluate(() => {
-      document.body.style.paddingBottom = '2000px';
-      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-    });
-
     try {
+      await page.evaluate(() => {
+        document.body.style.paddingBottom = '2000px';
+        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+      });
+
       await replay();
 
       const snapshotCount = await page.evaluate(() => {
@@ -673,13 +673,13 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // Same centring as the WAAPI-cancel test above, and for the same reason: replay()'s own
     // Enter must never trigger highlightActiveRange()'s triggerAutoScrollFlag(), which would
     // make handleScroll() ignore the scroll this test fires (isAutoScrolling, content.js).
-    await page.evaluate(() => {
-      document.body.style.paddingBottom = '2000px';
-      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-    });
-    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
-
     try {
+      await page.evaluate(() => {
+        document.body.style.paddingBottom = '2000px';
+        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+      });
+      await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+
       await armScrollRace();
       await page.keyboard.press('Enter');
       await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });

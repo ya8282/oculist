@@ -789,26 +789,29 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
 
     const afterCancel = await evalInContentScript('window.__ocTest.speedLinesFrameCount');
 
-    // Positively confirm the frame counter never grows again: wait (up to the same
-    // POLL_TIMEOUT budget used everywhere else in this suite) for it to exceed its
-    // post-cancellation value. If cancelBeacons() actually cancelled the rAF loop, that
-    // wait times out — which is the success case here — rather than resolving.
-    let grew = false;
-    try {
-      await waitForContentScriptValue(
-        evalInContentScript,
-        'window.__ocTest.speedLinesFrameCount',
-        (v) => v > afterCancel,
-        { timeout: POLL_TIMEOUT }
-      );
-      grew = true;
-    } catch (e) {
-      if (!/timed out/.test(e.message)) throw e;
-    }
+    // oculist-mxn: this used to poll for a full POLL_TIMEOUT (5s) on its success path, the
+    // same shape oculist-j5n fixed above. Positively confirm the frame counter never grows
+    // again by letting WS4_FRAME_BUDGET more real animation frames tick from inside the page,
+    // then reading the counter. Unlike the WS4 removal-ordering race above (a single frame of
+    // skew), this is a binary check: either cancelBeacons() actually cancelled the rAF loop
+    // and no frame() call is ever scheduled again, or it didn't and the counter grows every
+    // single frame — so the same budget carries an even wider margin here. If the loop
+    // genuinely stopped, the counter comes back unchanged, which is the success case here.
+    const afterBudget = await evalInContentScript(`
+      new Promise(function (resolve) {
+        var remaining = ${WS4_FRAME_BUDGET};
+        function tick() {
+          if (remaining <= 0) { resolve(window.__ocTest.speedLinesFrameCount); return; }
+          remaining--;
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })
+    `);
     assert.strictEqual(
-      grew,
-      false,
-      `expected the rAF loop to have stopped after cancelBeacons(); frame count kept growing past ${afterCancel}`
+      afterBudget,
+      afterCancel,
+      `expected the rAF loop to have stopped after cancelBeacons(); frame count kept growing past ${afterCancel} (observed ${afterBudget} after ${WS4_FRAME_BUDGET} more rAF ticks)`
     );
   });
 });
