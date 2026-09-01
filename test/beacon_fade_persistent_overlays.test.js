@@ -199,15 +199,25 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.keyboard.press('Enter');
 
-    // Waiting on a bare '.oc-beacon' is not enough. A vision-settings change makes
-    // content.js redraw the overlays immediately and then tear them down again a frame
-    // later, leaving NO beacon at all until its debounced rescan redraws ~400ms on --
-    // measured with a MutationObserver: '+persistent' at 188ms, '-persistent' at 189ms,
-    // nothing until 581ms. waitForSelector() polls fast enough to land inside that 1ms
-    // window, and the count below then reads the empty hole and sees zero of both.
+    // Waiting on a bare '.oc-beacon' is not enough, for two reasons that compound.
+    //
+    // The cancelBeacons() above empties the DOM, and the preceding test leaves the match
+    // scrolled out of the viewport, so this Enter takes highlightActiveRange()'s
+    // smooth-scroll branch and does not draw anything until 'scrollend' fires ~360ms
+    // later. Then onScrollEnd fires TWICE, ~47ms apart, and animate() runs its
+    // cancelBeacons()-plus-full-redraw both times -- so the DOM churns again right after
+    // the first draw. A waitForSelector('.oc-beacon') resolving on that first draw hands
+    // the count below elements that are about to be torn down.
+    //
     // So wait for the state this test actually needs -- one persistent overlay AND one
     // transient beacon, both present -- and then for the DOM to stop churning, so the
     // elements tagged below are the settled ones that survive to the assertions.
+    //
+    // (An earlier version of this comment blamed a vision-settings change for leaving a
+    // ~390ms hole with nothing drawn. That was wrong: oculist-2c5 measured the settings
+    // path and found it removes and redraws in a single script turn, never dropping a
+    // frame. The delay is the smooth-scroll wait above, and the empty window is this
+    // helper's own cancelBeacons().)
     await page.evaluate(() => {
       window.__ocBeaconChurn = performance.now();
       if (window.__ocBeaconChurnObserver) window.__ocBeaconChurnObserver.disconnect();
