@@ -2659,6 +2659,20 @@
   // collapses the sweep to a single hue and cuts the ring count hard — this is the
   // loudest of the four new effects, so Lite Mode has to be genuinely calm.
   function animateChronoTunnel(rect) {
+    // Reset every chrono __ocTest hook before the guard below can return early, so a
+    // skipped run (rect missing or zero-sized) can never be graded — or, worse, keep
+    // accumulating hueSamples — against the previous run's leftover values (oculist-3ae,
+    // same gap oculist-47e closed for animateSpeedLines). lastChronoHueRun/lastChronoAnchor
+    // reset to null (unambiguous "this run produced nothing"; a real run never writes null
+    // back at its own setup, so reading a property off either one after a skipped run
+    // throws instead of silently reporting the prior run's hues/anchor).
+    // chronoFrameCount resets to 0 and chronoDone to false, mirroring a real run's own
+    // setup before its first frame.
+    window.__ocTest.lastChronoHueRun = null;
+    window.__ocTest.lastChronoAnchor = null;
+    window.__ocTest.chronoFrameCount = 0;
+    window.__ocTest.chronoDone = false;
+
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
     var mw = rect.width;
@@ -2814,15 +2828,36 @@
       } else {
         ctx.clearRect(0, 0, W, H);
         window.__ocTest.chronoDone = true;
+        // Removal used to be an independently-timed setTimeout(DUR) fired right after the
+        // first rAF; that timer consistently fired ~8-16ms before this completing frame,
+        // so exactly one more frame() ran after the container was already detached,
+        // pushing into whatever __ocTest.lastChronoHueRun a later run had installed by
+        // then (oculist-3ae review 1). Removing here instead, in frame()'s own completion
+        // branch, puts removal strictly after the last frame that will ever run, by
+        // construction of this single rAF loop, instead of racing a second, unrelated
+        // clock against it. There is no cancelAnimationFrame call here — none is needed,
+        // since taking this branch means no further frame is ever scheduled.
+        //
+        // Three things can still remove this container before this branch runs:
+        // cancelBeacons() and fadeActiveBeacons() (both via destroyBeacon(), since the
+        // container carries .oc-beacon and .oc-beacon-transient) on a new search or a
+        // scroll, or this branch itself on normal completion. Whichever fires first wins;
+        // container.remove() on an already-detached node is a harmless no-op.
+        //
+        // Accepted trade (oculist-3ae review 2): if the tab is hidden, rAF is suspended by
+        // the browser and this branch never runs until the tab is shown again, so the
+        // container now persists attached instead of being removed by the old wall-clock
+        // timer. On resume, one frame runs and removes it — at most one frame of stale
+        // rings, self-healing. The offsetting benefit: while suspended, the container
+        // stays reachable by cancelBeacons() (it is still in the DOM), where the old timer
+        // would eventually have detached it regardless of tab visibility, permanently
+        // outside cancelBeacons()'s reach.
+        container.remove();
       }
     }
 
     animFrameId = requestAnimationFrame(frame);
     container.__rafId = animFrameId;
-
-    setTimeout(function () {
-      container.remove();
-    }, DUR);
   }
 
   // Cyber-Vision: a targeting-HUD sweep over the viewport, resolving down onto the match.
@@ -2848,6 +2883,12 @@
   // undercut the effect's own premise. Every other surface (tint, scanlines, sweep, brackets,
   // readout) rides getEffectiveColors().beacon per the shared beacon contract.
   function animateCyberVision(rect) {
+    // Reset the __ocTest hook before the guard below can return early, so a skipped run
+    // (rect missing or zero-sized) can never look like a completed run off the previous
+    // run's leftover true (oculist-3ae, same gap oculist-47e closed for
+    // animateSpeedLines).
+    window.__ocTest.cyberVisionBracketsSettled = false;
+
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
     var mw = rect.width;
@@ -3013,7 +3054,8 @@
     }
 
     // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
-    // (mirrors speedLinesDone/chronoDone). The brackets' own keyframes (above) reach translate(0,0)
+    // (mirrors speedLinesDone/chronoDone; also reset ahead of the zero-rect guard above,
+    // oculist-3ae). The brackets' own keyframes (above) reach translate(0,0)
     // — fully snapped in — at offset 0.3 of their delay+duration and hold there until the
     // fade-out; that offset is exact real math derived from this run's own BRACKET_DELAY/
     // BRACKET_DUR, not a guess, so a timeout keyed to it is a genuine completion signal
@@ -3021,9 +3063,21 @@
     // end; here "settled" is a mid-animation point .finished cannot express, since waiting
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
+    //
+    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle,
+    // so it is not cancelled if this run's container is removed early (a new search calls
+    // animate() -> cancelBeacons() synchronously before every run, including the one that
+    // reset the hook above; a scroll mid-effect calls fadeActiveBeacons()). Both paths
+    // detach the container via destroyBeacon() before this timer can fire in that
+    // scenario, so the isConnected check below tells a stale timer (its container already
+    // detached) apart from a live one (still attached, genuinely settled) and stops the
+    // stale timer from clobbering a later run's fresh `false` back to `true` (oculist-3ae
+    // review 2).
     window.__ocTest.cyberVisionBracketsSettled = false;
     setTimeout(function () {
-      window.__ocTest.cyberVisionBracketsSettled = true;
+      if (container.isConnected) {
+        window.__ocTest.cyberVisionBracketsSettled = true;
+      }
     }, BRACKET_DELAY + BRACKET_DUR * 0.3);
 
     // Readout beside the brackets. Decorative HUD chrome, not content — aria-hidden so it is
