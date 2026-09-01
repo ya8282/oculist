@@ -2412,13 +2412,14 @@
     // (left/top/width/height/transform) is fixed for the rest of this beacon's life, so
     // this stays correct for the container's entire lifetime. A test that needs the
     // container's rendered position should read this instead of re-querying '.oc-beacon'
-    // near completion: this beacon's own container is removed by an independent wall-clock
-    // setTimeout(DUR) that empirically fires no later than, and usually strictly before, the
-    // rAF loop's own final "done" tick (that tick can only run on the next vsync-aligned
-    // callback at-or-after elapsed>=DUR, while the timer fires right at DUR) -- so a live
-    // '.oc-beacon' query taken anywhere near or after completion is racing that removal and
-    // can lose. Capturing here, long before either the completion tick or the removal timer
-    // can fire, sidesteps that race entirely instead of trying to win it.
+    // near completion: this beacon's own container is removed in frame()'s own completion
+    // branch below (mirroring animateChronoTunnel, oculist-3ae/oculist-ws4), strictly after
+    // the last frame that will ever run -- but it can also be removed early, before this run
+    // completes, by cancelBeacons()/fadeActiveBeacons() on a new search or a scroll. Either
+    // way, a live '.oc-beacon' query taken anywhere near or after completion risks finding
+    // the element already detached. Capturing here, right after the container is placed and
+    // long before any of those removal paths can run, sidesteps that risk entirely instead
+    // of trying to win a race against it.
     //
     // Stored in DOCUMENT coordinates (viewport rect + the scroll offset at capture time),
     // not viewport coordinates: getBoundingClientRect() is viewport-relative, and any scroll
@@ -2491,8 +2492,10 @@
     // directly instead of racing a second, independent requestAnimationFrame poll against
     // this one for a chance to rasterise the canvas at a lucky instant (that race is what
     // starved the old pixel-sampling test under parallel load). speedLinesDone flips once
-    // this run reaches its final frame, giving the test a deterministic completion signal
-    // that isn't tied to wall-clock container removal.
+    // this run reaches its final frame, giving the test a deterministic completion signal.
+    // Since oculist-ws4 it is also the signal that ORDERS removal: the completion branch
+    // sets it and then removes the container in the same tick, so no frame can run after
+    // the container is gone.
     //
     // lastSpeedLinesLaneBounds pins *where* the clear lane actually is, in the same local
     // canvas-y space as everything else in this function: top/bot are the exact laneTop/
@@ -2640,15 +2643,37 @@
       } else {
         ctx.clearRect(0, 0, W, H);
         window.__ocTest.speedLinesDone = true;
+        // Removal used to be an independently-timed setTimeout(DUR) fired right after the
+        // first rAF; that timer consistently fired ~8-16ms before this completing frame, so
+        // exactly one more frame() ran after the container was already detached, one frame
+        // of stale hook writes past the point a reader would expect this run to be over
+        // (oculist-3ae review 1 found this for animateChronoTunnel; same idiom here).
+        // Removing here instead, in frame()'s own completion branch, puts removal strictly
+        // after the last frame that will ever run, by construction of this single rAF loop,
+        // instead of racing a second, unrelated clock against it. There is no
+        // cancelAnimationFrame call here — none is needed, since taking this branch means no
+        // further frame is ever scheduled.
+        //
+        // Three things can still remove this container before this branch runs:
+        // cancelBeacons() and fadeActiveBeacons() (both via destroyBeacon(), since the
+        // container carries .oc-beacon and .oc-beacon-transient) on a new search or a
+        // scroll, or this branch itself on normal completion. Whichever fires first wins;
+        // container.remove() on an already-detached node is a harmless no-op.
+        //
+        // Accepted trade (mirrors oculist-3ae review 2): if the tab is hidden, rAF is
+        // suspended by the browser and this branch never runs until the tab is shown again,
+        // so the container now persists attached instead of being removed by the old
+        // wall-clock timer. On resume, one frame runs and removes it — at most one frame of
+        // stale streaks, self-healing. The offsetting benefit: while suspended, the
+        // container stays reachable by cancelBeacons() (it is still in the DOM), where the
+        // old timer would eventually have detached it regardless of tab visibility,
+        // permanently outside cancelBeacons()'s reach.
+        container.remove();
       }
     }
 
     animFrameId = requestAnimationFrame(frame);
     container.__rafId = animFrameId;
-
-    setTimeout(function () {
-      container.remove();
-    }, DUR);
   }
 
   // Chrono Tunnel: a slit-scan tunnel of rotating polygons rushing outward past the

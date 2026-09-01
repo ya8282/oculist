@@ -371,18 +371,18 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
       // own early/late samples in the persistence test above.
       //
       // Second, and the one that actually mattered once replay() genuinely cancelled the
-      // previous run (see replay() above): '.oc-beacon' is removed by an independent
-      // wall-clock setTimeout(DUR) in content.js. Measuring the actual firing order showed
-      // that timer reliably wins the race against the rAF loop's own final "done" tick — that
-      // tick can only run on the next vsync-aligned callback at-or-after elapsed>=DUR, while
-      // the timer fires right at DUR — so even capturing a rect at the exact moment
-      // speedLinesDone flips true was already too late; the container was already gone. The
+      // previous run (see replay() above): '.oc-beacon' is removed in frame()'s own
+      // completion branch (content.js, oculist-ws4 — mirroring animateChronoTunnel's
+      // oculist-3ae fix), synchronously in the same tick that flips speedLinesDone to true.
+      // That means by the time any external poll (a separate CDP round trip) ever observes
+      // speedLinesDone === true, the container has always already been detached — even
+      // capturing a rect at the exact moment 'done' is observed is already too late. The
       // container's CSS position never changes after it's created (position:absolute, fixed
-      // left/top/transform for its whole life), so content.js now captures its rect once,
+      // left/top/transform for its whole life), so content.js instead captures its rect once,
       // right after it's appended to the document (see lastSpeedLinesContainerRect in
-      // content.js) — long before either the completion tick or the removal timer can
-      // possibly fire, not at the finish line where the race was already lost. Reading that
-      // captured rect here instead of re-querying '.oc-beacon' removes the race structurally.
+      // content.js) — long before completion, or an intervening cancelBeacons()/
+      // fadeActiveBeacons() removal, can possibly happen. Reading that captured rect here
+      // instead of re-querying '.oc-beacon' removes the race structurally.
       // '#target' itself is never touched by content.js and is safe to query live at any time.
       //
       // Both sides of this comparison must live in the SAME coordinate space, and it must be
@@ -555,6 +555,80 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
       'sanity check: the beacon must actually render before checking it is cleaned up'
     );
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: LONG_TIMEOUT });
+  });
+
+  // oculist-ws4: animateSpeedLines used to remove its container from an independently-timed
+  // setTimeout(DUR) fired right after the first rAF, exactly like animateChronoTunnel did
+  // before oculist-3ae fixed it there — that timer consistently fired a frame before the
+  // loop's own completion, so one more frame() ran against an already-detached container,
+  // stale-frame-inflating whatever __ocTest hooks a later run had by then installed. Moved
+  // to frame()'s own completion branch (mirroring oculist-3ae) so removal is strictly after
+  // the last frame that will ever run, by construction. This pins a MutationObserver
+  // (isolated content-script world, so it can read window.__ocTest directly) to the exact
+  // instant the container is removed from the DOM and records speedLinesFrameCount at that
+  // instant — then positively confirms the counter never advances past that recorded value,
+  // the same grew/timeout pattern the cancelBeacons() test below uses. Against a version that
+  // still used the independent setTimeout(DUR), this fails: the recorded value is one frame
+  // short of the final count, so the counter is later observed to grow past it.
+  test('the container is removed only after the rAF loop\'s own final frame, never before', async () => {
+    await replay();
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
+      timeout: POLL_TIMEOUT,
+      message: 'speed lines never rendered its first frames',
+    });
+
+    // Armed in the isolated content-script world (not page.evaluate()'s main world) so the
+    // observer callback can read window.__ocTest directly — that hook lives only in the
+    // isolated world's own global, not the page's.
+    await evalInContentScript(`
+      (function () {
+        window.__ocWs4RemovalFrameCount = null;
+        var mo = new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i++) {
+            var removed = records[i].removedNodes;
+            for (var j = 0; j < removed.length; j++) {
+              var node = removed[j];
+              if (node.nodeType === 1 && node.classList && node.classList.contains('oc-beacon-transient')) {
+                window.__ocWs4RemovalFrameCount = window.__ocTest.speedLinesFrameCount;
+                mo.disconnect();
+                return;
+              }
+            }
+          }
+        });
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+      })()
+    `);
+
+    const atRemoval = await waitForContentScriptValue(
+      evalInContentScript,
+      'window.__ocWs4RemovalFrameCount',
+      (v) => v !== null,
+      { timeout: LONG_TIMEOUT, message: 'the container was never observed being removed from the DOM' }
+    );
+    assert.ok(atRemoval > 0, `sanity check: expected a nonzero frame count at the removal instant, got ${atRemoval}`);
+
+    // Positively confirm the frame counter never grows past its value at the removal
+    // instant: wait (up to the same POLL_TIMEOUT budget used everywhere else in this suite)
+    // for it to exceed that value. If removal genuinely happens strictly after the last
+    // frame, that wait times out — the success case here — rather than resolving.
+    let grew = false;
+    try {
+      await waitForContentScriptValue(
+        evalInContentScript,
+        'window.__ocTest.speedLinesFrameCount',
+        (v) => v > atRemoval,
+        { timeout: POLL_TIMEOUT }
+      );
+      grew = true;
+    } catch (e) {
+      if (!/timed out/.test(e.message)) throw e;
+    }
+    assert.strictEqual(
+      grew,
+      false,
+      `expected speedLinesFrameCount to never advance past its value (${atRemoval}) at the moment the container was removed from the DOM`
+    );
   });
 
   // oculist-47e: animateSpeedLines' early-return guard (rect missing or zero-sized) used to
