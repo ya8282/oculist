@@ -933,6 +933,28 @@
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
   var activeScrollDebounceTimer = null;
+  // oculist-44y: the bare 50ms "draw at the fresh rect" timer armed by the
+  // instant-scroll-behavior branch and the fully-in-viewport branch, below. Kept
+  // deliberately separate from the four handles clearActiveScrollHandles() owns rather
+  // than folded into that function: the smooth-scroll branch's own entry calls
+  // clearActiveScrollHandles() unconditionally (oculist-rbx), and that call must NOT
+  // sweep away an immediate draw armed by the PRECEDING navigation (oculist-rbx's own
+  // regression test pins this down — the in-view match's draw must survive a later
+  // navigation moving on to a smooth-scrolled one). This handle is instead cleared by
+  // __ocDestroy() and by the two branches that arm it themselves, below.
+  var activeImmediateDrawTimer = null;
+  // oculist-44y: holds an immediate-draw timer the smooth branch has disowned (see
+  // disownActiveImmediateDrawTimer() below) because it must be allowed to fire on its
+  // own schedule rather than being treated as superseded. "Disowned" must not mean
+  // "unreachable", though: __ocDestroy() still has to be able to cancel it, or a
+  // close+reopen inside its 50ms window paints a stale border onto the freshly
+  // rebuilt overlay — the exact hole a first version of this fix left open (caught by
+  // review) by nulling activeImmediateDrawTimer outright instead of moving the id
+  // somewhere destroy could still reach it. A plain array, not a single slot: more
+  // than one disowned timer can be outstanding at once (e.g. instant nav -> smooth nav
+  // disowns it -> a second in-viewport nav arms a fresh one -> a second smooth nav
+  // disowns that too), and each fires and self-removes independently.
+  var orphanedImmediateDrawTimers = [];
 
   // Tears down every handle for the in-flight scroll-to-match (timeout,
   // scrollend listener, scroll-debounce listener, and the debounce's own
@@ -954,6 +976,62 @@
       clearTimeout(activeScrollDebounceTimer);
       activeScrollDebounceTimer = null;
     }
+  }
+
+  // oculist-44y: cancels the CURRENT bare immediate-draw timer (see
+  // activeImmediateDrawTimer above). Deliberately its own function, not part of
+  // clearActiveScrollHandles() — see the comment on activeImmediateDrawTimer's
+  // declaration for why. Does not touch orphanedImmediateDrawTimers — a timer that has
+  // already been disowned is no longer "current" and must survive this call (see
+  // disownActiveImmediateDrawTimer() below); clearOrphanedImmediateDrawTimers() is the
+  // one that reaches those.
+  function clearActiveImmediateDrawTimer() {
+    if (activeImmediateDrawTimer) {
+      clearTimeout(activeImmediateDrawTimer);
+      activeImmediateDrawTimer = null;
+    }
+  }
+
+  // oculist-44y: moves the current immediate-draw timer (if any) out of
+  // activeImmediateDrawTimer and into orphanedImmediateDrawTimers, WITHOUT
+  // clearTimeout()-ing it. Called from the smooth-scroll branch's entry, which must
+  // let a preceding in-viewport/instant navigation's own draw complete on schedule
+  // (oculist-rbx's and oculist-7uc's regression tests both require this — the timing-
+  // invariance argument being: if that draw had already landed before 50ms elapsed, it
+  // would stay on screen through the subsequent scroll same as any other match, so a
+  // still-pending one shouldn't be retroactively invalidated just because it hasn't
+  // fired yet). "Disowned" only means it stops being treated as the CURRENT draw a
+  // later same-kind navigation would cancel — it remains reachable via
+  // clearOrphanedImmediateDrawTimers(), which __ocDestroy() calls, so a close+reopen
+  // still cancels it instead of leaving it to paint onto a freshly rebuilt overlay.
+  function disownActiveImmediateDrawTimer() {
+    if (activeImmediateDrawTimer) {
+      orphanedImmediateDrawTimers.push(activeImmediateDrawTimer);
+      activeImmediateDrawTimer = null;
+    }
+  }
+
+  // oculist-44y: cancels every timer disownActiveImmediateDrawTimer() has parked.
+  // Called by __ocDestroy() alongside clearActiveImmediateDrawTimer() — between the
+  // two, every immediate-draw timer this module can have armed, current or disowned,
+  // is reachable by teardown.
+  function clearOrphanedImmediateDrawTimers() {
+    orphanedImmediateDrawTimers.forEach(function (t) { clearTimeout(t); });
+    orphanedImmediateDrawTimers.length = 0;
+  }
+
+  // oculist-44y: called from inside a fired immediate-draw timer's own callback,
+  // before it draws, to remove itself from whichever bookkeeping still names it — the
+  // CURRENT slot if never disowned, or the orphan list if the smooth branch disowned
+  // it first. Keeps both from ever pointing at (or accumulating) a timer id that has
+  // already fired and is no longer cancellable by anything.
+  function forgetFiredImmediateDrawTimer(timer) {
+    if (activeImmediateDrawTimer === timer) {
+      activeImmediateDrawTimer = null;
+      return;
+    }
+    var idx = orphanedImmediateDrawTimers.indexOf(timer);
+    if (idx !== -1) orphanedImmediateDrawTimers.splice(idx, 1);
   }
 
   var domObserver           = null;
@@ -1013,6 +1091,16 @@
     // survives a listener-only teardown and can fire onScrollEnd into a freshly rebuilt overlay
     // (window.__ocToggle() calls buildUI() right after this in the same module instance).
     clearActiveScrollHandles();
+    // oculist-44y: same reasoning, for the bare immediate-draw timer armed by the
+    // instant-scroll and fully-in-viewport branches — see activeImmediateDrawTimer's
+    // declaration for why it is cleared separately from the four handles above. Both
+    // calls are needed: the CURRENT timer (if the smooth branch never disowned it) and
+    // any DISOWNED ones the smooth branch let keep running past its own supersession
+    // (see disownActiveImmediateDrawTimer()) — either can still be pending here, and a
+    // close+reopen (window.__ocToggle() calls buildUI() right after this, same module
+    // instance) must not let either paint onto the freshly rebuilt overlay.
+    clearActiveImmediateDrawTimer();
+    clearOrphanedImmediateDrawTimers();
 
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
@@ -4982,6 +5070,34 @@
             // teardown and can still fire onScrollEnd for a match that is no longer
             // active, animate()-ing a stale rect.
             clearActiveScrollHandles();
+            // oculist-44y: DISOWN (not cancel) any still-pending immediate-draw timer
+            // from a preceding in-viewport/instant navigation — move it out of
+            // activeImmediateDrawTimer so a later Site A/B navigation never mistakes it
+            // for something IT armed and cancels it. It keeps ticking on its original
+            // schedule and, when it fires, calls getBoundingClientRect() fresh — by
+            // then this navigation's own scroll has typically moved the viewport
+            // already, so it usually draws off-screen or nowhere near where the user
+            // is now looking (measured beacon tops as low as -46px in the oculist-7uc
+            // scenario), not at some "still correct" position. It is preserved anyway,
+            // matching this file's existing tolerance for that kind of redundant draw
+            // (verified by superseded_scroll_navigation_no_stale_draw.test.js and
+            // superseded_by_in_viewport_navigation_no_stale_draw.test.js, both of which
+            // require it to still fire and break if this instead cancels it) — the
+            // asymmetry with the in-viewport branch below, which DOES cancel a
+            // still-pending immediate-draw timer on entry, is intentional: superseding
+            // with ANOTHER immediate navigation lands the new draw within the same
+            // 50ms, so the old match's border would appear alongside, and visibly
+            // contradict, the match that's actually active. (In-viewport supersession
+            // does not scroll at all; the instant branch jumps synchronously before
+            // its own draw. Either way the stale border has no moment of being
+            // correct.) Superseding with a long smooth scroll does
+            // not carry that same expectation, and the timing-invariance case for
+            // keeping it holds — a draw that had already landed before 50ms elapsed
+            // would stay through the scroll same as any other, so one that merely
+            // hasn't fired YET shouldn't be treated differently. "Disowned" must still
+            // mean reachable by __ocDestroy(), not "leaked": see
+            // orphanedImmediateDrawTimers and disownActiveImmediateDrawTimer() above.
+            disownActiveImmediateDrawTimer();
 
             var scrollTimeout = null;
             // ponytail: native 'scrollend' and the scroll-debounce timer can both
@@ -5018,10 +5134,18 @@
             window.addEventListener('scrollend', onScrollEnd, { once: true });
             window.addEventListener('scroll', onScrollEndDebounced);
           } else {
-            setTimeout(function () {
+            // oculist-44y: same hazard oculist-rbx/tz6/7uc fixed elsewhere in this
+            // function — this bare timer had no module-level handle, so no teardown
+            // (not __ocDestroy(), not a superseding navigation) could cancel it.
+            // Registered into activeImmediateDrawTimer (see its declaration above for
+            // why it's a dedicated handle, not folded into clearActiveScrollHandles()).
+            clearActiveImmediateDrawTimer();
+            var instantDrawTimer = setTimeout(function () {
+              forgetFiredImmediateDrawTimer(instantDrawTimer);
               var freshRect = activeRange.getBoundingClientRect();
               animate(freshRect);
             }, 50);
+            activeImmediateDrawTimer = instantDrawTimer;
           }
         }
         element.scrollIntoView({
@@ -5039,10 +5163,19 @@
       // animate() a stale rect over the draw below.
       clearActiveScrollHandles();
       if (shouldAnimate) {
-        setTimeout(function () {
+        // oculist-44y: same hazard as the instant-behavior branch above — this bare
+        // timer had no module-level handle, so a second in-viewport navigation less
+        // than 50ms later left it orphaned to paint a stale rect later. Registered
+        // into activeImmediateDrawTimer so the next Site A/B navigation, or
+        // __ocDestroy(), cancels it (see that variable's declaration above for why
+        // it's kept separate from clearActiveScrollHandles()'s four handles).
+        clearActiveImmediateDrawTimer();
+        var inViewDrawTimer = setTimeout(function () {
+          forgetFiredImmediateDrawTimer(inViewDrawTimer);
           var freshRect = activeRange.getBoundingClientRect();
           animate(freshRect);
         }, 50);
+        activeImmediateDrawTimer = inViewDrawTimer;
       }
     }
     updateViewportMarkers();
