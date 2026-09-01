@@ -218,99 +218,103 @@ describe('reduced-motion spotlight overlay tracks scroll (oculist-4re)', () => {
   `;
 
   test('the spotlight hole stays over the match after a real scroll', async () => {
-    await openFinder();
-    await page.locator(INPUT).type('quarklet', { delay: 30 });
-    // Wait for the draft debounce to actually land a real match count before pressing
-    // Enter, instead of guessing its duration.
-    await page.waitForFunction(
-      () => {
-        const root = document.getElementById('oc-wrap');
-        const count = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-count') : null;
-        return !!count && /of \d+/.test(count.textContent);
-      },
-      null,
-      { timeout: POLL_TIMEOUT }
-    );
+    try {
+      await openFinder();
+      await page.locator(INPUT).type('quarklet', { delay: 30 });
+      // Wait for the draft debounce to actually land a real match count before pressing
+      // Enter, instead of guessing its duration.
+      await page.waitForFunction(
+        () => {
+          const root = document.getElementById('oc-wrap');
+          const count = root && root.shadowRoot ? root.shadowRoot.querySelector('.oc-count') : null;
+          return !!count && /of \d+/.test(count.textContent);
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
 
-    // Confirm the beacon that is about to fire is actually the reduced-motion spotlight
-    // variant, not the full-motion effect — otherwise this test would not mean anything.
-    assert.strictEqual(
-      await evalInContentScript('window.__ocTest.getEffectiveMotion()'),
-      'reduced',
-      'this test only means anything on the reduced-motion branch'
-    );
+      // Confirm the beacon that is about to fire is actually the reduced-motion spotlight
+      // variant, not the full-motion effect — otherwise this test would not mean anything.
+      assert.strictEqual(
+        await evalInContentScript('window.__ocTest.getEffectiveMotion()'),
+        'reduced',
+        'this test only means anything on the reduced-motion branch'
+      );
 
-    await page.keyboard.press('Enter');
-    await page.waitForFunction(
-      (finderJs) => !!eval(finderJs),
-      SPOTLIGHT_FINDER,
-      { timeout: POLL_TIMEOUT }
-    );
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        (finderJs) => !!eval(finderJs),
+        SPOTLIGHT_FINDER,
+        { timeout: POLL_TIMEOUT }
+      );
 
-    // Sanity check while unscrolled: the hole should already sit on the match, otherwise
-    // the geometry-reading logic itself is wrong and the post-scroll assertion below would
-    // not mean anything.
-    const beforeScroll = await page.evaluate(READ_SPOTLIGHT_JS);
-    assert.strictEqual(beforeScroll.missing, false, `spotlight not readable before scroll: ${JSON.stringify(beforeScroll)}`);
-    assert.ok(
-      Math.abs(beforeScroll.gradientViewportX - beforeScroll.targetViewportCenterX) < 6,
-      `hole should start centered on the match (x), got ${JSON.stringify(beforeScroll)}`
-    );
-    assert.ok(
-      Math.abs(beforeScroll.gradientViewportY - beforeScroll.targetViewportCenterY) < 6,
-      `hole should start centered on the match (y), got ${JSON.stringify(beforeScroll)}`
-    );
+      // Sanity check while unscrolled: the hole should already sit on the match, otherwise
+      // the geometry-reading logic itself is wrong and the post-scroll assertion below would
+      // not mean anything.
+      const beforeScroll = await page.evaluate(READ_SPOTLIGHT_JS);
+      assert.strictEqual(beforeScroll.missing, false, `spotlight not readable before scroll: ${JSON.stringify(beforeScroll)}`);
+      assert.ok(
+        Math.abs(beforeScroll.gradientViewportX - beforeScroll.targetViewportCenterX) < 6,
+        `hole should start centered on the match (x), got ${JSON.stringify(beforeScroll)}`
+      );
+      assert.ok(
+        Math.abs(beforeScroll.gradientViewportY - beforeScroll.targetViewportCenterY) < 6,
+        `hole should start centered on the match (y), got ${JSON.stringify(beforeScroll)}`
+      );
 
-    // Install a 'scroll' listener that captures the spotlight's geometry synchronously in
-    // the same event dispatch that fadeActiveBeacons() (handleScroll's entry point) uses to
-    // start fading it — i.e. before the 50ms removal timer that same event schedules can
-    // possibly land. Whichever of the two window-level 'scroll' listeners runs first, this
-    // one only ever reads style/geometry (fadeActiveBeacons only ever writes style.opacity),
-    // so the read is accurate regardless of listener order.
-    await page.evaluate(
-      (readJs) => {
-        window.__ocSpotlightCapture = null;
-        window.addEventListener(
-          'scroll',
-          function onScroll() {
-            window.removeEventListener('scroll', onScroll);
-            // eslint-disable-next-line no-eval
-            window.__ocSpotlightCapture = eval(readJs);
-          },
-          true
-        );
-      },
-      READ_SPOTLIGHT_JS
-    );
+      // Install a 'scroll' listener that captures the spotlight's geometry synchronously in
+      // the same event dispatch that fadeActiveBeacons() (handleScroll's entry point) uses to
+      // start fading it — i.e. before the 50ms removal timer that same event schedules can
+      // possibly land. Whichever of the two window-level 'scroll' listeners runs first, this
+      // one only ever reads style/geometry (fadeActiveBeacons only ever writes style.opacity),
+      // so the read is accurate regardless of listener order.
+      await page.evaluate(
+        (readJs) => {
+          window.__ocSpotlightCapture = null;
+          window.addEventListener(
+            'scroll',
+            function onScroll() {
+              window.removeEventListener('scroll', onScroll);
+              // eslint-disable-next-line no-eval
+              window.__ocSpotlightCapture = eval(readJs);
+            },
+            true
+          );
+        },
+        READ_SPOTLIGHT_JS
+      );
 
-    // A real scroll, large enough (the page has 3000px of filler below the match) that a
-    // spotlight frozen at its pre-scroll viewport position would be off by hundreds of
-    // pixels, not a rounding error.
-    await page.mouse.wheel(0, 500);
+      // A real scroll, large enough (the page has 3000px of filler below the match) that a
+      // spotlight frozen at its pre-scroll viewport position would be off by hundreds of
+      // pixels, not a rounding error.
+      await page.mouse.wheel(0, 500);
 
-    const captured = await waitForCondition(() => page.evaluate(() => window.__ocSpotlightCapture), (v) => v !== null, {
-      timeout: POLL_TIMEOUT,
-      message: 'scroll event never fired (or was never observed) after page.mouse.wheel',
-    });
+      const captured = await waitForCondition(() => page.evaluate(() => window.__ocSpotlightCapture), (v) => v !== null, {
+        timeout: POLL_TIMEOUT,
+        message: 'scroll event never fired (or was never observed) after page.mouse.wheel',
+      });
 
-    assert.strictEqual(captured.missing, false, `spotlight not readable at scroll time: ${JSON.stringify(captured)}`);
+      assert.strictEqual(captured.missing, false, `spotlight not readable at scroll time: ${JSON.stringify(captured)}`);
 
-    // Confirm the scroll (and the wrapping test setup) actually moved the match a large,
-    // unambiguous distance — otherwise a passing assertion below would not prove anything.
-    assert.ok(
-      Math.abs(captured.targetViewportCenterY - beforeScroll.targetViewportCenterY) > 200,
-      `the scroll must actually move the match a large distance, got before=${beforeScroll.targetViewportCenterY} ` +
-        `after=${captured.targetViewportCenterY}`
-    );
+      // Confirm the scroll (and the wrapping test setup) actually moved the match a large,
+      // unambiguous distance — otherwise a passing assertion below would not prove anything.
+      assert.ok(
+        Math.abs(captured.targetViewportCenterY - beforeScroll.targetViewportCenterY) > 200,
+        `the scroll must actually move the match a large distance, got before=${beforeScroll.targetViewportCenterY} ` +
+          `after=${captured.targetViewportCenterY}`
+      );
 
-    assert.ok(
-      Math.abs(captured.gradientViewportX - captured.targetViewportCenterX) < 6,
-      `spotlight hole drifted off the match on scroll (x): ${JSON.stringify(captured)}`
-    );
-    assert.ok(
-      Math.abs(captured.gradientViewportY - captured.targetViewportCenterY) < 6,
-      `spotlight hole drifted off the match on scroll (y) — it should track scroll like its ` +
-        `glow/arrow siblings, not stay frozen at its pre-scroll viewport position: ${JSON.stringify(captured)}`
-    );
+      assert.ok(
+        Math.abs(captured.gradientViewportX - captured.targetViewportCenterX) < 6,
+        `spotlight hole drifted off the match on scroll (x): ${JSON.stringify(captured)}`
+      );
+      assert.ok(
+        Math.abs(captured.gradientViewportY - captured.targetViewportCenterY) < 6,
+        `spotlight hole drifted off the match on scroll (y) — it should track scroll like its ` +
+          `glow/arrow siblings, not stay frozen at its pre-scroll viewport position: ${JSON.stringify(captured)}`
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
   });
 });

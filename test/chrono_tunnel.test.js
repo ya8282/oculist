@@ -506,12 +506,12 @@ describe('Chrono Tunnel: slit-scan ring field rushing past the match', () => {
     // when the match is NOT already fully in the viewport, and that flag makes
     // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
     // first guarantees replay()'s own Enter never sets it.
-    await page.evaluate(() => {
-      document.body.style.paddingBottom = '2000px';
-      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-    });
-
     try {
+      await page.evaluate(() => {
+        document.body.style.paddingBottom = '2000px';
+        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+      });
+
       await replay();
 
       // Let a couple of real frames render first, so a stuck-at-zero counter can't pass by
