@@ -198,7 +198,41 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
   async function fireAndTagBeacon() {
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+
+    // Waiting on a bare '.oc-beacon' is not enough. A vision-settings change makes
+    // content.js redraw the overlays immediately and then tear them down again a frame
+    // later, leaving NO beacon at all until its debounced rescan redraws ~400ms on --
+    // measured with a MutationObserver: '+persistent' at 188ms, '-persistent' at 189ms,
+    // nothing until 581ms. waitForSelector() polls fast enough to land inside that 1ms
+    // window, and the count below then reads the empty hole and sees zero of both.
+    // So wait for the state this test actually needs -- one persistent overlay AND one
+    // transient beacon, both present -- and then for the DOM to stop churning, so the
+    // elements tagged below are the settled ones that survive to the assertions.
+    await page.evaluate(() => {
+      window.__ocBeaconChurn = performance.now();
+      if (window.__ocBeaconChurnObserver) window.__ocBeaconChurnObserver.disconnect();
+      window.__ocBeaconChurnObserver = new MutationObserver((recs) => {
+        for (const r of recs) {
+          for (const n of [...r.addedNodes, ...r.removedNodes]) {
+            if (n.classList && n.classList.contains('oc-beacon')) {
+              window.__ocBeaconChurn = performance.now();
+              return;
+            }
+          }
+        }
+      });
+      window.__ocBeaconChurnObserver.observe(document.documentElement, { childList: true, subtree: true });
+    });
+
+    const QUIET_MS = 250;
+    await page.waitForFunction(
+      (quiet) =>
+        document.querySelector('.oc-beacon:not(.oc-beacon-transient)') &&
+        document.querySelector('.oc-beacon-transient') &&
+        performance.now() - window.__ocBeaconChurn > quiet,
+      QUIET_MS,
+      { timeout: POLL_TIMEOUT }
+    );
 
     return page.evaluate(() => {
       var persistent = Array.from(document.querySelectorAll('.oc-beacon:not(.oc-beacon-transient)'));
@@ -214,11 +248,28 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     // fadeActiveBeacons() (handleScroll's entry point) sets opacity:0 with a 50ms
     // transition on .oc-beacon-transient elements, then removes them once that
     // transition lands.
-    const FADE_TIMEOUT = 1000;
-    await page.mouse.wheel(0, 400);
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, {
-      timeout: FADE_TIMEOUT,
-    });
+    //
+    // One wheel is not reliably enough: handleScroll() drops every scroll while
+    // isAutoScrolling is set, and content.js sets that for 800ms each time it scrolls a
+    // match into view -- which firing the beacon above just did. A single wheel landing
+    // inside that window is silently ignored and nothing ever fades. Rather than sleep
+    // past the 800ms (hard-coding a constant this test does not own), keep scrolling like
+    // a user until the fade actually starts. A genuine failure to fade still fails, by
+    // exhausting the deadline.
+    const deadline = Date.now() + POLL_TIMEOUT;
+    for (;;) {
+      await page.mouse.wheel(0, 400);
+      try {
+        await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, {
+          timeout: 400,
+        });
+        return;
+      } catch (e) {
+        if (Date.now() >= deadline) {
+          throw new Error('the transient beacon never faded after repeated real scrolls');
+        }
+      }
+    }
   }
 
   // WAAPI-driven overlays (drawActiveMatchBorder's fade-in) never write their final
