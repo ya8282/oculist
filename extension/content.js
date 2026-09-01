@@ -3390,8 +3390,16 @@
     if (!rect || rect.width === 0 || rect.height === 0) return;
     if (!settings.visionSettings || !settings.visionSettings.textLabels) return;
 
+    // Unreachable today, kept defensively (oculist-egy): every caller reaches this
+    // through drawActiveOverlays(), and both of ITS callers run cancelBeacons() one
+    // statement earlier, which already destroys every .oc-beacon including this label.
+    // So `existing` is always null in production. The guard stays because it enforces
+    // id uniqueness — one added caller of drawActiveOverlays() and two elements would
+    // share #oc-active-match-label, which is worse than the leak. destroyBeacon() and
+    // not a bare remove() so that if it ever does run, the label's live 250ms fade-in
+    // Animation is cancelled rather than left 'running' on a detached node.
     var existing = document.getElementById('oc-active-match-label');
-    if (existing) existing.remove();
+    if (existing) destroyBeacon(existing);
 
     var label = document.createElement('div');
     label.id = 'oc-active-match-label';
@@ -3442,6 +3450,15 @@
     })];
   }
 
+  // Same test-reachability reasoning as window.__ocTest.cancelBeacons above: both of
+  // drawActiveMatchLabel's real callers (drawActiveOverlays(), reached only from
+  // animate()/repositionActiveOverlays()) call cancelBeacons() immediately beforehand, so
+  // a real second draw never actually lands on a pre-existing #oc-active-match-label — the
+  // internal destroyBeacon(existing) guard above only fires through a call path a test
+  // cannot reach via simulated navigation alone. Exposing the real closure directly lets a
+  // test call it twice back-to-back to exercise that guard on its own terms.
+  window.__ocTest.drawActiveMatchLabel = drawActiveMatchLabel;
+
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
   // entry: the registry's run(rect) contract only gets a rect, with no access to the
   // matched text, so this is called directly from drawActiveOverlays() instead, where it
@@ -3453,8 +3470,15 @@
   // back to the plain label — magnifier off, zero matches, or a match whose text collapses
   // to nothing after whitespace trimming all decline without leaving anything behind.
   function drawActiveMatchMagnifier(rect) {
+    // Unreachable today, kept defensively — same reasoning as drawActiveMatchLabel's
+    // guard above (oculist-egy). It also sits ahead of the decline guards below on
+    // purpose, so a call that declines to draw still clears a stale card.
+    // destroyBeacon() and not a bare remove() because `existing` is the card, and both
+    // the card's own lift/fade Animation and its connector child's fade Animation are
+    // hung off card.__waapiAnims (see the "connector is a child of card" comments
+    // below), so a bare remove() would strand up to a 470ms lift still 'running'.
     var existing = document.getElementById('oc-active-match-magnifier');
-    if (existing) existing.remove();
+    if (existing) destroyBeacon(existing);
 
     if (!rect || rect.width === 0 || rect.height === 0) return false;
     if (!settings.visionSettings || !settings.visionSettings.magnifier) return false;
@@ -3634,6 +3658,14 @@
 
     return true;
   }
+
+  // Same test-reachability reasoning as window.__ocTest.drawActiveMatchLabel above:
+  // drawActiveMatchMagnifier's own internal destroyBeacon(existing) guard only fires
+  // through a call path (a bare second draw with no intervening cancelBeacons()) a test
+  // cannot reach via simulated navigation alone, since its real caller always runs
+  // cancelBeacons() first. Exposing the real closure directly lets a test call it twice
+  // back-to-back to exercise that guard on its own terms.
+  window.__ocTest.drawActiveMatchMagnifier = drawActiveMatchMagnifier;
 
   // The OS-level preference is a downgrade-only signal: it can turn 'full' into
   // 'reduced', but it never overrides an explicit 'reduced'/'off' upward. Matching
