@@ -1027,22 +1027,26 @@
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
 
+  // WAAPI animations do NOT stop on their own when their target is detached from the
+  // document — verified empirically: playState stays 'running' and currentTime keeps
+  // advancing on a removed element unless .cancel() is called explicitly. Canvas
+  // effects hang their rAF id off __rafId above; DOM/WAAPI effects (e.g.
+  // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
+  // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
+  function destroyBeacon(b) {
+    if (b.__rafId) { cancelAnimationFrame(b.__rafId); b.__rafId = null; }
+    if (b.__waapiAnims) {
+      for (var j = 0; j < b.__waapiAnims.length; j++) {
+        try { b.__waapiAnims[j].cancel(); } catch (e) {}
+      }
+    }
+    b.remove();
+  }
+
   function cancelBeacons() {
     var beacons = document.querySelectorAll('.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
-      if (beacons[i].__rafId) cancelAnimationFrame(beacons[i].__rafId);
-      // WAAPI animations do NOT stop on their own when their target is detached from the
-      // document — verified empirically: playState stays 'running' and currentTime keeps
-      // advancing on a removed element unless .cancel() is called explicitly. Canvas
-      // effects hang their rAF id off __rafId above; DOM/WAAPI effects (e.g.
-      // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
-      // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
-      if (beacons[i].__waapiAnims) {
-        for (var j = 0; j < beacons[i].__waapiAnims.length; j++) {
-          try { beacons[i].__waapiAnims[j].cancel(); } catch (e) {}
-        }
-      }
-      beacons[i].remove();
+      destroyBeacon(beacons[i]);
     }
     activeBeacons = 0;
   }
@@ -4910,7 +4914,13 @@
     setTimeout(function () {
       for (var i = 0; i < beacons.length; i++) {
         if (beacons[i] && beacons[i].parentNode && beacons[i].style.opacity === '0') {
-          beacons[i].remove();
+          // During the fade the beacon is still attached, so cancelBeacons() can still
+          // reach it — there is no orphan window until the removal itself. Cancelling
+          // at fade start instead of here would freeze the animation mid-fade, a
+          // gratuitous visual change. destroyBeacon() cancels and removes in the same
+          // statement, closing the window where a detached element is still animating
+          // and no longer findable via querySelectorAll('.oc-beacon').
+          destroyBeacon(beacons[i]);
         }
       }
     }, 50);
