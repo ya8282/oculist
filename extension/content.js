@@ -996,6 +996,15 @@
       window.removeEventListener('scroll', activeScrollDebounceHandler);
       activeScrollDebounceHandler = null;
     }
+    // oculist-tz6: same hazard oculist-rbx fixed at the smooth-scroll branch entry — the
+    // debounce TIMER (as opposed to the listener above that schedules it) has no other
+    // module-level handle, so a still-pending 80ms timer from a torn-down navigation
+    // survives this teardown and can fire onScrollEnd into a freshly rebuilt overlay
+    // (window.__ocToggle() calls buildUI() right after this in the same module instance).
+    if (activeScrollDebounceTimer) {
+      clearTimeout(activeScrollDebounceTimer);
+      activeScrollDebounceTimer = null;
+    }
 
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
