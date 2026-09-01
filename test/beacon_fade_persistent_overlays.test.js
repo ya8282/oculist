@@ -201,13 +201,25 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
 
     // Waiting on a bare '.oc-beacon' is not enough.
     //
-    // The cancelBeacons() above empties the DOM. On the first call (the full-motion test
-    // above), nothing has scrolled yet and the match is already inside the viewport, so
-    // this Enter takes highlightActiveRange()'s fully-in-viewport branch and draws after
-    // a flat 50ms setTimeout. On the second call (reduced motion), the first test's own
-    // scroll-to-fade wheeling has left the match scrolled out of the viewport instead, so
-    // that Enter takes the smooth-scroll branch and does not draw anything until
-    // 'scrollend' fires ~360ms later.
+    // The cancelBeacons() above empties the DOM. Which branch this Enter takes depends on
+    // the scroll position left by whatever ran before it, not on which call this is: on
+    // the first call (the full-motion test above), nothing has scrolled yet and the match
+    // is inside the viewport (scrollY=0, target rect top=186.97/bottom=204.97 against
+    // innerHeight=800, measured), so highlightActiveRange() takes the fully-in-viewport
+    // branch and draws after a flat 50ms setTimeout, never calling triggerAutoScrollFlag()
+    // at all. On the second call (reduced motion), that same in-viewport branch fires
+    // again (measured: draw lands ~53-77ms in) -- not because nothing has changed, but
+    // because the full-motion test's own `finally { window.scrollTo(0, 0) }` (oculist-1rf)
+    // restores scrollY to 0 before this test runs, undoing the scroll-to-fade wheeling
+    // that would otherwise have left the match out of view. If a future change scrolls the
+    // page between these two tests without restoring position afterward, this second call
+    // would take the smooth-scroll branch instead and not draw until 'scrollend' fires.
+    //
+    // (oculist-m8u corrected this block. It used to assert the smooth-scroll branch and a
+    // ~360ms scrollend wait for the second call, which was true when oculist-xj4 wrote it
+    // and stopped being true when oculist-1rf added the scroll restore above -- a correct
+    // hygiene fix silently falsifying a correct comment. Hence the rule rather than the
+    // branch name.)
     //
     // Either way, animate() (content.js) does its cancelBeacons()-plus-redraw in one
     // synchronous task -- drawActiveOverlays() and the effect itself (run(), or
@@ -257,13 +269,24 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     // transition on .oc-beacon-transient elements, then removes them once that
     // transition lands.
     //
-    // One wheel is not reliably enough: handleScroll() drops every scroll while
-    // isAutoScrolling is set, and content.js sets that for 800ms each time it scrolls a
-    // match into view -- which firing the beacon above just did. A single wheel landing
-    // inside that window is silently ignored and nothing ever fades. Rather than sleep
-    // past the 800ms (hard-coding a constant this test does not own), keep scrolling like
-    // a user until the fade actually starts. A genuine failure to fade still fails, by
-    // exhausting the deadline.
+    // handleScroll() drops every scroll while isAutoScrolling is set, and content.js sets
+    // that for 800ms each time highlightActiveRange() takes its out-of-viewport branch to
+    // bring a match on screen; a wheel landing inside that window would be silently
+    // ignored and nothing would fade. Keep scrolling like a user, rather than sending one
+    // wheel and asserting immediately, so this stays correct even when that window is
+    // live. Rather than sleep past a fixed duration (hard-coding a constant this test does
+    // not own), keep scrolling until the fade actually starts. A genuine failure to fade
+    // still fails, by exhausting the deadline.
+    //
+    // (An earlier version of this comment said firing the beacon above "just did" scroll
+    // a match into view, engaging that 800ms window. oculist-m8u measured that neither
+    // fireAndTagBeacon() call above does that today: both land via highlightActiveRange()'s
+    // fully-in-viewport branch -- scrollY=0 and the target rect, top=186.97/bottom=204.97,
+    // already inside the 800px viewport at both calls -- so triggerAutoScrollFlag() is
+    // never reached and isAutoScrolling is never engaged that way. The repeated-wheel loop
+    // below is not guarding against a hazard that exists today; it costs nothing when the
+    // fade starts on the very first wheel, and stays correct if a future change ever
+    // leaves the match out of view when the beacon fires.)
     const deadline = Date.now() + POLL_TIMEOUT;
     for (;;) {
       await page.mouse.wheel(0, 400);
