@@ -37,6 +37,17 @@ function loadBackground({
   // deleted immediately after, since real Chrome only exposes lastError for the
   // duration of the callback it belongs to.
   getLastErrorOnCall, setLastErrorOnCall,
+  // oculist-t4u: get() below defaults to a JSON.parse(JSON.stringify(...)) snapshot of
+  // `backing`, which is the right default (it matches real chrome.storage.sync's
+  // structured-clone semantics, and keeps every other test's mutations to the returned
+  // object from leaking back into `backing` early) but it also silently strips any
+  // non-enumerable accessor a test planted on a stored value, since JSON.stringify
+  // skips those entirely. Pass rawGet: true to hand the literal backing[key] object
+  // straight through instead, when a test needs a property descriptor (e.g. a throwing
+  // getter) on the object background.js actually mutates to survive the round trip.
+  // Deliberately a flag rather than a per-call predicate: the one test that needs it
+  // makes exactly one get(), so per-call granularity would be untested machinery.
+  rawGet,
 }) {
   const calls = { get: 0, set: 0 };
   let onInstalledListener = null;
@@ -79,7 +90,9 @@ function loadBackground({
         get: (key, cb) => {
           calls.get++;
           const failThisCall = getLastErrorOnCall === calls.get;
-          const snapshot = JSON.parse(JSON.stringify({ [key]: backing[key] }));
+          const snapshot = rawGet
+            ? { [key]: backing[key] }
+            : JSON.parse(JSON.stringify({ [key]: backing[key] }));
           // Fires synchronously right after the snapshot is captured but before the
           // callback's macrotask is even scheduled to run — i.e. exactly the gap a
           // concurrent writer (the popup) can land in and still have this get()'s
@@ -310,29 +323,55 @@ function spyConsoleError() {
 }
 
 test('(a) a mutate() that throws synchronously still calls done exactly once, and issues NO set()', async () => {
-  const backing = { 'oc-settings': {} };
+  // Force the throw with a hostile stored value instead of monkeypatching a global
+  // (Array.prototype.push): a process-wide patch is fragile if anything in this file
+  // ever runs concurrently, and it also silently stops testing anything the moment
+  // DEFAULT_DISABLED_SITES in background.js no longer contains 'github.com', or seed's
+  // mutate stops calling push with exactly one argument.
+  //
+  // Instead, make the very property seedDefaultBlocklist's mutate reads first
+  // (`if (settings.seededDefaultBlocklist) return false;`) throw when read. That fires
+  // the throw at the exact call mutate makes, with no dependency on the seed list's
+  // contents and no global state to restore.
+  //
+  // enumerable: false is load-bearing, not decoration: updateSettings() takes a
+  // `basedOn = JSON.stringify(settings)` snapshot BEFORE mutate() runs (and before the
+  // try/catch that guards mutate()), so an ENUMERABLE throwing getter would fire there
+  // instead — stranding `done` and making this test pass for the wrong reason.
+  // JSON.stringify() skips non-enumerable properties, so a non-enumerable getter
+  // survives that snapshot line untouched and only throws once mutate() reads it.
+  // (Verified against extension/background.js: the ordering is snapshot -> normalize
+  // -> try { mutate(settings) } catch, and OculistSettingsMigration.normalizeOcSettings()
+  // never reads 'seededDefaultBlocklist' either — see settings-migration.js — so this
+  // key is untouched by anything upstream of mutate().)
+  //
+  // loadBackground's own get() mock defaults to a JSON.parse(JSON.stringify(...))
+  // snapshot of `backing` — realistic (chrome.storage.sync's real values are
+  // structure-cloned, not live references), but that clone silently drops our
+  // non-enumerable getter before background.js ever sees it, since JSON.stringify
+  // skips non-enumerable properties on the way OUT too. rawGet opts this test back out
+  // of that clone so the literal hostile object — descriptor and all — reaches
+  // updateSettings(). This is deliberate fault injection into the mock, not a
+  // reproduction of a real stored value: real chrome.storage.sync structure-clones and
+  // would never hand back a live getter. What is under test is updateSettings()'s own
+  // "mutate() may throw" guarantee, and that throw IS production-reachable by other
+  // routes — e.g. a non-object oc-settings, where mutate() dies on
+  // settings.disabledSites.indexOf inside the same try/catch.
+  const hostile = {};
+  Object.defineProperty(hostile, 'seededDefaultBlocklist', {
+    get() { throw new Error('oculist-6tp-test-mutate-threw'); },
+    enumerable: false,
+    configurable: true,
+  });
+  const backing = { 'oc-settings': hostile };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
-
-  // Targeted, self-restoring: Array#push is used all over Node's own async machinery
-  // (the event loop, the test runner itself), so a blanket "throw on the first push
-  // anywhere" is not safe — it can fire on an unrelated push before mutate() ever runs.
-  // Only throw on the exact call the seed mutate makes — settings.disabledSites.push
-  // ('github.com'), per DEFAULT_DISABLED_SITES in background.js — and restore
-  // immediately after either forwarding or throwing.
-  const origPush = Array.prototype.push;
-  Array.prototype.push = function (...args) {
-    if (args.length === 1 && args[0] === 'github.com') {
-      Array.prototype.push = origPush;
-      throw new Error('oculist-6tp-test-mutate-threw');
-    }
-    return origPush.apply(this, args);
-  };
 
   try {
     const { fire, calls } = loadBackground({
       backing,
       hardwareConcurrency: 8,
+      rawGet: true,
       onTabsCreate: () => { tabsCreateCalls++; },
     });
 
@@ -353,7 +392,6 @@ test('(a) a mutate() that throws synchronously still calls done exactly once, an
       'onInstalled\'s done callback must have received a truthy error argument: ' + JSON.stringify(errSpy.messages)
     );
   } finally {
-    Array.prototype.push = origPush; // safety net if push was never reached
     errSpy.restore();
   }
 });
