@@ -317,21 +317,25 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
   }
 
   test('full motion: scroll fades the transient beacon but the thick border overlay survives', async () => {
-    const before = await fireAndTagBeacon();
-    assert.strictEqual(
-      await evalInContentScript('window.__ocTest.getEffectiveMotion()'),
-      'full',
-      'this test only means anything on the full-motion branch'
-    );
-    assert.ok(before.persistentCount > 0, 'expected the thick border overlay to be drawn');
-    assert.ok(before.transientCount > 0, 'expected the transient beacon effect to be drawn');
+    try {
+      const before = await fireAndTagBeacon();
+      assert.strictEqual(
+        await evalInContentScript('window.__ocTest.getEffectiveMotion()'),
+        'full',
+        'this test only means anything on the full-motion branch'
+      );
+      assert.ok(before.persistentCount > 0, 'expected the thick border overlay to be drawn');
+      assert.ok(before.transientCount > 0, 'expected the transient beacon effect to be drawn');
 
-    await scrollAndWaitForTransientGone();
+      await scrollAndWaitForTransientGone();
 
-    assert.ok(
-      await persistentSurvived(),
-      'the persistent border overlay must survive a scroll while the transient beacon is faded'
-    );
+      assert.ok(
+        await persistentSurvived(),
+        'the persistent border overlay must survive a scroll while the transient beacon is faded'
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
   });
 
   test('reduced motion: scroll fades the transient beacon but the thick border overlay survives', async () => {

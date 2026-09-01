@@ -261,37 +261,42 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       const r = document.getElementById('target').getBoundingClientRect();
       return r.top + window.scrollY + r.height / 2;
     });
-    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
 
-    await replay();
-    const geom = await readTrailGeometry(page);
-    assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
+    try {
+      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
 
-    const parsed = parseOffsetPathEnd(geom.offsetPath);
-    assert.deepStrictEqual(parsed.m0, [0, 0], 'the path must start at the arrow\'s own local origin');
+      await replay();
+      const geom = await readTrailGeometry(page);
+      assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
 
-    const actualStartX = parseFloat(geom.left) + parsed.m0[0];
-    const actualStartY = parseFloat(geom.top) + parsed.m0[1];
-    const actualEndX = parseFloat(geom.left) + parsed.end[0];
-    const actualEndY = parseFloat(geom.top) + parsed.end[1];
+      const parsed = parseOffsetPathEnd(geom.offsetPath);
+      assert.deepStrictEqual(parsed.m0, [0, 0], 'the path must start at the arrow\'s own local origin');
 
-    const expectedStartX = mouseClientX + geom.scrollX;
-    const expectedStartY = mouseClientY + geom.scrollY;
-    const expectedEndX = geom.targetLeft + geom.targetWidth / 2 + geom.scrollX;
-    const expectedEndY = geom.targetTop + geom.targetHeight / 2 + geom.scrollY;
+      const actualStartX = parseFloat(geom.left) + parsed.m0[0];
+      const actualStartY = parseFloat(geom.top) + parsed.m0[1];
+      const actualEndX = parseFloat(geom.left) + parsed.end[0];
+      const actualEndY = parseFloat(geom.top) + parsed.end[1];
 
-    assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
+      const expectedStartX = mouseClientX + geom.scrollX;
+      const expectedStartY = mouseClientY + geom.scrollY;
+      const expectedEndX = geom.targetLeft + geom.targetWidth / 2 + geom.scrollX;
+      const expectedEndY = geom.targetTop + geom.targetHeight / 2 + geom.scrollY;
 
-    assert.ok(
-      Math.abs(actualStartX - expectedStartX) <= 2,
-      `start X: expected ~${expectedStartX}, got ${actualStartX}`
-    );
-    assert.ok(
-      Math.abs(actualStartY - expectedStartY) <= 2,
-      `start Y: expected ~${expectedStartY}, got ${actualStartY}`
-    );
-    assert.ok(Math.abs(actualEndX - expectedEndX) <= 2, `end X: expected ~${expectedEndX}, got ${actualEndX}`);
-    assert.ok(Math.abs(actualEndY - expectedEndY) <= 2, `end Y: expected ~${expectedEndY}, got ${actualEndY}`);
+      assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
+
+      assert.ok(
+        Math.abs(actualStartX - expectedStartX) <= 2,
+        `start X: expected ~${expectedStartX}, got ${actualStartX}`
+      );
+      assert.ok(
+        Math.abs(actualStartY - expectedStartY) <= 2,
+        `start Y: expected ~${expectedStartY}, got ${actualStartY}`
+      );
+      assert.ok(Math.abs(actualEndX - expectedEndX) <= 2, `end X: expected ~${expectedEndX}, got ${actualEndX}`);
+      assert.ok(Math.abs(actualEndY - expectedEndY) <= 2, `end Y: expected ~${expectedEndY}, got ${actualEndY}`);
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
   });
 
   test('with no mouse movement anywhere on the page, the path still starts at the find bar, not 0,0', async () => {
@@ -463,51 +468,55 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       (y) => Math.max(0, y - window.innerHeight / 2),
       targetDocY
     );
-    await page.evaluate((y) => window.scrollTo(0, y), desiredScrollY);
-    await waitForCondition(() => page.evaluate(() => window.scrollY), (y) => y > 0, {
-      timeout: POLL_TIMEOUT,
-      message: 'page never actually scrolled before the flash-geometry assertion',
-    });
+    try {
+      await page.evaluate((y) => window.scrollTo(0, y), desiredScrollY);
+      await waitForCondition(() => page.evaluate(() => window.scrollY), (y) => y > 0, {
+        timeout: POLL_TIMEOUT,
+        message: 'page never actually scrolled before the flash-geometry assertion',
+      });
 
-    await replay();
-    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+      await replay();
+      await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
-    const geom = await page.evaluate(() => {
-      const flash = document.querySelector('.oc-trail-flash');
-      const targetRect = document.getElementById('target').getBoundingClientRect();
-      return {
-        left: flash ? parseFloat(flash.style.left) : null,
-        top: flash ? parseFloat(flash.style.top) : null,
-        width: flash ? parseFloat(flash.style.width) : null,
-        height: flash ? parseFloat(flash.style.height) : null,
-        scrollX: window.scrollX,
-        scrollY: window.scrollY,
-        targetLeft: targetRect.left,
-        targetTop: targetRect.top,
-        targetWidth: targetRect.width,
-        targetHeight: targetRect.height,
-      };
-    });
+      const geom = await page.evaluate(() => {
+        const flash = document.querySelector('.oc-trail-flash');
+        const targetRect = document.getElementById('target').getBoundingClientRect();
+        return {
+          left: flash ? parseFloat(flash.style.left) : null,
+          top: flash ? parseFloat(flash.style.top) : null,
+          width: flash ? parseFloat(flash.style.width) : null,
+          height: flash ? parseFloat(flash.style.height) : null,
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+          targetLeft: targetRect.left,
+          targetTop: targetRect.top,
+          targetWidth: targetRect.width,
+          targetHeight: targetRect.height,
+        };
+      });
 
-    assert.ok(geom.left !== null, 'expected a mounted .oc-trail-flash flash element');
-    assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
+      assert.ok(geom.left !== null, 'expected a mounted .oc-trail-flash flash element');
+      assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
 
-    const expectedLeft = geom.targetLeft + geom.scrollX;
-    const expectedTop = geom.targetTop + geom.scrollY;
+      const expectedLeft = geom.targetLeft + geom.scrollX;
+      const expectedTop = geom.targetTop + geom.scrollY;
 
-    // Expanded a few px past the raw match rect so the glow reads outside the text, not
-    // only under it — assert it covers the rect (allowing that expansion) rather than
-    // matching it exactly.
-    assert.ok(geom.left <= expectedLeft + 1, `flash left ${geom.left} must not start inside the match rect (${expectedLeft})`);
-    assert.ok(geom.top <= expectedTop + 1, `flash top ${geom.top} must not start inside the match rect (${expectedTop})`);
-    assert.ok(
-      geom.left + geom.width >= expectedLeft + geom.targetWidth - 1,
-      `flash must extend at least across the match's own width`
-    );
-    assert.ok(
-      geom.top + geom.height >= expectedTop + geom.targetHeight - 1,
-      `flash must extend at least across the match's own height`
-    );
+      // Expanded a few px past the raw match rect so the glow reads outside the text, not
+      // only under it — assert it covers the rect (allowing that expansion) rather than
+      // matching it exactly.
+      assert.ok(geom.left <= expectedLeft + 1, `flash left ${geom.left} must not start inside the match rect (${expectedLeft})`);
+      assert.ok(geom.top <= expectedTop + 1, `flash top ${geom.top} must not start inside the match rect (${expectedTop})`);
+      assert.ok(
+        geom.left + geom.width >= expectedLeft + geom.targetWidth - 1,
+        `flash must extend at least across the match's own width`
+      );
+      assert.ok(
+        geom.top + geom.height >= expectedTop + geom.targetHeight - 1,
+        `flash must extend at least across the match's own height`
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
   });
 
   test('the absorption flash cannot fire early: its delay equals the travel duration', async () => {
