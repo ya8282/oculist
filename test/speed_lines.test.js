@@ -461,10 +461,35 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
       // 'scroll-behavior'. On a page that sets 'smooth' this would need a settle wait.
       await page.evaluate((y) => window.scrollTo(0, y), SCROLL_AT_READ);
 
-      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesDone', (v) => v === true, {
-        timeout: LONG_TIMEOUT,
-        message: 'speed lines beacon never reached its final frame',
-      });
+      // oculist-a96: this used to wait for window.__ocTest.speedLinesDone, but that hook
+      // reflects the rAF loop's own completion, which has nothing to do with what this test
+      // actually checks (the highlight's document-coordinate maths across an intervening
+      // scroll) -- it was never load-bearing here. Pre-oculist-qii it happened to flip true
+      // anyway, because fadeActiveBeacons() removed the beacon's DOM on scroll without
+      // cancelling its rAF loop, so the loop kept ticking on the orphaned, detached canvas
+      // until it hit its own finish line. Once oculist-qii makes fadeActiveBeacons() cancel
+      // that loop atomically with removal, completion is no longer reachable after a scroll,
+      // and this wait would become an outright 15s timeout instead.
+      //
+      // What this test needs is confirmed directly by content.js's capture sites:
+      // lastSpeedLinesContainerRect is written once, synchronously, during animateSpeedLines()'s
+      // setup -- before its first rAF frame runs -- and is never touched again for the rest of
+      // the beacon's life. lastSpeedLinesHighlightY is set during that same setup, before the
+      // first frame; frame() does rewrite it every frame, but always to the same fixed value
+      // (the local `highlightY = offsetY`, which never changes across the beacon's run), so its
+      // value is already settled by setup and cannot drift afterward. Both hooks are therefore
+      // already populated by the frameCount >= 2 wait above, well before the second scrollTo();
+      // this poll is a safety margin against the CDP round trip, not a wait for animation
+      // progress.
+      await waitForContentScriptValue(
+        evalInContentScript,
+        '!!(window.__ocTest.lastSpeedLinesContainerRect && window.__ocTest.lastSpeedLinesHighlightY != null)',
+        (v) => v === true,
+        {
+          timeout: POLL_TIMEOUT,
+          message: 'centre-line highlight anchor hooks never populated after the scroll',
+        }
+      );
 
       const result = await evalInContentScript(`
         (function () {
