@@ -566,10 +566,19 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   // the last frame that will ever run, by construction. This pins a MutationObserver
   // (isolated content-script world, so it can read window.__ocTest directly) to the exact
   // instant the container is removed from the DOM and records speedLinesFrameCount at that
-  // instant — then positively confirms the counter never advances past that recorded value,
-  // the same grew/timeout pattern the cancelBeacons() test below uses. Against a version that
-  // still used the independent setTimeout(DUR), this fails: the recorded value is one frame
-  // short of the final count, so the counter is later observed to grow past it.
+  // instant — then positively confirms the counter never advances past that recorded value.
+  // Against a version that still used the independent setTimeout(DUR), this fails: the
+  // recorded value is one frame short of the final count, so the counter is later observed
+  // to grow past it.
+  //
+  // oculist-j5n: the positive confirmation used to poll for a full POLL_TIMEOUT (5s) on its
+  // success path, adding ~5.9s to every suite run. The race it guards against (the container
+  // removed a frame early) was measured at 8-16ms wall clock — under one rAF tick at 60fps —
+  // so WS4_FRAME_BUDGET rAF ticks driven from inside the page (not Node-side setTimeout
+  // polling) gives an order-of-magnitude margin over that window while resolving in well
+  // under 200ms instead of 5s.
+  const WS4_FRAME_BUDGET = 10;
+
   test('the container is removed only after the rAF loop\'s own final frame, never before', async () => {
     await replay();
     await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
@@ -579,16 +588,18 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
 
     // Armed in the isolated content-script world (not page.evaluate()'s main world) so the
     // observer callback can read window.__ocTest directly — that hook lives only in the
-    // isolated world's own global, not the page's.
+    // isolated world's own global, not the page's. Captures the actual container element
+    // this run created (rather than matching any '.oc-beacon-transient' removal) so the
+    // observer can't be fooled by an unrelated transient beacon being removed elsewhere.
     await evalInContentScript(`
       (function () {
         window.__ocWs4RemovalFrameCount = null;
+        var container = document.querySelector('.oc-beacon-transient');
         var mo = new MutationObserver(function (records) {
           for (var i = 0; i < records.length; i++) {
             var removed = records[i].removedNodes;
             for (var j = 0; j < removed.length; j++) {
-              var node = removed[j];
-              if (node.nodeType === 1 && node.classList && node.classList.contains('oc-beacon-transient')) {
+              if (removed[j] === container) {
                 window.__ocWs4RemovalFrameCount = window.__ocTest.speedLinesFrameCount;
                 mo.disconnect();
                 return;
@@ -608,26 +619,25 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     );
     assert.ok(atRemoval > 0, `sanity check: expected a nonzero frame count at the removal instant, got ${atRemoval}`);
 
-    // Positively confirm the frame counter never grows past its value at the removal
-    // instant: wait (up to the same POLL_TIMEOUT budget used everywhere else in this suite)
-    // for it to exceed that value. If removal genuinely happens strictly after the last
-    // frame, that wait times out — the success case here — rather than resolving.
-    let grew = false;
-    try {
-      await waitForContentScriptValue(
-        evalInContentScript,
-        'window.__ocTest.speedLinesFrameCount',
-        (v) => v > atRemoval,
-        { timeout: POLL_TIMEOUT }
-      );
-      grew = true;
-    } catch (e) {
-      if (!/timed out/.test(e.message)) throw e;
-    }
+    // Positively confirm the frame counter never grows past its value at the removal instant:
+    // let WS4_FRAME_BUDGET more real animation frames tick from inside the page, then read the
+    // counter. If removal genuinely happens strictly after the last frame, no further frame()
+    // call is ever scheduled, so the counter comes back unchanged — the success case here.
+    const afterBudget = await evalInContentScript(`
+      new Promise(function (resolve) {
+        var remaining = ${WS4_FRAME_BUDGET};
+        function tick() {
+          if (remaining <= 0) { resolve(window.__ocTest.speedLinesFrameCount); return; }
+          remaining--;
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })
+    `);
     assert.strictEqual(
-      grew,
-      false,
-      `expected speedLinesFrameCount to never advance past its value (${atRemoval}) at the moment the container was removed from the DOM`
+      afterBudget,
+      atRemoval,
+      `expected speedLinesFrameCount to never advance past its value (${atRemoval}) at the moment the container was removed from the DOM, but observed ${afterBudget} after ${WS4_FRAME_BUDGET} more rAF ticks`
     );
   });
 
