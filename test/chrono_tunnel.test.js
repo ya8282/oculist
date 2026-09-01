@@ -402,6 +402,163 @@ describe('Chrono Tunnel: slit-scan ring field rushing past the match', () => {
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: LONG_TIMEOUT });
   });
 
+  // oculist-3ae: animateChronoTunnel's early-return guard (rect missing or zero-sized)
+  // used to sit BEFORE every __ocTest hook was touched, so a skipped run left all four
+  // hooks holding whatever the previous real run had last written -- the same class of
+  // bug oculist-47e fixed for animateSpeedLines (see that fix's identical test in
+  // speed_lines.test.js, which this mirrors). Worse here than for speed lines:
+  // lastChronoHueRun.hueSamples.push(...) runs inside the frame loop, so a stale object
+  // left in place would keep ACCUMULATING samples across runs rather than merely being
+  // read stale. This runs a real beacon first (so every hook holds genuine, non-default
+  // data), captures that state, then drives the guard through the extension's own normal
+  // call path -- no synthetic rect, no test-only export of the effect renderer itself.
+  test("a skipped run (zero-size rect) resets every hook instead of leaving the previous run's data", async () => {
+    await replay();
+    await waitForChronoDone();
+
+    const readHooks = `
+      ({
+        hueRun: window.__ocTest.lastChronoHueRun,
+        anchor: window.__ocTest.lastChronoAnchor,
+        frameCount: window.__ocTest.chronoFrameCount,
+        done: window.__ocTest.chronoDone
+      })
+    `;
+
+    const before = await evalInContentScript(readHooks);
+
+    // Sanity check: the real run above must have actually left every hook holding real
+    // data -- otherwise the assertions below could pass vacuously against an
+    // already-default value instead of proving the guard resets anything.
+    assert.ok(
+      before.hueRun && Array.isArray(before.hueRun.hueSamples) && before.hueRun.hueSamples.length > 0,
+      'sanity check: expected a real lastChronoHueRun with rendered hueSamples from the prior run'
+    );
+    assert.ok(before.anchor, 'sanity check: expected a lastChronoAnchor from the prior run');
+    assert.ok(before.frameCount > 0, 'sanity check: expected a nonzero chronoFrameCount from the prior run');
+    assert.strictEqual(before.done, true, 'sanity check: expected the prior run to have completed');
+
+    // Drive the SAME early-return guard through the extension's real, normal call path
+    // instead of a synthetic rect or an exported test-only closure. font-size:0 is
+    // verified (in real Chromium) to yield a getBoundingClientRect of {width:0, height:0}
+    // while the element stays display:inline/visibility:visible, so it remains indexed
+    // and remains the active match; no chip/term change is needed.
+    await page.evaluate(() => { document.getElementById('target').style.fontSize = '0'; });
+    try {
+      await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+      await page.keyboard.press('Enter');
+
+      // No '.oc-beacon' will ever appear -- the guard returns before the container is
+      // created -- so this cannot reuse replay()'s own waitForSelector('.oc-beacon'). Poll
+      // chronoFrameCount specifically instead: it can only go from the prior run's
+      // nonzero value back to 0 by this reset running, since no real run is possible once
+      // the element is zero-sized.
+      const after = await waitForContentScriptValue(evalInContentScript, readHooks, (v) => v.frameCount === 0, {
+        timeout: POLL_TIMEOUT,
+        message: 'the zero-size-match run never reset chronoFrameCount',
+      });
+
+      assert.strictEqual(
+        after.hueRun,
+        null,
+        `expected a skipped run to null out lastChronoHueRun instead of leaving (or appending to) the prior run's ${before.hueRun.hueSamples.length}-sample data`
+      );
+      assert.strictEqual(
+        after.anchor,
+        null,
+        `expected a skipped run to null out lastChronoAnchor instead of leaving the prior run's ${JSON.stringify(before.anchor)}`
+      );
+      assert.strictEqual(
+        after.frameCount,
+        0,
+        `expected a skipped run to zero chronoFrameCount instead of leaving the prior run's ${before.frameCount}`
+      );
+      // The load-bearing assertion: a test that polls chronoDone === true to detect
+      // completion must NOT be satisfied by a skipped run. Leaving this false means such a
+      // wait times out loudly instead of resolving off the prior run's stale true.
+      assert.strictEqual(
+        after.done,
+        false,
+        "expected a skipped run to leave chronoDone false rather than reporting the prior run's stale completion"
+      );
+    } finally {
+      await page.evaluate(() => { document.getElementById('target').style.fontSize = ''; });
+    }
+  });
+
+  // oculist-qii: fadeActiveBeacons() (content.js, called from handleScroll()) is the
+  // second of the two paths that remove a .oc-beacon element, and until this fix did so
+  // without ever cancelling container.__rafId first — a container detached mid-flight was
+  // permanently unreachable afterward (cancelBeacons() finds its targets via
+  // document.querySelectorAll('.oc-beacon')), so the rAF loop it left running spun forever
+  // against a detached canvas. This drives the real bug repro: a real scroll
+  // (page.mouse.wheel, not a synthetic 'scroll' dispatch) while the beacon is live, and
+  // asserts the frame loop actually stops rather than merely asserting the element is gone.
+  test('a real scroll mid-flight stops the rAF loop via fadeActiveBeacons(), not just removes the element', async () => {
+    // This suite's page is exactly one viewport tall (scrollHeight === innerHeight), so a
+    // real wheel scroll has nothing to scroll — window.scrollY would stay 0 and this test
+    // would silently pass for the wrong reason (the effect's own natural DUR completion
+    // stopping the frame counter, not fadeActiveBeacons()). Padding the page taller makes
+    // the scroll genuine before anything else runs.
+    //
+    // Centre the match first so this replay() never itself needs to auto-scroll the page
+    // into view — highlightActiveRange() (content.js) only calls triggerAutoScrollFlag()
+    // when the match is NOT already fully in the viewport, and that flag makes
+    // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
+    // first guarantees replay()'s own Enter never sets it.
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px';
+      document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+
+    await replay();
+
+    // Let a couple of real frames render first, so a stuck-at-zero counter can't pass by
+    // accident.
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.chronoFrameCount', (v) => v >= 2, {
+      timeout: POLL_TIMEOUT,
+      message: 'chrono tunnel never rendered its first frames',
+    });
+
+    // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
+    // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
+    // path handleScroll() is wired to.
+    const scrollYBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.move(600, 400);
+    await page.mouse.wheel(0, 300);
+    await page.waitForFunction((y) => window.scrollY > y, scrollYBefore, { timeout: POLL_TIMEOUT });
+
+    // fadeActiveBeacons() fades over 50ms, then removes on a setTimeout — wait past that
+    // window for the container to actually be gone before reading the frame count.
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+      timeout: POLL_TIMEOUT,
+    });
+
+    const afterRemoval = await evalInContentScript('window.__ocTest.chronoFrameCount');
+
+    // Positively confirm the frame counter never grows again: wait (up to the same
+    // POLL_TIMEOUT budget used everywhere else in this suite) for it to exceed its
+    // post-removal value. If fadeActiveBeacons() actually cancelled the rAF loop, that wait
+    // times out — which is the success case here — rather than resolving.
+    let grew = false;
+    try {
+      await waitForContentScriptValue(
+        evalInContentScript,
+        'window.__ocTest.chronoFrameCount',
+        (v) => v > afterRemoval,
+        { timeout: POLL_TIMEOUT }
+      );
+      grew = true;
+    } catch (e) {
+      if (!/timed out/.test(e.message)) throw e;
+    }
+    assert.strictEqual(
+      grew,
+      false,
+      `expected the rAF loop to have stopped after a scroll-driven fadeActiveBeacons() removal; frame count kept growing past ${afterRemoval}`
+    );
+  });
+
   // Deliberately last: Escape closes the finder for the rest of the suite (__ocDestroy()
   // calls cancelBeacons()), so no later test can reopen it within this shared session.
   test('cancelBeacons() stops the rAF loop mid-flight (proves container.__rafId is wired)', async () => {

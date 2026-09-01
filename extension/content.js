@@ -1027,22 +1027,26 @@
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
 
+  // WAAPI animations do NOT stop on their own when their target is detached from the
+  // document — verified empirically: playState stays 'running' and currentTime keeps
+  // advancing on a removed element unless .cancel() is called explicitly. Canvas
+  // effects hang their rAF id off __rafId above; DOM/WAAPI effects (e.g.
+  // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
+  // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
+  function destroyBeacon(b) {
+    if (b.__rafId) { cancelAnimationFrame(b.__rafId); b.__rafId = null; }
+    if (b.__waapiAnims) {
+      for (var j = 0; j < b.__waapiAnims.length; j++) {
+        try { b.__waapiAnims[j].cancel(); } catch (e) {}
+      }
+    }
+    b.remove();
+  }
+
   function cancelBeacons() {
     var beacons = document.querySelectorAll('.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
-      if (beacons[i].__rafId) cancelAnimationFrame(beacons[i].__rafId);
-      // WAAPI animations do NOT stop on their own when their target is detached from the
-      // document — verified empirically: playState stays 'running' and currentTime keeps
-      // advancing on a removed element unless .cancel() is called explicitly. Canvas
-      // effects hang their rAF id off __rafId above; DOM/WAAPI effects (e.g.
-      // Cyber-Vision) hang their live Animation objects off __waapiAnims instead, so a
-      // beacon cancelled mid-flight actually stops animating, not just leaves the DOM.
-      if (beacons[i].__waapiAnims) {
-        for (var j = 0; j < beacons[i].__waapiAnims.length; j++) {
-          try { beacons[i].__waapiAnims[j].cancel(); } catch (e) {}
-        }
-      }
-      beacons[i].remove();
+      destroyBeacon(beacons[i]);
     }
     activeBeacons = 0;
   }
@@ -1080,7 +1084,7 @@
     var offsetY = cy - targetTop;
 
     var laserContainer = document.createElement('div');
-    laserContainer.className = 'oc-beacon';
+    laserContainer.className = 'oc-beacon oc-beacon-transient';
     laserContainer.style.cssText = [
       'position:absolute',
       'left:0', 'top:' + targetTop + 'px',
@@ -1216,7 +1220,7 @@
     var h = Math.max(rect.height + 30, 50) * scale;
 
     var overlay = document.createElement('div');
-    overlay.className = 'oc-beacon';
+    overlay.className = 'oc-beacon oc-beacon-transient';
     overlay.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
       'pointer-events:none', 'z-index:2147483641',
@@ -1241,7 +1245,7 @@
     var color = getEffectiveColors().beacon || '#38bdf8';
 
     var ring = document.createElement('div');
-    ring.className = 'oc-beacon';
+    ring.className = 'oc-beacon oc-beacon-transient';
     ring.style.cssText = [
       'position:fixed',
       'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
@@ -1283,7 +1287,7 @@
 
     var scale = getBeaconScale();
     var leftArrow = document.createElement('div');
-    leftArrow.className = 'oc-beacon';
+    leftArrow.className = 'oc-beacon oc-beacon-transient';
     leftArrow.textContent = '▶';
     var arrowSize = Math.max(30, 36 * scale);
     leftArrow.style.cssText = [
@@ -1303,7 +1307,7 @@
     document.documentElement.appendChild(leftArrow);
 
     var rightArrow = document.createElement('div');
-    rightArrow.className = 'oc-beacon';
+    rightArrow.className = 'oc-beacon oc-beacon-transient';
     rightArrow.textContent = '◀';
     rightArrow.style.cssText = [
       'position:absolute',
@@ -1375,7 +1379,7 @@
     var offsetY = cy - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1498,7 +1502,7 @@
     var offsetY = y - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1680,7 +1684,7 @@
     var offsetY = cy - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1802,7 +1806,7 @@
       var lineHeight = Math.max(Math.abs(dy), 1);
 
       var lineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      lineSvg.setAttribute('class', 'oc-beacon');
+      lineSvg.setAttribute('class', 'oc-beacon oc-beacon-transient');
       lineSvg.style.cssText = [
         'position:absolute',
         'left:' + lineLeft + 'px', 'top:' + lineTop + 'px',
@@ -1851,7 +1855,7 @@
 
     // Arrowhead — mounted at the start point, offset-path expressed relative to it.
     var arrow = document.createElement('div');
-    arrow.className = 'oc-beacon oc-trail-arrow';
+    arrow.className = 'oc-beacon oc-beacon-transient oc-trail-arrow';
     arrow.textContent = '▶';
     arrow.style.cssText = [
       'position:absolute',
@@ -1894,7 +1898,7 @@
     var flashHeight = rect.height + flashPad * 2;
 
     var flash = document.createElement('div');
-    flash.className = 'oc-beacon oc-trail-flash';
+    flash.className = 'oc-beacon oc-beacon-transient oc-trail-flash';
     var flashCss = [
       'position:absolute',
       'left:' + flashLeft + 'px', 'top:' + flashTop + 'px',
@@ -1941,7 +1945,7 @@
     var scale = getBeaconScale();
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:fixed', 'left:0', 'top:0',
       'width:' + vw + 'px', 'height:' + vh + 'px',
@@ -2187,7 +2191,7 @@
     var scale = getBeaconScale();
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:fixed', 'left:0', 'top:0',
       'width:' + vw + 'px', 'height:' + vh + 'px',
@@ -2385,7 +2389,7 @@
     var offsetY = my - targetTop; // match centre, local canvas y
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
@@ -2655,6 +2659,20 @@
   // collapses the sweep to a single hue and cuts the ring count hard — this is the
   // loudest of the four new effects, so Lite Mode has to be genuinely calm.
   function animateChronoTunnel(rect) {
+    // Reset every chrono __ocTest hook before the guard below can return early, so a
+    // skipped run (rect missing or zero-sized) can never be graded — or, worse, keep
+    // accumulating hueSamples — against the previous run's leftover values (oculist-3ae,
+    // same gap oculist-47e closed for animateSpeedLines). lastChronoHueRun/lastChronoAnchor
+    // reset to null (unambiguous "this run produced nothing"; a real run never writes null
+    // back at its own setup, so reading a property off either one after a skipped run
+    // throws instead of silently reporting the prior run's hues/anchor).
+    // chronoFrameCount resets to 0 and chronoDone to false, mirroring a real run's own
+    // setup before its first frame.
+    window.__ocTest.lastChronoHueRun = null;
+    window.__ocTest.lastChronoAnchor = null;
+    window.__ocTest.chronoFrameCount = 0;
+    window.__ocTest.chronoDone = false;
+
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
     var mw = rect.width;
@@ -2683,7 +2701,7 @@
     var offsetY = my - targetTop; // match centre, local canvas y
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
@@ -2810,15 +2828,36 @@
       } else {
         ctx.clearRect(0, 0, W, H);
         window.__ocTest.chronoDone = true;
+        // Removal used to be an independently-timed setTimeout(DUR) fired right after the
+        // first rAF; that timer consistently fired ~8-16ms before this completing frame,
+        // so exactly one more frame() ran after the container was already detached,
+        // pushing into whatever __ocTest.lastChronoHueRun a later run had installed by
+        // then (oculist-3ae review 1). Removing here instead, in frame()'s own completion
+        // branch, puts removal strictly after the last frame that will ever run, by
+        // construction of this single rAF loop, instead of racing a second, unrelated
+        // clock against it. There is no cancelAnimationFrame call here — none is needed,
+        // since taking this branch means no further frame is ever scheduled.
+        //
+        // Three things can still remove this container before this branch runs:
+        // cancelBeacons() and fadeActiveBeacons() (both via destroyBeacon(), since the
+        // container carries .oc-beacon and .oc-beacon-transient) on a new search or a
+        // scroll, or this branch itself on normal completion. Whichever fires first wins;
+        // container.remove() on an already-detached node is a harmless no-op.
+        //
+        // Accepted trade (oculist-3ae review 2): if the tab is hidden, rAF is suspended by
+        // the browser and this branch never runs until the tab is shown again, so the
+        // container now persists attached instead of being removed by the old wall-clock
+        // timer. On resume, one frame runs and removes it — at most one frame of stale
+        // rings, self-healing. The offsetting benefit: while suspended, the container
+        // stays reachable by cancelBeacons() (it is still in the DOM), where the old timer
+        // would eventually have detached it regardless of tab visibility, permanently
+        // outside cancelBeacons()'s reach.
+        container.remove();
       }
     }
 
     animFrameId = requestAnimationFrame(frame);
     container.__rafId = animFrameId;
-
-    setTimeout(function () {
-      container.remove();
-    }, DUR);
   }
 
   // Cyber-Vision: a targeting-HUD sweep over the viewport, resolving down onto the match.
@@ -2844,6 +2883,12 @@
   // undercut the effect's own premise. Every other surface (tint, scanlines, sweep, brackets,
   // readout) rides getEffectiveColors().beacon per the shared beacon contract.
   function animateCyberVision(rect) {
+    // Reset the __ocTest hook before the guard below can return early, so a skipped run
+    // (rect missing or zero-sized) can never look like a completed run off the previous
+    // run's leftover true (oculist-3ae, same gap oculist-47e closed for
+    // animateSpeedLines).
+    window.__ocTest.cyberVisionBracketsSettled = false;
+
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
     var mw = rect.width;
@@ -2873,7 +2918,7 @@
     function localY(yDoc) { return yDoc - targetTop; }
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:0', 'top:' + targetTop + 'px',
@@ -3009,7 +3054,8 @@
     }
 
     // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
-    // (mirrors speedLinesDone/chronoDone). The brackets' own keyframes (above) reach translate(0,0)
+    // (mirrors speedLinesDone/chronoDone; also reset ahead of the zero-rect guard above,
+    // oculist-3ae). The brackets' own keyframes (above) reach translate(0,0)
     // — fully snapped in — at offset 0.3 of their delay+duration and hold there until the
     // fade-out; that offset is exact real math derived from this run's own BRACKET_DELAY/
     // BRACKET_DUR, not a guess, so a timeout keyed to it is a genuine completion signal
@@ -3017,9 +3063,21 @@
     // end; here "settled" is a mid-animation point .finished cannot express, since waiting
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
+    //
+    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle,
+    // so it is not cancelled if this run's container is removed early (a new search calls
+    // animate() -> cancelBeacons() synchronously before every run, including the one that
+    // reset the hook above; a scroll mid-effect calls fadeActiveBeacons()). Both paths
+    // detach the container via destroyBeacon() before this timer can fire in that
+    // scenario, so the isConnected check below tells a stale timer (its container already
+    // detached) apart from a live one (still attached, genuinely settled) and stops the
+    // stale timer from clobbering a later run's fresh `false` back to `true` (oculist-3ae
+    // review 2).
     window.__ocTest.cyberVisionBracketsSettled = false;
     setTimeout(function () {
-      window.__ocTest.cyberVisionBracketsSettled = true;
+      if (container.isConnected) {
+        window.__ocTest.cyberVisionBracketsSettled = true;
+      }
     }, BRACKET_DELAY + BRACKET_DUR * 0.3);
 
     // Readout beside the brackets. Decorative HUD chrome, not content — aria-hidden so it is
@@ -3096,22 +3154,31 @@
 
     if (settings.displayPreset === 'reduced-motion') {
       var scale = getBeaconScale();
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height / 2;
+      // oculist-4re: cx/cy must be document coordinates (like x/y above), not
+      // viewport coordinates, otherwise the mask stays fixed on screen while
+      // the match scrolls out from under it. Sizing the overlay to the full
+      // document (not just top/left/right/bottom:0, which resolves against the
+      // viewport-sized containing block for position:absolute) is the smaller
+      // fix and matches how glow/leftArrow/rightArrow already use x/y/w/h.
+      var cx = x + w / 2;
+      var cy = y + h / 2;
       var sw = Math.max(rect.width + 40, 80) * scale;
       var sh = Math.max(rect.height + 24, 40) * scale;
+      var docWidth = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
+      var docHeight = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
 
       var overlay = document.createElement('div');
-      overlay.className = 'oc-beacon';
+      overlay.className = 'oc-beacon oc-beacon-transient';
       overlay.style.cssText = [
-        'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+        'position:absolute', 'top:0', 'left:0',
+        'width:' + docWidth + 'px', 'height:' + docHeight + 'px',
         'pointer-events:none', 'z-index:2147483641',
         'background:radial-gradient(ellipse ' + (sw * 2) + 'px ' + (sh * 2) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(28, 25, 22, 0.45) 80%)'
       ].join(';');
       document.documentElement.appendChild(overlay);
 
       var glow = document.createElement('div');
-      glow.className = 'oc-beacon';
+      glow.className = 'oc-beacon oc-beacon-transient';
       glow.style.cssText = [
         'position:absolute',
         'left:' + (x - 6) + 'px', 'top:' + (y - 6) + 'px',
@@ -3127,7 +3194,7 @@
       document.documentElement.appendChild(glow);
 
       var leftArrow = document.createElement('div');
-      leftArrow.className = 'oc-beacon';
+      leftArrow.className = 'oc-beacon oc-beacon-transient';
       leftArrow.textContent = '▶';
       var arrowSize = Math.max(20, 24 * scale);
       leftArrow.style.cssText = [
@@ -3147,7 +3214,7 @@
       document.documentElement.appendChild(leftArrow);
 
       var rightArrow = document.createElement('div');
-      rightArrow.className = 'oc-beacon';
+      rightArrow.className = 'oc-beacon oc-beacon-transient';
       rightArrow.textContent = '◀';
       rightArrow.style.cssText = [
         'position:absolute',
@@ -3214,7 +3281,7 @@
     }
 
     var glow = document.createElement('div');
-    glow.className = 'oc-beacon';
+    glow.className = 'oc-beacon oc-beacon-transient';
     glow.style.cssText = [
       'position:absolute',
       'left:' + (x - 4) + 'px', 'top:' + (y - 4) + 'px',
@@ -3653,12 +3720,13 @@
       // full-motion site below raises (identical zero-rect guard, oculist-5rv), so
       // fadeActiveBeacons()'s scroll-path check no longer short-circuits before it can
       // fade a reduced-motion beacon out. Without this, a reduced-motion beacon just
-      // sits there until its own multi-second WAAPI animation finishes — the
-      // displayPreset==='reduced-motion' variant's full-viewport spotlight overlay is
-      // position:fixed and centered on a one-shot viewport-coordinate point, so it goes
-      // visibly stale (points at the wrong place) the moment the page scrolls under it.
+      // sits there until its own multi-second WAAPI animation finishes, long after the
+      // user has scrolled on. (The spotlight overlay's own scroll staleness — it used to
+      // be position:fixed and centred on a one-shot viewport-coordinate point — was a
+      // second, separate reason to fade; oculist-4re fixed that by rendering it in
+      // document coordinates, so it now tracks scroll like its siblings.)
       // Fading it out on scroll, same as the full-motion path, is itself a much smaller
-      // dose of motion than leaving a mispositioned overlay on screen — and a brief
+      // dose of motion than leaving a stale beacon on screen — and a brief
       // opacity fade is already how this codebase treats "acceptable motion" under
       // 'reduced' elsewhere (see the magnifier's fade-in comment above).
       if (rect && rect.width !== 0 && rect.height !== 0) activeBeacons++;
@@ -3680,7 +3748,7 @@
       // so a guard-skipped run below still counted itself with no matching decrement
       // — a real leak, just not a suppression: activeBeacons is only ever compared to
       // 0 (cancelBeacons resets it; fadeActiveBeacons's scroll-path check
-      // short-circuits a querySelectorAll('.oc-beacon') on it), so it's a "have we
+      // short-circuits a querySelectorAll('.oc-beacon-transient') on it), so it's a "have we
       // drawn since the last reset" flag, not a true count, and each leaked increment
       // only cost one wasted querySelectorAll — fadeActiveBeacons() self-heals a pure
       // leak on the first scroll after it, since it zeroes the flag when it finds no
@@ -4886,7 +4954,10 @@
 
   function fadeActiveBeacons() {
     if (activeBeacons === 0) return;
-    var beacons = document.querySelectorAll('.oc-beacon');
+    // Only the transient beacon effects, not the persistent accessibility overlays
+    // (border/shape/label/magnifier) that drawActiveOverlays() also tags .oc-beacon —
+    // those track scroll correctly in document coordinates and must survive it.
+    var beacons = document.querySelectorAll('.oc-beacon-transient');
     if (beacons.length === 0) { activeBeacons = 0; return; }
     activeBeacons = 0;
     for (var i = 0; i < beacons.length; i++) {
@@ -4897,7 +4968,13 @@
     setTimeout(function () {
       for (var i = 0; i < beacons.length; i++) {
         if (beacons[i] && beacons[i].parentNode && beacons[i].style.opacity === '0') {
-          beacons[i].remove();
+          // During the fade the beacon is still attached, so cancelBeacons() can still
+          // reach it — there is no orphan window until the removal itself. Cancelling
+          // at fade start instead of here would freeze the animation mid-fade, a
+          // gratuitous visual change. destroyBeacon() cancels and removes in the same
+          // statement, closing the window where a detached element is still animating
+          // and no longer findable via querySelectorAll('.oc-beacon').
+          destroyBeacon(beacons[i]);
         }
       }
     }, 50);
