@@ -3096,15 +3096,24 @@
 
     if (settings.displayPreset === 'reduced-motion') {
       var scale = getBeaconScale();
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top + rect.height / 2;
+      // oculist-4re: cx/cy must be document coordinates (like x/y above), not
+      // viewport coordinates, otherwise the mask stays fixed on screen while
+      // the match scrolls out from under it. Sizing the overlay to the full
+      // document (not just top/left/right/bottom:0, which resolves against the
+      // viewport-sized containing block for position:absolute) is the smaller
+      // fix and matches how glow/leftArrow/rightArrow already use x/y/w/h.
+      var cx = x + w / 2;
+      var cy = y + h / 2;
       var sw = Math.max(rect.width + 40, 80) * scale;
       var sh = Math.max(rect.height + 24, 40) * scale;
+      var docWidth = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
+      var docHeight = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
 
       var overlay = document.createElement('div');
       overlay.className = 'oc-beacon oc-beacon-transient';
       overlay.style.cssText = [
-        'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+        'position:absolute', 'top:0', 'left:0',
+        'width:' + docWidth + 'px', 'height:' + docHeight + 'px',
         'pointer-events:none', 'z-index:2147483641',
         'background:radial-gradient(ellipse ' + (sw * 2) + 'px ' + (sh * 2) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(28, 25, 22, 0.45) 80%)'
       ].join(';');
@@ -3653,12 +3662,13 @@
       // full-motion site below raises (identical zero-rect guard, oculist-5rv), so
       // fadeActiveBeacons()'s scroll-path check no longer short-circuits before it can
       // fade a reduced-motion beacon out. Without this, a reduced-motion beacon just
-      // sits there until its own multi-second WAAPI animation finishes — the
-      // displayPreset==='reduced-motion' variant's full-viewport spotlight overlay is
-      // position:fixed and centered on a one-shot viewport-coordinate point, so it goes
-      // visibly stale (points at the wrong place) the moment the page scrolls under it.
+      // sits there until its own multi-second WAAPI animation finishes, long after the
+      // user has scrolled on. (The spotlight overlay's own scroll staleness — it used to
+      // be position:fixed and centred on a one-shot viewport-coordinate point — was a
+      // second, separate reason to fade; oculist-4re fixed that by rendering it in
+      // document coordinates, so it now tracks scroll like its siblings.)
       // Fading it out on scroll, same as the full-motion path, is itself a much smaller
-      // dose of motion than leaving a mispositioned overlay on screen — and a brief
+      // dose of motion than leaving a stale beacon on screen — and a brief
       // opacity fade is already how this codebase treats "acceptable motion" under
       // 'reduced' elsewhere (see the magnifier's fade-in comment above).
       if (rect && rect.width !== 0 && rect.height !== 0) activeBeacons++;
