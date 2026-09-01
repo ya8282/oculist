@@ -1080,7 +1080,7 @@
     var offsetY = cy - targetTop;
 
     var laserContainer = document.createElement('div');
-    laserContainer.className = 'oc-beacon';
+    laserContainer.className = 'oc-beacon oc-beacon-transient';
     laserContainer.style.cssText = [
       'position:absolute',
       'left:0', 'top:' + targetTop + 'px',
@@ -1216,7 +1216,7 @@
     var h = Math.max(rect.height + 30, 50) * scale;
 
     var overlay = document.createElement('div');
-    overlay.className = 'oc-beacon';
+    overlay.className = 'oc-beacon oc-beacon-transient';
     overlay.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
       'pointer-events:none', 'z-index:2147483641',
@@ -1241,7 +1241,7 @@
     var color = getEffectiveColors().beacon || '#38bdf8';
 
     var ring = document.createElement('div');
-    ring.className = 'oc-beacon';
+    ring.className = 'oc-beacon oc-beacon-transient';
     ring.style.cssText = [
       'position:fixed',
       'left:' + (cx - w/2) + 'px', 'top:' + (cy - h/2) + 'px',
@@ -1283,7 +1283,7 @@
 
     var scale = getBeaconScale();
     var leftArrow = document.createElement('div');
-    leftArrow.className = 'oc-beacon';
+    leftArrow.className = 'oc-beacon oc-beacon-transient';
     leftArrow.textContent = '▶';
     var arrowSize = Math.max(30, 36 * scale);
     leftArrow.style.cssText = [
@@ -1303,7 +1303,7 @@
     document.documentElement.appendChild(leftArrow);
 
     var rightArrow = document.createElement('div');
-    rightArrow.className = 'oc-beacon';
+    rightArrow.className = 'oc-beacon oc-beacon-transient';
     rightArrow.textContent = '◀';
     rightArrow.style.cssText = [
       'position:absolute',
@@ -1375,7 +1375,7 @@
     var offsetY = cy - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1498,7 +1498,7 @@
     var offsetY = y - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1680,7 +1680,7 @@
     var offsetY = cy - targetTop;
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + targetLeft + 'px', 'top:' + targetTop + 'px',
@@ -1802,7 +1802,7 @@
       var lineHeight = Math.max(Math.abs(dy), 1);
 
       var lineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      lineSvg.setAttribute('class', 'oc-beacon');
+      lineSvg.setAttribute('class', 'oc-beacon oc-beacon-transient');
       lineSvg.style.cssText = [
         'position:absolute',
         'left:' + lineLeft + 'px', 'top:' + lineTop + 'px',
@@ -1851,7 +1851,7 @@
 
     // Arrowhead — mounted at the start point, offset-path expressed relative to it.
     var arrow = document.createElement('div');
-    arrow.className = 'oc-beacon oc-trail-arrow';
+    arrow.className = 'oc-beacon oc-beacon-transient oc-trail-arrow';
     arrow.textContent = '▶';
     arrow.style.cssText = [
       'position:absolute',
@@ -1894,7 +1894,7 @@
     var flashHeight = rect.height + flashPad * 2;
 
     var flash = document.createElement('div');
-    flash.className = 'oc-beacon oc-trail-flash';
+    flash.className = 'oc-beacon oc-beacon-transient oc-trail-flash';
     var flashCss = [
       'position:absolute',
       'left:' + flashLeft + 'px', 'top:' + flashTop + 'px',
@@ -1941,7 +1941,7 @@
     var scale = getBeaconScale();
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:fixed', 'left:0', 'top:0',
       'width:' + vw + 'px', 'height:' + vh + 'px',
@@ -2187,7 +2187,7 @@
     var scale = getBeaconScale();
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:fixed', 'left:0', 'top:0',
       'width:' + vw + 'px', 'height:' + vh + 'px',
@@ -2385,7 +2385,7 @@
     var offsetY = my - targetTop; // match centre, local canvas y
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
@@ -2683,7 +2683,7 @@
     var offsetY = my - targetTop; // match centre, local canvas y
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:' + window.scrollX + 'px', 'top:' + targetTop + 'px',
@@ -2873,7 +2873,7 @@
     function localY(yDoc) { return yDoc - targetTop; }
 
     var container = document.createElement('div');
-    container.className = 'oc-beacon';
+    container.className = 'oc-beacon oc-beacon-transient';
     container.style.cssText = [
       'position:absolute',
       'left:0', 'top:' + targetTop + 'px',
@@ -3102,7 +3102,7 @@
       var sh = Math.max(rect.height + 24, 40) * scale;
 
       var overlay = document.createElement('div');
-      overlay.className = 'oc-beacon';
+      overlay.className = 'oc-beacon oc-beacon-transient';
       overlay.style.cssText = [
         'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
         'pointer-events:none', 'z-index:2147483641',
@@ -3111,7 +3111,7 @@
       document.documentElement.appendChild(overlay);
 
       var glow = document.createElement('div');
-      glow.className = 'oc-beacon';
+      glow.className = 'oc-beacon oc-beacon-transient';
       glow.style.cssText = [
         'position:absolute',
         'left:' + (x - 6) + 'px', 'top:' + (y - 6) + 'px',
@@ -3127,7 +3127,7 @@
       document.documentElement.appendChild(glow);
 
       var leftArrow = document.createElement('div');
-      leftArrow.className = 'oc-beacon';
+      leftArrow.className = 'oc-beacon oc-beacon-transient';
       leftArrow.textContent = '▶';
       var arrowSize = Math.max(20, 24 * scale);
       leftArrow.style.cssText = [
@@ -3147,7 +3147,7 @@
       document.documentElement.appendChild(leftArrow);
 
       var rightArrow = document.createElement('div');
-      rightArrow.className = 'oc-beacon';
+      rightArrow.className = 'oc-beacon oc-beacon-transient';
       rightArrow.textContent = '◀';
       rightArrow.style.cssText = [
         'position:absolute',
@@ -3214,7 +3214,7 @@
     }
 
     var glow = document.createElement('div');
-    glow.className = 'oc-beacon';
+    glow.className = 'oc-beacon oc-beacon-transient';
     glow.style.cssText = [
       'position:absolute',
       'left:' + (x - 4) + 'px', 'top:' + (y - 4) + 'px',
@@ -3680,7 +3680,7 @@
       // so a guard-skipped run below still counted itself with no matching decrement
       // — a real leak, just not a suppression: activeBeacons is only ever compared to
       // 0 (cancelBeacons resets it; fadeActiveBeacons's scroll-path check
-      // short-circuits a querySelectorAll('.oc-beacon') on it), so it's a "have we
+      // short-circuits a querySelectorAll('.oc-beacon-transient') on it), so it's a "have we
       // drawn since the last reset" flag, not a true count, and each leaked increment
       // only cost one wasted querySelectorAll — fadeActiveBeacons() self-heals a pure
       // leak on the first scroll after it, since it zeroes the flag when it finds no
@@ -4886,7 +4886,10 @@
 
   function fadeActiveBeacons() {
     if (activeBeacons === 0) return;
-    var beacons = document.querySelectorAll('.oc-beacon');
+    // Only the transient beacon effects, not the persistent accessibility overlays
+    // (border/shape/label/magnifier) that drawActiveOverlays() also tags .oc-beacon —
+    // those track scroll correctly in document coordinates and must survive it.
+    var beacons = document.querySelectorAll('.oc-beacon-transient');
     if (beacons.length === 0) { activeBeacons = 0; return; }
     activeBeacons = 0;
     for (var i = 0; i < beacons.length; i++) {
