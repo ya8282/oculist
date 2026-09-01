@@ -432,6 +432,114 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     assert.strictEqual(finalCount, 0, `expected zero .oc-beacon elements after completion, observed ${finalCount}`);
   });
 
+  // oculist-3ae: animateCyberVision's early-return guard (rect missing or zero-sized)
+  // used to sit BEFORE cyberVisionBracketsSettled was touched, so a skipped run left the
+  // flag holding whatever the previous real run had last written -- the same class of bug
+  // oculist-47e fixed for animateSpeedLines and oculist-3ae fixed for animateChronoTunnel's
+  // four hooks (see chrono_tunnel.test.js's identical test, which this mirrors). This runs
+  // a real beacon first (so the flag holds a genuine `true`), then drives the guard through
+  // the extension's own normal call path -- no synthetic rect, no test-only export of the
+  // effect renderer itself.
+  test("a skipped run (zero-size rect) resets cyberVisionBracketsSettled instead of leaving the previous run's stale true", async () => {
+    await replay();
+    await waitForBracketsSettled();
+
+    const before = await evalInContentScript('window.__ocTest.cyberVisionBracketsSettled');
+    assert.strictEqual(before, true, 'sanity check: expected the prior run to have settled its brackets');
+
+    // Drive the SAME early-return guard through the extension's real, normal call path
+    // instead of a synthetic rect or an exported test-only closure. font-size:0 is
+    // verified (in real Chromium) to yield a getBoundingClientRect of {width:0, height:0}
+    // while the element stays indexed and remains the active match; no chip/term change
+    // is needed.
+    await page.evaluate(() => { document.getElementById('target').style.fontSize = '0'; });
+    try {
+      await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+      await page.keyboard.press('Enter');
+
+      // No '.oc-beacon' will ever appear -- the guard returns before the container is
+      // created -- so this cannot reuse replay()'s own waitForSelector('.oc-beacon'). Poll
+      // cyberVisionBracketsSettled directly: it can only go from the prior run's stale
+      // true back to false by this reset running, since no real run (and therefore no
+      // later settle timer) is possible once the element is zero-sized.
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === false, {
+        timeout: POLL_TIMEOUT,
+        message: 'the zero-size-match run never reset cyberVisionBracketsSettled',
+      });
+    } finally {
+      await page.evaluate(() => { document.getElementById('target').style.fontSize = ''; });
+    }
+  });
+
+  // oculist-3ae review 2's actual root cause: cyberVisionBracketsSettled is flipped by a
+  // plain setTimeout, not tied to the container's own lifecycle, so it is not
+  // automatically cancelled when a later run's animate() -> cancelBeacons() call detaches
+  // this run's container early. The dangerous case is a PRIOR run's settle timer that is
+  // still PENDING -- not yet fired -- at the moment a later run resets the flag to false:
+  // without a guard, that stale timer's own true assignment still fires on its original
+  // schedule and clobbers the later run's fresh false. This cancels run A (via a second,
+  // skipped run B) well before A's own ~710ms settle deadline, while A's timer is still
+  // outstanding, then waits past that deadline and confirms the flag is never resurrected.
+  test("a cancelled run's still-pending settle timer does not resurrect cyberVisionBracketsSettled after a later run resets it", async () => {
+    await replay(); // run A: container created, its own settle timer now scheduled ~710ms out
+
+    // Cancel A and fire skipped run B WHILE A's settle timer is still pending -- no wait
+    // for A to settle first, unlike the reset test above. font-size:0 is verified (in real
+    // Chromium) to yield a getBoundingClientRect of {width:0, height:0} while the element
+    // stays indexed and remains the active match.
+    await page.evaluate(() => { document.getElementById('target').style.fontSize = '0'; });
+    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+    await page.keyboard.press('Enter');
+
+    // highlightActiveRange()'s own animate(freshRect) call for this Enter press is itself
+    // deferred by 50ms (content.js) and reads the match's rect fresh at THAT later time --
+    // restoring font-size any sooner would let this deferred call read a real, non-zero
+    // rect and fire an actual (non-skipped) run C instead of the skip this test needs,
+    // which would settle on its own ~710ms later and be indistinguishable from a genuine
+    // resurrection of A's timer (this raced and failed for exactly that reason during
+    // authoring). Wait comfortably past that 50ms delay, then positively confirm run B
+    // really was a skip -- no new .oc-beacon container ever appeared, since the guard
+    // returns before creating one -- before restoring font-size. 200ms total from the
+    // font-size:0 mutation to its restore below also stays safely under the page's own
+    // MutationObserver debounce (350ms, content.js's domObserverTimer): holding a
+    // genuinely zero-rect match open past that would let a background rescan's
+    // findRanges() -- which filters matches by their live rendered rect, unrelated to this
+    // bug -- drop the match out of searchRanges entirely.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.strictEqual(
+      await page.locator('.oc-beacon').count(),
+      0,
+      'sanity check: expected the zero-rect run to be skipped (no new .oc-beacon container), not a real run'
+    );
+    assert.strictEqual(
+      await evalInContentScript('window.__ocTest.cyberVisionBracketsSettled'),
+      false,
+      'sanity check: expected the skipped run to have reset cyberVisionBracketsSettled to false'
+    );
+
+    await page.evaluate(() => { document.getElementById('target').style.fontSize = ''; });
+
+    // Positively confirm it stays false through run A's original settle deadline
+    // (~710ms at default animationSpeed: BRACKET_DELAY 440 + BRACKET_DUR 900 * 0.3, well
+    // inside this wait's budget) instead of being resurrected by A's still-pending stale
+    // timer -- if the isConnected guard at that timer's call site were missing, this wait
+    // would resolve (a false "still settling") instead of timing out.
+    let resurrected = false;
+    try {
+      await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.cyberVisionBracketsSettled', (v) => v === true, {
+        timeout: POLL_TIMEOUT,
+      });
+      resurrected = true;
+    } catch (e) {
+      if (!/timed out/.test(e.message)) throw e;
+    }
+    assert.strictEqual(
+      resurrected,
+      false,
+      "expected cyberVisionBracketsSettled to stay false rather than being resurrected by run A's still-pending stale settle timer firing after run B's own reset"
+    );
+  });
+
   // oculist-qii: fadeActiveBeacons() (content.js, called from handleScroll()) is the
   // second of the two paths that remove a .oc-beacon element, and until this fix did so
   // with a bare .remove() — never cancelling the container's __waapiAnims first. A WAAPI
