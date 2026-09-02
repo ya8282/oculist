@@ -12,6 +12,34 @@ try {
     fs.mkdirSync(path.join(__dirname, 'dist'));
   }
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  // Reject symlinks in extension/ before zipping (oculist-abk). `find -type f`
+  // (used below) doesn't see a file symlink, so it would land in the zip
+  // (zip -r stores it) but not in the expected set, producing a false
+  // "unexpected in zip" build failure. A symlinked directory is worse: zip -r
+  // follows it out of the tree entirely, silently smuggling out-of-tree files
+  // into the store artifact. Neither case is safe to auto-fix (using `find -L`
+  // would bless the smuggling), so both are refused outright with a message
+  // telling the developer what to do instead.
+  //
+  // Same exclusions as the `actual` set below, and for the same reason: zip's
+  // -x patterns never store anything under a top-level dot dir or __MACOSX, so
+  // a symlink in there cannot reach the archive and must not fail the build.
+  const symlinks = execSync('find . -type l -not -path "./.*" -not -path "./__MACOSX/*"', {
+    cwd: path.join(__dirname, 'extension'),
+    encoding: 'utf8'
+  })
+    .split('\n')
+    .filter(Boolean)
+    .map(f => f.replace(/^\.\//, ''));
+  if (symlinks.length) {
+    throw new Error(
+      `extension/ contains symlink(s), which are not allowed in a Chrome Web Store ` +
+      `package: ${symlinks.join(', ')}. Replace each with a real file or directory ` +
+      `(a symlinked directory in particular would be silently followed out of the ` +
+      `source tree by zip, pulling in files that aren't part of extension/).`
+    );
+  }
+
   // Zip the whole extension dir rather than an explicit file list — the old list
   // silently omitted welcome.js, which shipped a dead onboarding wizard. Everything
   // in extension/ is runtime source, so "all of it minus junk" is the safer default.
