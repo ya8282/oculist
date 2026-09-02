@@ -10,9 +10,14 @@
 // browser test: it never launches Chromium, so it costs nothing to run on every `npm test`.
 //
 // DONE WHEN (oculist-du2): the set of files calling launchPersistentContext is a subset of
-// the set requiring helpers/wait. Scoped to test/*.test.js — the flat glob `npm test` (see
-// package.json) actually runs — not test/helpers/*.js, which are library code, not files
-// npm test executes directly.
+// the set requiring helpers/wait.
+//
+// oculist-7db extended the scan to also cover test/helpers/*.js, since node --test runs
+// each file in its own process. oculist-2uk collapses both into one recursive walk of test/
+// (so nested helpers and non-*.test.js top-level files aren't invisible) and derives the
+// require specifier per file from its own directory via path.relative, rather than by which
+// glob matched. test/helpers/wait.js is exempted by name: it performs the monkeypatch
+// itself, and its header text would otherwise trip the launch-call check.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -20,26 +25,38 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const TEST_DIR = __dirname;
+const HELPERS_DIR = path.join(TEST_DIR, 'helpers');
+const WAIT_HELPER_FILE = path.join(HELPERS_DIR, 'wait.js');
 const LAUNCH_CALL_RE = /\.launchPersistentContext\s*\(/;
-const WAIT_REQUIRE_RE = /require\(\s*['"]\.\/helpers\/wait['"]\s*\)/;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-test('every test/*.test.js file calling launchPersistentContext also requires helpers/wait', () => {
-  const files = fs
-    .readdirSync(TEST_DIR)
-    .filter((name) => name.endsWith('.test.js'))
-    // Exclude this guard's own file: its failure-message text mentions both patterns by
-    // name, so scanning it would make the guard's result depend on how that message is
-    // worded rather than on any real test file.
-    .filter((name) => path.join(TEST_DIR, name) !== __filename)
-    .sort();
-  // Without this the whole test passes vacuously if the scan ever finds no test files.
-  assert.ok(files.length > 0, `found no *.test.js files under ${TEST_DIR} — the invariant proved nothing`);
+// The require specifier that is correct for `file` depends only on its own directory.
+const waitSpecifierFor = (file) => {
+  const rel = path.relative(path.dirname(file), WAIT_HELPER_FILE).replace(/\.js$/, '').split(path.sep).join('/');
+  return rel.startsWith('.') ? rel : `./${rel}`;
+};
+
+test('every test/**/*.{js,cjs,mjs} file calling launchPersistentContext also requires helpers/wait', () => {
+  // Recursive, and .cjs/.mjs too — a guard's whole job is catching the file someone forgot.
+  const targets = fs
+    .readdirSync(TEST_DIR, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name))
+    .filter((file) => /\.(js|cjs|mjs)$/.test(file))
+    // Exclude this guard's own file (its failure text names the require forms) and wait.js
+    // itself (it performs the monkeypatch, so has no reason to require itself).
+    .filter((file) => file !== __filename && file !== WAIT_HELPER_FILE)
+    .sort((a, b) => a.localeCompare(b));
+  // Without this the whole test passes vacuously if the scan ever finds no files.
+  assert.ok(targets.length > 0, `found no scannable files under ${TEST_DIR} — the invariant proved nothing`);
 
   const missingWaitImport = [];
-  for (const name of files) {
-    const raw = fs.readFileSync(path.join(TEST_DIR, name), 'utf8');
-    if (LAUNCH_CALL_RE.test(raw) && !WAIT_REQUIRE_RE.test(raw)) {
-      missingWaitImport.push(name);
+  for (const file of targets) {
+    const raw = fs.readFileSync(file, 'utf8');
+    const specifier = waitSpecifierFor(file);
+    const waitRe = new RegExp(`require\\(\\s*['"]${escapeRe(specifier)}['"]\\s*\\)`);
+    if (LAUNCH_CALL_RE.test(raw) && !waitRe.test(raw)) {
+      missingWaitImport.push(`${path.relative(TEST_DIR, file)} (fix: add \`const { POLL_TIMEOUT } = require('${specifier}');\`)`);
     }
   }
 
@@ -48,8 +65,6 @@ test('every test/*.test.js file calling launchPersistentContext also requires he
     [],
     `file(s) call chromium.launchPersistentContext() without requiring test/helpers/wait, so ` +
       `the OCULIST_TEST_TIMEOUT_SCALE monkeypatch (test/helpers/wait.js) is not guaranteed to ` +
-      `apply to their context: ${missingWaitImport.join(', ')}. Fix: add ` +
-      `\`const { POLL_TIMEOUT } = require('./helpers/wait');\` (or any export it provides) to ` +
-      `each listed file.`
+      `apply to their context: ${missingWaitImport.join(', ')}.`
   );
 });

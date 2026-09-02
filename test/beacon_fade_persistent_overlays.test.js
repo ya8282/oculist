@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -287,7 +287,15 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     // below is not guarding against a hazard that exists today; it costs nothing when the
     // fade starts on the very first wheel, and stays correct if a future change ever
     // leaves the match out of view when the beacon fires.)
-    const deadline = Date.now() + POLL_TIMEOUT;
+    // oculist-67h: POLL_TIMEOUT (5000ms) is this suite's budget for a SINGLE poll, but it
+    // was bounding this whole loop of wheel-plus-400ms-poll round trips. LONG_TIMEOUT
+    // (15000ms) is the constant the rest of the suite already uses for multi-round-trip
+    // waits on this same assertion -- see chrono_tunnel.test.js and speed_lines.test.js,
+    // both waiting on '.oc-beacon' removal -- so it belongs here instead. Measured cost of
+    // the loop is 1 iteration and 77-117ms, so this is a correctness-of-constant fix with
+    // headroom for contention, NOT a fix for the 5s timeout this bead was filed about;
+    // that stall was ~50x the measured cost and came from concurrent npm test runs.
+    const deadline = Date.now() + LONG_TIMEOUT;
     for (;;) {
       await page.mouse.wheel(0, 400);
       try {
