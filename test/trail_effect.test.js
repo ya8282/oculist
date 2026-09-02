@@ -487,7 +487,6 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   // its own 'oc-trail-flash' class (alongside the shared 'oc-beacon' bookkeeping class), so
   // tests identify it independently of its tag — same for the arrowhead's 'oc-trail-arrow'
   // class above.
-  const FLASH = '.oc-trail-flash';
 
   test('the absorption flash mounts over the match rect', async () => {
     // Self-sufficient scroll: this test must not rely on scroll state left over from an
@@ -518,7 +517,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       await replay();
 
       // oculist-d5c: fold the .oc-trail-flash presence check and the geometry read into one
-      // page.waitForFunction() predicate instead of waitForSelector(FLASH) followed by a
+      // page.waitForFunction() predicate instead of waitForSelector('.oc-trail-flash') followed by a
       // separate page.evaluate(); the flash can self-clean in the gap between those two
       // round trips (same failure family as replay(), see its own comment above).
       const handle = await page.waitForFunction(
@@ -572,7 +571,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     await replay();
 
     // oculist-d5c: fold the arrow/flash lookups AND their getAnimations()[0] reads into the
-    // predicate itself, returning null until both animations exist. waitForSelector(FLASH)
+    // predicate itself, returning null until both animations exist. waitForSelector('.oc-trail-flash')
     // alone only proved the flash existed at some earlier tick. By the time a later
     // page.evaluate() ran, the arrow or flash could already be gone, or the element could
     // exist with no Animation attached to it yet, and arrow.getAnimations()[0] on a null
@@ -605,7 +604,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     await replay();
 
     // oculist-d5c: fold the .oc-trail-flash lookup AND the getAnimations()[0] read into the
-    // predicate; return null until both are available. waitForSelector(FLASH) alone only
+    // predicate; return null until both are available. waitForSelector('.oc-trail-flash') alone only
     // proved the element existed at some earlier tick. A later, separate page.evaluate()
     // could find it already self-cleaned (the fast failure at :548, TypeError "Cannot read
     // properties of null (reading 'getAnimations')"), and is also strictly weaker than this:
@@ -631,7 +630,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       await replay();
 
       // oculist-d5c: count .oc-trail-flash inside the same predicate that proves it exists,
-      // instead of waitForSelector(FLASH) followed by a separate page.locator(FLASH).count()
+      // instead of waitForSelector('.oc-trail-flash') followed by a separate page.locator('.oc-trail-flash').count()
       // round trip in which the flash could already have self-cleaned.
       const handle = await page.waitForFunction(
         () => {
@@ -653,8 +652,64 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('the absorption flash element is removed once its animation finishes (no leak)', async () => {
+    // oculist-6j7: page.waitForSelector only samples at poll ticks; it does not observe
+    // continuously, so a flash that mounts and then self-removes (see content.js's
+    // flashAnim.finished.then(() => flash.remove())) can do both entirely between two
+    // ticks and never be seen. The test then times out at 5000ms, a duration
+    // indistinguishable from the unrelated --test-concurrency=4 contention family, so the
+    // real defect gets misfiled as noise. This is not the oculist-d5c round-trip family
+    // (there is no separate read after a successful wait to fold in here); the wait itself
+    // can miss the element, one step earlier than anything d5c fixed.
+    //
+    // Fix: arm a MutationObserver in the page's main world (content.js appends the flash to
+    // document.documentElement as an ordinary DOM node, so main-world observation reaches
+    // it, unlike window.__ocTest which only reaches the isolated world via
+    // evalInContentScript) BEFORE calling replay(), since replay() itself cancels any
+    // leftover beacon and presses Enter internally. Waiting until replay() *returns* would
+    // already be too late, the exact sampling assumption this bead removes.
+    //
+    // Why the ordering holds: appendChild and remove() each emit their OWN MutationRecord,
+    // and records are delivered in the order the mutations happened. So even when both land
+    // in a single batched callback, the add record is walked before the remove record and
+    // `appeared` latches first. (Within one record added and removed are simultaneous, as
+    // replaceChild would produce, but content.js never replaces the flash in place.)
+    // `disappeared` only latches once `appeared` already has, so cancelBeacons()'s teardown
+    // of a stale beacon left over from an earlier test can't masquerade as this run's own
+    // cleanup finishing.
+    await page.evaluate(() => {
+      window.__ocFlashProbe = { appeared: false, disappeared: false };
+      const isFlash = (node) => node.nodeType === 1 && node.classList.contains('oc-trail-flash');
+      const observer = new MutationObserver((records) => {
+        const probe = window.__ocFlashProbe;
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (isFlash(node)) probe.appeared = true;
+          }
+          for (const node of record.removedNodes) {
+            if (isFlash(node) && probe.appeared) probe.disappeared = true;
+          }
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      window.__ocFlashProbeObserver = observer;
+    });
+
     await replay();
-    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
+
+    // Two separate waits, not one combined predicate. Both still surface a regression as a
+    // 5000ms timeout, because proving an event never happened means exhausting the budget,
+    // and that is true of every render-proof wait in this suite. What the split buys is that
+    // "never rendered" and "never cleaned up" fail on DIFFERENT line numbers, which is the
+    // signal a triager actually needs. Deliberately not wrapped in a rethrow claiming the
+    // failure is a regression rather than contention: contention can genuinely time out here
+    // too, so such a message would assert something the test cannot determine.
+    await page.waitForFunction(() => window.__ocFlashProbe.appeared, null, { timeout: POLL_TIMEOUT });
+    await page.waitForFunction(() => window.__ocFlashProbe.disappeared, null, { timeout: POLL_TIMEOUT });
+
+    await page.evaluate(() => {
+      window.__ocFlashProbeObserver.disconnect();
+      delete window.__ocFlashProbeObserver;
+      delete window.__ocFlashProbe;
+    });
   });
 });
