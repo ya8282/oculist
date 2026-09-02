@@ -16,6 +16,26 @@ const TIMEOUT_SCALE = Number.isFinite(parsedScale) && parsedScale > 0 ? parsedSc
 const POLL_TIMEOUT = 5000 * TIMEOUT_SCALE;
 const LONG_TIMEOUT = 15000 * TIMEOUT_SCALE;
 
+// oculist-8ou: TIMEOUT_SCALE above only reaches this suite's own POLL_TIMEOUT/LONG_TIMEOUT
+// waits. It does not touch Playwright's default action timeout (a fixed 30000ms applied to
+// any locator call, e.g. .fill()/.click(), that doesn't pass an explicit timeout), so a
+// contended box can still time out at a fixed 30s even with the scale turned up.
+//
+// Every one of the ~51 test files that opens a browser does so via
+// chromium.launchPersistentContext(...) and all of them already require this file for
+// POLL_TIMEOUT/LONG_TIMEOUT, so patching launchPersistentContext once here, to set the new
+// context's default timeout to the same scaled budget, covers every call site without
+// editing each test file individually. At the default scale of 1 this sets 30000ms, which is
+// Playwright's existing default, so unscaled behavior is unchanged.
+const { chromium } = require('playwright');
+const DEFAULT_ACTION_TIMEOUT = 30000;
+const originalLaunchPersistentContext = chromium.launchPersistentContext.bind(chromium);
+chromium.launchPersistentContext = async (...args) => {
+  const ctx = await originalLaunchPersistentContext(...args);
+  ctx.setDefaultTimeout(DEFAULT_ACTION_TIMEOUT * TIMEOUT_SCALE);
+  return ctx;
+};
+
 async function waitForCondition(getValue, predicate, opts = {}) {
   const { timeout = POLL_TIMEOUT, interval = 30, message } = opts;
   const deadline = Date.now() + timeout;

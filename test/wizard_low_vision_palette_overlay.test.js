@@ -85,7 +85,7 @@ const CASES = [
 ];
 
 describe('Low vision + color vision answers compose instead of discarding the palette (oculist-336)', () => {
-  let ctx, extId;
+  let ctx, extId, sw;
 
   before(async () => {
     ctx = await chromium.launchPersistentContext('', {
@@ -94,7 +94,7 @@ describe('Low vision + color vision answers compose instead of discarding the pa
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 900 },
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
+    sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
   });
 
@@ -111,6 +111,20 @@ describe('Low vision + color vision answers compose instead of discarding the pa
     return page;
   }
 
+  // oculist-leu: all 8 cases below run against ONE shared chrome.storage.sync blob (that's
+  // deliberate -- it avoids paying launchPersistentContext's cost per case), and the
+  // completion gate polls stored.setupWizardCompleted. That flag goes true on case 1's write
+  // and STAYS true for every case after it, so without a reset the poll is vacuous from case 2
+  // onward: it can return on its very first tick with whatever case N-1 left in storage,
+  // before case N's own write has landed, and the test then asserts on stale data. Chose to
+  // reset storage between cases (over gating on a per-case-unique expected value) because it
+  // fixes the root cause -- each case starts from a genuinely blank blob -- rather than relying
+  // on no two cases in CASES ever sharing an expected displayPreset/colorPalette pair, which
+  // future edits to the matrix could silently break.
+  async function resetStoredSettings() {
+    await sw.evaluate(() => new Promise((resolve) => chrome.storage.sync.remove('oc-settings', resolve)));
+  }
+
   async function waitForSetupWizardCompleted(page) {
     return waitForCondition(
       () => readStoredSettings(page),
@@ -119,30 +133,40 @@ describe('Low vision + color vision answers compose instead of discarding the pa
     );
   }
 
-  async function clickAndAdvance(page, selector) {
-    await page.click(selector);
-    await page.waitForTimeout(400);
+  // oculist-leu: welcome.js's click handler auto-advances via `setTimeout(navigateNext, 300)`.
+  // The previous version of this helper padded that with a fixed page.waitForTimeout(400),
+  // racing a hardcoded deadline against the extension's own internal delay. Every call site
+  // was already followed by a real signal anyway (page.waitForSelector for the next step's
+  // '.active' class), so this folds the click and that wait into one call instead of padding
+  // the sleep further. The general move, replace a deadline with the signal you actually
+  // mean, is the same one oculist-d5c made, though d5c's specific defect was different: a
+  // Node-side round trip letting a transient element self-clean between the wait and the
+  // read. It removed no waitForTimeout calls.
+  async function clickAndAdvance(page, optionSelector, nextStepSelector) {
+    await page.click(optionSelector);
+    await page.waitForSelector(nextStepSelector);
   }
 
   for (const { color, lowVision, expectedDisplayPreset, expectedVisionSettings } of CASES) {
     test(`color=${color}, lowVision=${lowVision} -> displayPreset=${expectedDisplayPreset}, colorPalette=${expectedVisionSettings.colorPalette}`, async () => {
+      // oculist-leu: must run before openWelcome() so this case never sees a prior case's
+      // setupWizardCompleted=true (see resetStoredSettings() above for why that matters).
+      await resetStoredSettings();
+
       const page = await openWelcome();
 
       // Step 1: named-condition panel is the default-visible tab; every color value used
       // here (none/amber-sky/amber-indigo/rose-cyan) has a matching button there.
       await page.waitForSelector('#step-1.active');
-      await clickAndAdvance(page, `#step1-panel-named .wizard-option[data-value="${color}"]`);
+      await clickAndAdvance(page, `#step1-panel-named .wizard-option[data-value="${color}"]`, '#step-2.active');
 
       // Step 2: low vision yes/no.
-      await page.waitForSelector('#step-2.active');
-      await clickAndAdvance(page, `#step-2.active .wizard-option[data-value="${lowVision}"]`);
+      await clickAndAdvance(page, `#step-2.active .wizard-option[data-value="${lowVision}"]`, '#step-3.active');
 
       // Step 3: eye strain answer is irrelevant to this matrix; take the default (No).
-      await page.waitForSelector('#step-3.active');
-      await clickAndAdvance(page, '#step-3.active .wizard-option[data-value="false"]');
+      await clickAndAdvance(page, '#step-3.active .wizard-option[data-value="false"]', '#step-4.active');
 
       // Step 4: save.
-      await page.waitForSelector('#step-4.active');
       await page.click('#wizard-next');
 
       const stored = await waitForSetupWizardCompleted(page);
