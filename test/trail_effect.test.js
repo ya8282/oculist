@@ -204,31 +204,50 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   // only reaches page's own isolated world. Every call site already only ever passes
   // `page` — an unused pg parameter that silently ignored anything else would be a trap for
   // whoever eventually calls this against page2's own CDP session instead.
-  async function replay() {
+  //
+  // oculist-d5c: the wait used to be page.waitForSelector('.oc-trail-arrow', ...), and every
+  // caller that needed to actually read something off a transient element then made a
+  // SEPARATE page.evaluate()/page.locator(...).count() call afterwards. That is a second
+  // Node<->page round trip, and this effect self-cleans (removes its own elements once it
+  // finishes), so the element that waitForSelector had just proved existed could already be
+  // gone by the time that second round trip landed (this is what produced the fast, non-
+  // timeout failures at :415, :425 and :548 on a clean tree). page.waitForFunction() instead
+  // runs the existence check AND the measurement as one predicate, evaluated page-side on
+  // every poll tick: `snapshot` returns null while the thing under test isn't ready yet (so
+  // waitForFunction keeps polling exactly like waitForSelector would) and returns the
+  // caller's actual measurement on the very tick it first becomes available. The wait and
+  // the read can no longer be split by a round trip because they are literally the same
+  // page-side call. Callers that don't need to read anything just call replay() with no
+  // argument, which keeps the original existence-only check.
+  async function replay(snapshot) {
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-trail-arrow', { timeout: POLL_TIMEOUT });
+    const predicate = snapshot || (() => (document.querySelector('.oc-trail-arrow') ? true : null));
+    const handle = await page.waitForFunction(predicate, null, { timeout: POLL_TIMEOUT });
+    return handle.jsonValue();
   }
 
   // Pulls out the L-shaped path's start/elbow/end points from the .oc-trail-arrow arrow's
   // inline offset-path, plus the geometry needed to compute the *expected* points, all in
-  // one synchronous page.evaluate call so nothing can move between reads.
-  async function readTrailGeometry(pg) {
-    return pg.evaluate(() => {
-      const arrow = document.querySelector('.oc-trail-arrow');
-      const targetRect = document.getElementById('target').getBoundingClientRect();
-      return {
-        left: arrow ? arrow.style.left : null,
-        top: arrow ? arrow.style.top : null,
-        offsetPath: arrow ? (arrow.style.offsetPath || getComputedStyle(arrow).offsetPath) : null,
-        scrollX: window.scrollX,
-        scrollY: window.scrollY,
-        targetLeft: targetRect.left,
-        targetTop: targetRect.top,
-        targetWidth: targetRect.width,
-        targetHeight: targetRect.height,
-      };
-    });
+  // one synchronous page-side read so nothing can move between reads. Returns null while the
+  // arrowhead is absent, so handing this straight to replay() as its `snapshot` keeps
+  // page.waitForFunction() polling instead of reading a stale/already-removed element
+  // (oculist-d5c); see replay()'s own comment above.
+  function trailArrowSnapshot() {
+    const arrow = document.querySelector('.oc-trail-arrow');
+    if (!arrow) return null;
+    const targetRect = document.getElementById('target').getBoundingClientRect();
+    return {
+      left: arrow.style.left,
+      top: arrow.style.top,
+      offsetPath: arrow.style.offsetPath || getComputedStyle(arrow).offsetPath,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      targetLeft: targetRect.left,
+      targetTop: targetRect.top,
+      targetWidth: targetRect.width,
+      targetHeight: targetRect.height,
+    };
   }
 
   // 'M 0 0 L <dx> 0 L <dx> <dy>' -> { dx, dy } (the arrow's own end point, relative to
@@ -265,8 +284,7 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     try {
       await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
 
-      await replay();
-      const geom = await readTrailGeometry(page);
+      const geom = await replay(trailArrowSnapshot);
       assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
 
       const parsed = parseOffsetPathEnd(geom.offsetPath);
@@ -369,22 +387,33 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       // broader .oc-beacon class every part of this effect shares (oculist-8s5).
       await evalInContentScript('window.__ocTest.cancelBeacons()', { client: client2, contextId: isolatedContextId2 });
       await page2.keyboard.press('Enter');
-      await page2.waitForSelector('.oc-trail-arrow', { timeout: POLL_TIMEOUT });
 
-      const geom = await page2.evaluate(() => {
-        const arrow = document.querySelector('.oc-trail-arrow');
-        const wrapRect = document.getElementById('oc-wrap').getBoundingClientRect();
-        return {
-          left: arrow ? arrow.style.left : null,
-          top: arrow ? arrow.style.top : null,
-          scrollX: window.scrollX,
-          scrollY: window.scrollY,
-          wrapLeft: wrapRect.left,
-          wrapTop: wrapRect.top,
-          wrapWidth: wrapRect.width,
-          wrapHeight: wrapRect.height,
-        };
-      });
+      // oculist-d5c: same fix as replay()/trailArrowSnapshot() above (see replay()'s own
+      // comment), applied directly here because this tab drives its own page2/client2 pair
+      // instead of the suite-level replay() helper. Fold the presence wait and the geometry
+      // read into one page.waitForFunction() tick instead of a waitForSelector followed by a
+      // separate page2.evaluate() round trip, so the arrowhead can't self-clean in the gap
+      // between "it exists" and "read its position".
+      const handle = await page2.waitForFunction(
+        () => {
+          const arrow = document.querySelector('.oc-trail-arrow');
+          if (!arrow) return null;
+          const wrapRect = document.getElementById('oc-wrap').getBoundingClientRect();
+          return {
+            left: arrow.style.left,
+            top: arrow.style.top,
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            wrapLeft: wrapRect.left,
+            wrapTop: wrapRect.top,
+            wrapWidth: wrapRect.width,
+            wrapHeight: wrapRect.height,
+          };
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+      const geom = await handle.jsonValue();
 
       assert.ok(geom.left && geom.top, 'expected a mounted .oc-trail-arrow arrowhead');
       const actualStartX = parseFloat(geom.left);
@@ -411,32 +440,43 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
   });
 
   test('every .oc-beacon element is removed once the effect finishes (no leak)', async () => {
-    await replay();
-    assert.ok(
-      (await page.locator('.oc-beacon').count()) > 0,
-      'sanity check: the beacon must actually render before checking it is cleaned up'
+    // oculist-d5c: read the .oc-beacon count in the exact same page-side tick that proves
+    // .oc-trail-arrow exists, instead of a separate page.locator('.oc-beacon').count() round
+    // trip after replay() already returned, a gap in which the beacon can finish and remove
+    // itself (this was the long-unattributed baseline failure at :415, filed as oculist-a4f).
+    const beaconCount = await replay(() =>
+      document.querySelector('.oc-trail-arrow') ? document.querySelectorAll('.oc-beacon').length : null
     );
+    assert.ok(beaconCount > 0, 'sanity check: the beacon must actually render before checking it is cleaned up');
+    // No round trip risk here: the predicate evaluates the zero-count condition on every
+    // page-side poll tick, so there's nothing to read separately. A genuine leak surfaces
+    // as this wait's TimeoutError rather than as an assertion.
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, { timeout: POLL_TIMEOUT });
   });
 
   test('Lite Mode drops the trailing line, keeping only the arrowhead', async () => {
-    await replay();
-    assert.strictEqual(await page.locator('svg.oc-beacon').count(), 1, 'full mode must render the trailing line');
-    assert.strictEqual(await page.locator('.oc-trail-arrow').count(), 1, 'full mode must render the arrowhead');
+    // oculist-d5c: count svg.oc-beacon (the trailing line) and .oc-trail-arrow in the same
+    // page-side tick that proves the arrowhead mounted, instead of two separate
+    // page.locator(...).count() round trips after replay() already returned. Either read
+    // could observe the beacon mid-cleanup in the gap between those round trips (this was
+    // the fast failure at :425, 'full mode must render the arrowhead', 0 !== 1).
+    const counts = () =>
+      document.querySelector('.oc-trail-arrow')
+        ? {
+            svgBeaconCount: document.querySelectorAll('svg.oc-beacon').length,
+            trailArrowCount: document.querySelectorAll('.oc-trail-arrow').length,
+          }
+        : null;
+
+    let snap = await replay(counts);
+    assert.strictEqual(snap.svgBeaconCount, 1, 'full mode must render the trailing line');
+    assert.strictEqual(snap.trailArrowCount, 1, 'full mode must render the arrowhead');
 
     try {
       await setSettings({ performanceMode: true });
-      await replay();
-      assert.strictEqual(
-        await page.locator('svg.oc-beacon').count(),
-        0,
-        'Lite Mode must drop the trailing line entirely'
-      );
-      assert.strictEqual(
-        await page.locator('.oc-trail-arrow').count(),
-        1,
-        'Lite Mode must still render the arrowhead alone'
-      );
+      snap = await replay(counts);
+      assert.strictEqual(snap.svgBeaconCount, 0, 'Lite Mode must drop the trailing line entirely');
+      assert.strictEqual(snap.trailArrowCount, 1, 'Lite Mode must still render the arrowhead alone');
     } finally {
       await setSettings({ performanceMode: false });
     }
@@ -476,24 +516,33 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
       });
 
       await replay();
-      await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
-      const geom = await page.evaluate(() => {
-        const flash = document.querySelector('.oc-trail-flash');
-        const targetRect = document.getElementById('target').getBoundingClientRect();
-        return {
-          left: flash ? parseFloat(flash.style.left) : null,
-          top: flash ? parseFloat(flash.style.top) : null,
-          width: flash ? parseFloat(flash.style.width) : null,
-          height: flash ? parseFloat(flash.style.height) : null,
-          scrollX: window.scrollX,
-          scrollY: window.scrollY,
-          targetLeft: targetRect.left,
-          targetTop: targetRect.top,
-          targetWidth: targetRect.width,
-          targetHeight: targetRect.height,
-        };
-      });
+      // oculist-d5c: fold the .oc-trail-flash presence check and the geometry read into one
+      // page.waitForFunction() predicate instead of waitForSelector(FLASH) followed by a
+      // separate page.evaluate(); the flash can self-clean in the gap between those two
+      // round trips (same failure family as replay(), see its own comment above).
+      const handle = await page.waitForFunction(
+        () => {
+          const flash = document.querySelector('.oc-trail-flash');
+          if (!flash) return null;
+          const targetRect = document.getElementById('target').getBoundingClientRect();
+          return {
+            left: parseFloat(flash.style.left),
+            top: parseFloat(flash.style.top),
+            width: parseFloat(flash.style.width),
+            height: parseFloat(flash.style.height),
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            targetLeft: targetRect.left,
+            targetTop: targetRect.top,
+            targetWidth: targetRect.width,
+            targetHeight: targetRect.height,
+          };
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+      const geom = await handle.jsonValue();
 
       assert.ok(geom.left !== null, 'expected a mounted .oc-trail-flash flash element');
       assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
@@ -521,18 +570,29 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
   test('the absorption flash cannot fire early: its delay equals the travel duration', async () => {
     await replay();
-    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
-    const timings = await page.evaluate(() => {
-      const arrow = document.querySelector('.oc-trail-arrow');
-      const flash = document.querySelector('.oc-trail-flash');
-      const arrowAnim = arrow.getAnimations()[0];
-      const flashAnim = flash.getAnimations()[0];
-      return {
-        travelDuration: arrowAnim.effect.getTiming().duration,
-        flashDelay: flashAnim.effect.getTiming().delay,
-      };
-    });
+    // oculist-d5c: fold the arrow/flash lookups AND their getAnimations()[0] reads into the
+    // predicate itself, returning null until both animations exist. waitForSelector(FLASH)
+    // alone only proved the flash existed at some earlier tick. By the time a later
+    // page.evaluate() ran, the arrow or flash could already be gone, or the element could
+    // exist with no Animation attached to it yet, and arrow.getAnimations()[0] on a null
+    // element throws instead of failing the assertion cleanly.
+    const handle = await page.waitForFunction(
+      () => {
+        const arrow = document.querySelector('.oc-trail-arrow');
+        const flash = document.querySelector('.oc-trail-flash');
+        const arrowAnim = arrow && arrow.getAnimations()[0];
+        const flashAnim = flash && flash.getAnimations()[0];
+        if (!arrowAnim || !flashAnim) return null;
+        return {
+          travelDuration: arrowAnim.effect.getTiming().duration,
+          flashDelay: flashAnim.effect.getTiming().delay,
+        };
+      },
+      null,
+      { timeout: POLL_TIMEOUT }
+    );
+    const timings = await handle.jsonValue();
 
     assert.strictEqual(
       timings.flashDelay,
@@ -543,12 +603,24 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
 
   test('the absorption flash runs exactly one iteration (WCAG 2.3.1 guard)', async () => {
     await replay();
-    await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
 
-    const iterations = await page.evaluate(() => {
-      const flash = document.querySelector('.oc-trail-flash');
-      return flash.getAnimations()[0].effect.getTiming().iterations;
-    });
+    // oculist-d5c: fold the .oc-trail-flash lookup AND the getAnimations()[0] read into the
+    // predicate; return null until both are available. waitForSelector(FLASH) alone only
+    // proved the element existed at some earlier tick. A later, separate page.evaluate()
+    // could find it already self-cleaned (the fast failure at :548, TypeError "Cannot read
+    // properties of null (reading 'getAnimations')"), and is also strictly weaker than this:
+    // the element can exist with no Animation attached to it yet, which the old code did not
+    // guard against either.
+    const handle = await page.waitForFunction(
+      () => {
+        const flash = document.querySelector('.oc-trail-flash');
+        const anim = flash && flash.getAnimations()[0];
+        return anim ? anim.effect.getTiming().iterations : null;
+      },
+      null,
+      { timeout: POLL_TIMEOUT }
+    );
+    const iterations = await handle.jsonValue();
 
     assert.strictEqual(iterations, 1, 'the absorption flash must be a single pulse, never a loop or strobe');
   });
@@ -557,9 +629,21 @@ describe('Trail: an arrowhead travels an L-shaped motion path from cursor to mat
     try {
       await setSettings({ performanceMode: true });
       await replay();
-      await page.waitForSelector(FLASH, { timeout: POLL_TIMEOUT });
+
+      // oculist-d5c: count .oc-trail-flash inside the same predicate that proves it exists,
+      // instead of waitForSelector(FLASH) followed by a separate page.locator(FLASH).count()
+      // round trip in which the flash could already have self-cleaned.
+      const handle = await page.waitForFunction(
+        () => {
+          const count = document.querySelectorAll('.oc-trail-flash').length;
+          return count > 0 ? count : null;
+        },
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+      const flashCount = await handle.jsonValue();
       assert.strictEqual(
-        await page.locator(FLASH).count(),
+        flashCount,
         1,
         'Lite Mode must still render the absorption flash — it is the payoff of the effect'
       );
