@@ -28,7 +28,7 @@ const EXTENSION = path.resolve(__dirname, '../extension');
 const CLINICAL_LEAK_PATTERN = /deuteranopia|protanopia|tritanopia|color[-_]?blind|eye[-_]?strain/i;
 
 describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)', () => {
-  let ctx, extId;
+  let ctx, extId, sw;
 
   before(async () => {
     ctx = await chromium.launchPersistentContext('', {
@@ -37,7 +37,7 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
       viewport: { width: 1280, height: 900 },
     });
-    const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
+    sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     extId = sw.url().split('/')[2];
   });
 
@@ -68,12 +68,28 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     );
   }
 
+  // oculist-l6g: setupWizardCompleted goes true on the first wizard run in this file (test
+  // 1) and STAYS true, so waitForSetupWizardCompleted's poll is vacuous for every test after
+  // it — it can return immediately with whatever a PRIOR test left in storage, before the
+  // current test's own write has landed. Test 1 itself doesn't need this (storage is
+  // genuinely empty on the file's first run). Same defect and same fix oculist-leu applied
+  // to wizard_low_vision_palette_overlay.test.js: reset storage before the wizard run whose
+  // completion the test is about to poll for, rather than gating the poll on a value unique
+  // to the case (which would collapse the assertion into the wait predicate).
+  async function resetStoredSettings() {
+    await sw.evaluate(() => new Promise((resolve) => chrome.storage.sync.remove('oc-settings', resolve)));
+  }
+
   // Step 2 and Step 3 answers don't matter for most of this file's assertions; clicking
   // each step's first option auto-advances (welcome.js's 300ms setTimeout after 'selected').
-  async function clickFirstOptionAndWait(page, stepSelector) {
+  // oculist-l6g: nextStepSelector replaces a page.waitForTimeout(400) pad with the real signal
+  // for that auto-advance landing — the next step's .active class, the only rule that makes a
+  // step render ('.wizard-step.active { display: flex }', welcome.html:117). Same move as
+  // oculist-leu's clickAndAdvance().
+  async function clickFirstOptionAndWait(page, stepSelector, nextStepSelector) {
     await page.waitForSelector(`${stepSelector}.active`);
     await page.click(`${stepSelector}.active .wizard-option`);
-    await page.waitForTimeout(400);
+    await page.waitForSelector(nextStepSelector);
   }
 
   async function finishWizard(page) {
@@ -86,10 +102,10 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
 
     // Named panel is the default-visible tab; click the Deuteranopia shortcut directly.
     await page.click('#step1-panel-named .wizard-option[data-value="amber-sky"]');
-    await page.waitForTimeout(400);
+    await page.waitForSelector('#step-2.active');
 
-    await clickFirstOptionAndWait(page, '#step-2');
-    await clickFirstOptionAndWait(page, '#step-3');
+    await clickFirstOptionAndWait(page, '#step-2', '#step-3.active');
+    await clickFirstOptionAndWait(page, '#step-3', '#step-4.active');
     await finishWizard(page);
 
     const stored = await waitForSetupWizardCompleted(page);
@@ -103,6 +119,10 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
   });
 
   test('sample-comparison path reaches the same preset as its matching named condition, without persisting a clinical string', async () => {
+    // oculist-l6g: must run before openWelcome() so the completion poll below never reads
+    // test 1's setupWizardCompleted=true (see resetStoredSettings() for why that matters).
+    await resetStoredSettings();
+
     const page = await openWelcome();
 
     // Switch to the sample tab and pick "Sample D" (rose against cyan), which is wired to
@@ -110,10 +130,10 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     await page.click('#step1-tab-sample');
     await page.waitForSelector('#step1-panel-sample:not([hidden])');
     await page.click('#step1-panel-sample .wizard-option[data-value="rose-cyan"]');
-    await page.waitForTimeout(400);
+    await page.waitForSelector('#step-2.active');
 
-    await clickFirstOptionAndWait(page, '#step-2');
-    await clickFirstOptionAndWait(page, '#step-3');
+    await clickFirstOptionAndWait(page, '#step-2', '#step-3.active');
+    await clickFirstOptionAndWait(page, '#step-3', '#step-4.active');
     await finishWizard(page);
 
     const stored = await waitForSetupWizardCompleted(page);
@@ -386,6 +406,12 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
   });
 
   test('running the wizard a second time works with no page error, and the banner reflects the new choice', async () => {
+    // oculist-l6g: must run before openWelcome() so firstStored's completion poll below never
+    // reads test 2's rose-cyan/by-adjust blob (see resetStoredSettings() for why that
+    // matters). The second run's own completion signal further down (secondStored) doesn't
+    // need this — it already waits on wizard-modal display, which is genuinely non-sticky.
+    await resetStoredSettings();
+
     const page = await openWelcome();
     const pageErrors = [];
     page.on('pageerror', (err) => pageErrors.push(err));
@@ -404,13 +430,14 @@ describe('Setup wizard does not persist the clinical selection (oculist-rnr.13)'
     await page.click('#step1-tab-sample');
     await page.waitForSelector('#step1-panel-sample:not([hidden])');
     await page.click('#step1-panel-sample .wizard-option[data-value="amber-indigo"]');
-    await page.waitForTimeout(400);
+    // oculist-l6g: page.waitForTimeout(400) removed here — the very next line already waits
+    // on the real signal (welcome.js's auto-advance landing on '#step-2.active'), so the sleep
+    // was pure padding on top of a genuine wait, not a distinct gate. Same for the two sleeps
+    // below it against '#step-3.active' and finishWizard()'s own '#step-4.active' wait.
     await page.waitForSelector('#step-2.active');
     await page.click('#step-2.active .wizard-option[data-value="true"]');
-    await page.waitForTimeout(400);
     await page.waitForSelector('#step-3.active');
     await page.click('#step-3.active .wizard-option[data-value="true"]');
-    await page.waitForTimeout(400);
     await finishWizard(page);
 
     const firstStored = await waitForSetupWizardCompleted(page);
