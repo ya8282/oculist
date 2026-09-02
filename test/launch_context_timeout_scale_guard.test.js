@@ -12,16 +12,12 @@
 // DONE WHEN (oculist-du2): the set of files calling launchPersistentContext is a subset of
 // the set requiring helpers/wait.
 //
-// oculist-7db extends the scan from the flat test/*.test.js glob to also cover
-// test/helpers/*.js: node --test runs each *.test.js file in its own process, so the
-// invariant is really per-process, and a helper that launches a context is just as able to
-// get an unscaled default timeout as a test file is. A file inside test/helpers/ requiring
-// its sibling wait.js writes `require('./wait')`, not `require('./helpers/wait')`, so each
-// scanned file is checked against the require form that is actually correct for its own
-// directory — never a looser combined pattern. test/helpers/wait.js itself is exempted by
-// name below: it performs the monkeypatch, so it has no reason to require itself, and its
-// own header comment mentions `launchPersistentContext(...)`, which would otherwise trip
-// the launch-call check.
+// oculist-7db extended the scan to also cover test/helpers/*.js, since node --test runs
+// each file in its own process. oculist-2uk collapses both into one recursive walk of test/
+// (so nested helpers and non-*.test.js top-level files aren't invisible) and derives the
+// require specifier per file from its own directory via path.relative, rather than by which
+// glob matched. test/helpers/wait.js is exempted by name: it performs the monkeypatch
+// itself, and its header text would otherwise trip the launch-call check.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -32,39 +28,35 @@ const TEST_DIR = __dirname;
 const HELPERS_DIR = path.join(TEST_DIR, 'helpers');
 const WAIT_HELPER_FILE = path.join(HELPERS_DIR, 'wait.js');
 const LAUNCH_CALL_RE = /\.launchPersistentContext\s*\(/;
-const WAIT_REQUIRE_RE = /require\(\s*['"]\.\/helpers\/wait['"]\s*\)/;
-const SIBLING_WAIT_REQUIRE_RE = /require\(\s*['"]\.\/wait['"]\s*\)/;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-test('every test/*.test.js and test/helpers/*.js file calling launchPersistentContext also requires helpers/wait', () => {
-  const topLevelTargets = fs
-    .readdirSync(TEST_DIR)
-    .filter((name) => name.endsWith('.test.js'))
-    .map((name) => path.join(TEST_DIR, name))
-    // Exclude this guard's own file: its failure-message text mentions both patterns by
-    // name, so scanning it would make the guard's result depend on how that message is
-    // worded rather than on any real test file.
-    .filter((file) => file !== __filename)
-    .map((file) => ({ file, waitRe: WAIT_REQUIRE_RE, fix: "require('./helpers/wait')" }));
+// The require specifier that is correct for `file` depends only on its own directory.
+const waitSpecifierFor = (file) => {
+  const rel = path.relative(path.dirname(file), WAIT_HELPER_FILE).replace(/\.js$/, '').split(path.sep).join('/');
+  return rel.startsWith('.') ? rel : `./${rel}`;
+};
 
-  const helperTargets = fs
-    .readdirSync(HELPERS_DIR)
-    // .cjs/.mjs too: a helper that launches a context is unchecked whatever its extension,
-    // and a guard's whole job is catching the file someone forgot about.
-    .filter((name) => /\.(js|cjs|mjs)$/.test(name))
-    .map((name) => path.join(HELPERS_DIR, name))
-    // Exclude wait.js itself — see the oculist-7db comment above.
-    .filter((file) => file !== WAIT_HELPER_FILE)
-    .map((file) => ({ file, waitRe: SIBLING_WAIT_REQUIRE_RE, fix: "require('./wait')" }));
-
-  const targets = [...topLevelTargets, ...helperTargets].sort((a, b) => a.file.localeCompare(b.file));
+test('every test/**/*.{js,cjs,mjs} file calling launchPersistentContext also requires helpers/wait', () => {
+  // Recursive, and .cjs/.mjs too — a guard's whole job is catching the file someone forgot.
+  const targets = fs
+    .readdirSync(TEST_DIR, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name))
+    .filter((file) => /\.(js|cjs|mjs)$/.test(file))
+    // Exclude this guard's own file (its failure text names the require forms) and wait.js
+    // itself (it performs the monkeypatch, so has no reason to require itself).
+    .filter((file) => file !== __filename && file !== WAIT_HELPER_FILE)
+    .sort((a, b) => a.localeCompare(b));
   // Without this the whole test passes vacuously if the scan ever finds no files.
   assert.ok(targets.length > 0, `found no scannable files under ${TEST_DIR} — the invariant proved nothing`);
 
   const missingWaitImport = [];
-  for (const { file, waitRe, fix } of targets) {
+  for (const file of targets) {
     const raw = fs.readFileSync(file, 'utf8');
+    const specifier = waitSpecifierFor(file);
+    const waitRe = new RegExp(`require\\(\\s*['"]${escapeRe(specifier)}['"]\\s*\\)`);
     if (LAUNCH_CALL_RE.test(raw) && !waitRe.test(raw)) {
-      missingWaitImport.push(`${path.relative(TEST_DIR, file)} (fix: add \`const { POLL_TIMEOUT } = ${fix};\`)`);
+      missingWaitImport.push(`${path.relative(TEST_DIR, file)} (fix: add \`const { POLL_TIMEOUT } = require('${specifier}');\`)`);
     }
   }
 
