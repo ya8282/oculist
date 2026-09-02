@@ -5,7 +5,7 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [1.7.0] — 2026-08-29
+## [1.7.0] — 2026-09-01
 
 ### Added
 
@@ -34,6 +34,27 @@ below the 1.5.0 heading is what landed across that span.
   Sized relative to the match's own font, respects Motion Sensitivity like every other overlay,
   and is aria-hidden since the word is already page content.
 
+### Changed
+
+* **Vision settings now sync a functional preset instead of a clinical label.** Choosing a
+  profile used to save the diagnosis itself (`color-blind-deuteranopia` and friends) to your
+  synced Chrome settings. Oculist now stores only what it needs to render (contrast level,
+  palette, motion) under keys like `rg-adjust-deut`, and keeps the familiar diagnosis names as
+  labels in the wizard and popup only. This is a real reduction in what leaves your machine, not
+  full de-identification: the mapping between a functional preset and the condition it was
+  chosen for is fixed and reversible, so the same inference is still possible from what syncs,
+  it just takes reversing a small lookup table rather than reading a label directly. **Existing
+  saved settings are migrated automatically** the first time the extension loads after updating;
+  there is nothing for you to do, and the options you see and how they behave are unchanged.
+* **The colour-blindness setup step gained a second path.** If you do not know your diagnosis or
+  would rather not name it, a new sample-comparison tab reaches the same functional presets by
+  matching what you can see; the one-click named-diagnosis shortcut is still there too. Switching
+  between the two tabs now supports arrow-key navigation and follows standard tab-list keyboard
+  conventions.
+* **Choosing a colour palette together with Low Vision no longer discards the palette.**
+  Answering yes to both used to silently fall back to the default palette; your chosen palette is
+  now respected while Low Vision still governs sizing, contrast, motion, and borders.
+
 ### Fixed
 
 * **Find-in-page no longer matches Oculist's own overlay text.** The page scan previously
@@ -52,6 +73,41 @@ below the 1.5.0 heading is what landed across that span.
   re-ran the scroll-into-view, yanking the viewport back to the active match while you were
   reading elsewhere. The rescan now re-highlights without navigating; typing a search and the
   prev/next/replay controls still scroll as before.
+* **Settings and preferences are far less likely to be silently lost to write races.**
+  Concurrent settings writes (the popup, welcome page, or content script racing each other or
+  the background service worker, an install-time seed racing a page's own change, or two writes
+  both firing on first install) could let a later write commit a stale snapshot over an earlier
+  one, silently reverting a preference, the default site blocklist, or, in one case,
+  resurrecting a vision-profile setting after it had already been migrated to the new preset
+  format. Settings writes now re-read storage immediately before committing and merge against
+  whatever is actually there instead of overwriting it blind. A write landing in the small
+  remaining gap between that re-read and the commit itself can still be lost, as can one whose
+  writer loses the race on every retry; chrome.storage.sync has no compare-and-swap primitive
+  to close that gap entirely.
+* **A carried-over search-term list no longer vanishes on a cold browser launch.** Chrome can
+  briefly deny extensions access to session storage right after startup; Oculist now waits for
+  that access to actually be granted instead of treating a temporary denial as "nothing was
+  saved."
+* **Scrolling to a match no longer leaves a stray or doubled highlight border behind.** A
+  family of related races in the scroll-into-view teardown could paint a border in the wrong
+  place: a superseded navigation's leftover timer firing after a newer navigation had already
+  taken over, the find bar being closed and reopened while an earlier smooth scroll was still in
+  flight (painting a stale border onto the freshly reopened overlay), and a single navigation
+  being drawn twice about 47ms apart when two of its own completion paths both fired. The
+  timers and handles involved are now tracked and reachable by teardown, whichever of these
+  triggers it.
+* **Beacon effects behave correctly across a scroll.** Reduced-motion beacons now fade out on
+  scroll the same as full-motion ones, the fade affects only the transient match beacon rather
+  than every persistent overlay on the page, the reduced-motion spotlight now tracks the match's
+  position in the page rather than staying pinned to the viewport, and a beacon's own animation is
+  cancelled, not just hidden, when a scroll removes it.
+* **The Cyber-Vision effect no longer wipes your highlighted matches.** Its own live
+  match-count readout text was being mistaken for a real page edit, which could trigger a rescan
+  that filtered the active match out entirely.
+* **Repositioning the active-match overlay no longer replays its entrance animation.** A
+  settings change or window resize used to blink the border, label, and magnifier out and fade
+  them back in from scratch; they now update in place, most noticeable for the low-vision
+  profile's persistent border and label.
 
 ## [1.5.0] — 2026-07-31
 
