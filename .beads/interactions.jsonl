@@ -195,3 +195,4 @@
 {"id":"int-e814079fdca01f14481e46e62accfa9e","kind":"field_change","created_at":"2026-09-02T03:06:10.124613Z","actor":"ya8282","issue_id":"oculist-rnr.8","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
 {"id":"int-6a407c6c01742b630d6103fb75d23550","kind":"field_change","created_at":"2026-09-02T03:27:28.578145Z","actor":"ya8282","issue_id":"oculist-rnr","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-4174d0c0713070b53443378f5c6df932","kind":"field_change","created_at":"2026-09-02T03:51:45.939383Z","actor":"ya8282","issue_id":"oculist-296.1","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
+{"id":"int-ffaf86d46c212801422b34256a8b8212","kind":"field_change","created_at":"2026-09-02T03:58:32.633793Z","actor":"ya8282","issue_id":"oculist-296.2","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
