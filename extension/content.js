@@ -35,14 +35,19 @@
     // anyway: saveSettings() writes the whole settings object, so a key missing from
     // SETTINGS_KEYS would be dropped from storage on the next write and the default
     // blocklist would re-seed itself on every extension update.
-    seededDefaultBlocklist: false
+    seededDefaultBlocklist: false,
+    // oculist-tdj: which optional effect packs are turned on, an array of pack ids. Empty
+    // means core-only — today's twelve effects, unchanged for every existing user. Read
+    // exclusively through availableEffects() (defined by the effectsRegistry below);
+    // nothing else should index settings.enabledPacks directly.
+    enabledPacks: []
   };
 
   var SETTINGS_KEYS = [
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist'
+    'seededDefaultBlocklist', 'enabledPacks'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -375,11 +380,14 @@
 
   // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
   // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
-  // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
-  // animate() ever runs, so nothing outside this closure can drive settings.effect to a
-  // bogus value at animate()-time anymore (oculist-jq6). This hook writes settings.effect
-  // directly, bypassing every guard, so animate()'s own fallback
-  // (effectsRegistry[effectKey] || effectsRegistry.hud) can still be exercised.
+  // storage.onChanged guard normalise a genuinely-unknown (never-registered) effect key
+  // back to 'hud' before animate() ever runs, so nothing outside this closure can drive
+  // settings.effect to a bogus value at animate()-time anymore (oculist-jq6). A
+  // pack-disabled key (registered, just not currently available — oculist-tdj) is
+  // deliberately NOT normalised by those guards, so this hook writes settings.effect
+  // directly, bypassing every guard, to exercise BOTH animate()'s own fallback
+  // (availableEffects()[effectKey] || availableEffects().hud, as of oculist-tdj) and the
+  // genuinely-unknown case.
   window.__ocTest.setEffectKey = function (key) { settings.effect = key; };
 
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
@@ -877,6 +885,10 @@
 
   // ── Plugins & Effects Registry ────────────────────────────────────────────────
 
+  // oculist-tdj: an entry may carry an optional `pack` field (a string pack id). Absent
+  // means core — always available. None of the twelve below carry one yet; this is the
+  // mechanism only, nothing is gated on it until a future bead promotes a packed effect
+  // in. See availableEffects() just below for the one place `pack` is actually read.
   var effectsRegistry = {
     hud: { label: i18n.effectAnimeLaser, run: animateAnimeLaser },
     iris: { label: i18n.effectSpotlight, run: animateIris },
@@ -891,6 +903,50 @@
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision }
   };
+
+  // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
+  // the subset of effectsRegistry that is currently selectable — every entry with no
+  // `pack`, plus every entry whose `pack` is in settings.enabledPacks. Every other
+  // consumer of effectsRegistry (the settings-panel picker, the storage-change and
+  // load-time coercions, and animate()'s run-time resolution) must read through this
+  // instead of effectsRegistry directly: filtering some call sites and not others is
+  // exactly how a disabled effect ends up hidden from the picker but still firing.
+  //
+  // Deliberately does NOT mutate `settings.effect` or read/write chrome.storage — pure
+  // and side-effect-free, so it's safe to call as often as needed (once per render is
+  // fine at this scale: twelve entries today).
+  function availableEffects() {
+    var out = {};
+    // `|| []` rather than trusting settings.enabledPacks to be an array. The
+    // Array.isArray guard on the coercion path runs AFTER this function is first
+    // called there, and SETTINGS_KEYS happens to order 'effect' before
+    // 'enabledPacks' — so today this is only safe because no entry carries a `pack`
+    // and indexOf is never reached. The moment oculist-tdj.2 ships a real pack, a
+    // malformed stored value would throw here instead. Not worth leaving as a
+    // sequencing coincidence.
+    var packs = settings.enabledPacks || [];
+    for (var key in effectsRegistry) {
+      if (!effectsRegistry.hasOwnProperty(key)) continue;
+      var entry = effectsRegistry[key];
+      if (!entry.pack || packs.indexOf(entry.pack) !== -1) {
+        out[key] = entry;
+      }
+    }
+    return out;
+  }
+
+  // oculist-tdj: the one place the "genuinely unknown" question is answered — is `key`
+  // a real effect (registered in effectsRegistry) at all, regardless of pack state?
+  // False for a real, registered effect whose pack just happens to be disabled right
+  // now (availableEffects() answers "is it offered right now"; this answers "does it
+  // exist"). The distinction matters for exactly one decision, at the three coercion
+  // sites below and at load time: a pack-disabled key must NOT rewrite settings.effect
+  // (the pack may come back), while a genuinely unknown key (never registered, e.g. an
+  // effect removed in a past build, or hand-edited storage) still must, same as before
+  // oculist-tdj.
+  function isGenuinelyUnknownEffect(key) {
+    return !effectsRegistry.hasOwnProperty(key);
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -3927,7 +3983,15 @@
     // Lite Mode uses the selected effect but scales down the particle counts
     // and complex geometries inside each effect function.
     var effectKey = settings.effect;
-    var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
+    // oculist-tdj: reads availableEffects(), not effectsRegistry directly. This is the
+    // actual run-time resolution point for a pack-disabled selection: the coercions
+    // below deliberately leave settings.effect untouched when its pack is off (so
+    // re-enabling the pack restores the choice), which means THIS lookup is what falls
+    // back to hud instead of firing an effect the user currently can't see in the
+    // picker. A genuinely-unknown key (never registered at all) falls back here too,
+    // same as it always did.
+    var effects = availableEffects();
+    var effectObj = effects[effectKey] || effects.hud;
     if (effectObj && typeof effectObj.run === 'function') {
       // ponytail: every effectsRegistry entry guards run(rect) with the identical
       // `if (!rect || rect.width === 0 || rect.height === 0) return;` (audited
@@ -5737,9 +5801,12 @@
     col1.appendChild(scrollBehaviorField);
 
     var effectOptions = [];
-    for (var key in effectsRegistry) {
-      if (effectsRegistry.hasOwnProperty(key)) {
-        effectOptions.push({ value: key, label: effectsRegistry[key].label });
+    // oculist-tdj: availableEffects(), not effectsRegistry — a pack-disabled entry must
+    // not be offered here, or picking it would look valid but silently fall back to hud.
+    var pickerEffects = availableEffects();
+    for (var key in pickerEffects) {
+      if (pickerEffects.hasOwnProperty(key)) {
+        effectOptions.push({ value: key, label: pickerEffects[key].label });
       }
     }
     effectOptions.sort(function (a, b) {
@@ -7683,7 +7750,15 @@
         // the comparison makes that echo a no-op while a genuine change (a different
         // valid effect, or a stale value landing while memory holds something else)
         // still compares unequal and rebuilds as before.
-        var incoming = k === 'effect' && !effectsRegistry[nv[k]] ? 'hud' : nv[k];
+        // oculist-tdj: routed through availableEffects() to ask "is it offered right
+        // now" (a pack-disabled key is not), but the coercion itself still gates on
+        // isGenuinelyUnknownEffect() (the raw registry) — a pack-disabled key must NOT
+        // be rewritten to 'hud' here, or re-enabling its pack would never restore it.
+        // See isGenuinelyUnknownEffect()'s header and animate() for where a
+        // pack-disabled key is actually resolved to hud, at run time, without this
+        // mutation.
+        var effectUnavailable = k === 'effect' && !availableEffects()[nv[k]];
+        var incoming = (effectUnavailable && isGenuinelyUnknownEffect(nv[k])) ? 'hud' : nv[k];
         if (stableStringify(incoming) !== stableStringify(settings[k])) {
           changed = true;
           if (k === 'performanceMode') performanceModeChanged = true;
@@ -7693,7 +7768,15 @@
       });
       if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
-      if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
+      // Same defensive shape as disabledSites above: availableEffects() below indexOf()s
+      // into settings.enabledPacks, so a malformed stored value (not an array) must be
+      // corrected before that call, not after.
+      if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+      // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as above, defensive
+      // re-check — a pack-disabled settings.effect is left alone here too.
+      if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
+        settings.effect = 'hud';
+      }
       if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
         window.__ocDestroy();
       } else {
@@ -7764,8 +7847,17 @@
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+      // Same defensive shape as disabledSites above, and for the same reason as the
+      // onChanged listener's own copy of this guard: availableEffects() below indexOf()s
+      // into settings.enabledPacks.
+      if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
     }
-    if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
+    // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as the onChanged
+    // listener above — a pack-disabled effect surviving a restart is left alone, since
+    // it may still be selectable once availableEffects() sees its pack re-enabled.
+    if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
+      settings.effect = 'hud';
+    }
     if (needsMigration) {
       // Reuses saveSettings()'s own pendingSelfWrites bookkeeping so the write this
       // migration makes is recognized and swallowed as an echo by the
