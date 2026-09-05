@@ -40,14 +40,21 @@
     // means core-only — today's twelve effects, unchanged for every existing user. Read
     // exclusively through availableEffects() (defined by the effectsRegistry below);
     // nothing else should index settings.enabledPacks directly.
-    enabledPacks: []
+    enabledPacks: [],
+    // oculist-tdj.3: whether the one-time "a pack is available" discovery prompt
+    // (maybeShowPackDiscoveryNotice() below) has already been answered — either its close
+    // control or its "Open Settings" link, both routed through
+    // dismissPackDiscoveryNotice(). false means "keep showing it on every overlay open
+    // that has a pack available"; flips to true exactly once and, being an ordinary
+    // SETTINGS_KEYS member, syncs and never reverts on any device from then on.
+    packsNoticeDismissed: false
   };
 
   var SETTINGS_KEYS = [
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist', 'enabledPacks'
+    'seededDefaultBlocklist', 'enabledPacks', 'packsNoticeDismissed'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -755,6 +762,11 @@
     // vocabulary that would frame this as a separate installable module.
     packsLabel: 'Optional Effect Packs',
     packsDesc: 'Turn on a pack to add its seasonal effects to the list above',
+    // oculist-tdj.3: one-time discovery prompt for the packsLabel/packsDesc toggle above —
+    // same store-review copy constraint (never "plugin"/"add-on").
+    packsNoticeText: 'New seasonal effects are available as an optional effect pack — turn them on in Settings.',
+    packsNoticeCta: 'Open Settings',
+    packsNoticeDismiss: 'Dismiss',
     panelPosition: 'Panel Position',
     positionDesc: 'Screen quadrant placement',
     topLeft: 'Top left',
@@ -1126,6 +1138,12 @@
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
+  // oculist-tdj.3: the pack-discovery notice's own element, separate from noticeEl/
+  // dismissedNotices above — those are showNotice()'s session-only banner (cleared by
+  // __ocDestroy() on every close), this one's dismissal is a persisted setting instead
+  // (settings.packsNoticeDismissed), so it needs its own handle rather than sharing that
+  // machinery.
+  var packNoticeEl          = null;
   // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
   // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')
   // never silences an unrelated one (e.g. 'term-cap'). An unrecognized/missing key
@@ -1215,6 +1233,7 @@
     if (s) s.remove();
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
+    packNoticeEl = null;
     listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = []; termStarved = [];
@@ -4783,6 +4802,100 @@
     }
   }
 
+  // ── Pack discovery notice ───────────────────────────────────────────────────────
+  //
+  // oculist-tdj.3: packs default OFF (settings.enabledPacks starts empty), so once a
+  // pack ships (knownPacks(), extension/content.js, returns something) it is otherwise
+  // undiscoverable — the settings-panel toggle it lives behind is opt-in UI nobody has a
+  // reason to open. This is the single dismissible nudge toward that toggle, chosen over
+  // defaulting a pack on.
+
+  // Removes the notice element (if present) and, unless already recorded, marks it
+  // permanently answered — settings.packsNoticeDismissed is an ordinary SETTINGS_KEYS
+  // member, so this persists through saveSettings()'s normal sync write and, once it
+  // syncs, suppresses the notice on every other device too. Called by both the notice's
+  // own close control and its "Open Settings" link — either one is "the user has been
+  // told", not just the close control alone.
+  function dismissPackDiscoveryNotice() {
+    if (packNoticeEl) {
+      packNoticeEl.remove();
+      packNoticeEl = null;
+    }
+    if (!settings.packsNoticeDismissed) {
+      settings.packsNoticeDismissed = true;
+      saveSettings();
+    }
+  }
+
+  // Called once per overlay open (window.__ocToggle()'s build branch, below). A no-op
+  // once settings.packsNoticeDismissed is true, or while no registry entry carries a
+  // `pack` yet (knownPacks() empty — true for every existing user today) — see
+  // oculist-tdj.2's knownPacks() for why "a pack exists" and "a pack is enabled" are
+  // deliberately different questions; this gates on the former; the settings-panel
+  // toggle itself gates on the latter.
+  //
+  // Appended into wrapRoot (the overlay's own shadow root) like showNotice()'s noticeEl
+  // above — never document.body — so this can't reflow the host page or be reached by
+  // anything outside the .oc- subtree. Deliberately does not call .focus() on anything:
+  // buildUI()/window.__ocToggle() already put focus in the find input, and that must
+  // stay put (this notice is announced via role="status" instead — see below).
+  function maybeShowPackDiscoveryNotice() {
+    if (!wrapRoot || packNoticeEl || settings.packsNoticeDismissed) return;
+    if (knownPacks().length === 0) return;
+
+    packNoticeEl = document.createElement('div');
+    packNoticeEl.className = 'oc-pack-notice';
+    // role="status" (an implicit polite live region) announces the text to a screen
+    // reader without moving focus — an alertdialog or an explicit focus() call would
+    // both yank focus off the find input, which is exactly what must not happen here.
+    packNoticeEl.setAttribute('role', 'status');
+
+    var textEl = document.createElement('span');
+    textEl.className = 'oc-pack-notice-text';
+    textEl.textContent = i18n.packsNoticeText;
+    packNoticeEl.appendChild(textEl);
+
+    var ctaEl = document.createElement('button');
+    ctaEl.type = 'button';
+    ctaEl.className = 'oc-pack-notice-cta';
+    ctaEl.textContent = i18n.packsNoticeCta;
+    ctaEl.addEventListener('click', function () {
+      // Reaching the toggle is itself the answer this prompt was looking for — see
+      // dismissPackDiscoveryNotice()'s header comment.
+      dismissPackDiscoveryNotice();
+      // Same mutual-exclusion step toggleSettings() takes before opening the panel.
+      if (listsPanel) { closeListsMenu({ skipFocusReturn: true }); }
+      if (!settingsPanel) openSettings();
+    });
+    packNoticeEl.appendChild(ctaEl);
+
+    var closeEl = document.createElement('button');
+    closeEl.type = 'button';
+    closeEl.className = 'oc-pack-notice-close';
+    closeEl.textContent = '✕';
+    closeEl.setAttribute('aria-label', i18n.packsNoticeDismiss);
+    closeEl.addEventListener('click', function () {
+      dismissPackDiscoveryNotice();
+    });
+    packNoticeEl.appendChild(closeEl);
+
+    wrapRoot.appendChild(packNoticeEl);
+
+    // Same two-tier motion gate as listsPanel's own entrance animation (buildListsMenu()
+    // above): only 'full' runs it, 'reduced' and 'off' both render the notice fully in
+    // place with no animate() call at all — "static", not merely a shorter animation.
+    if (effectiveMotion() === 'full') {
+      packNoticeEl.animate([
+        { opacity: 0, transform: 'translateY(-4px)' },
+        { opacity: 1, transform: 'translateY(0)' }
+      ], {
+        duration: 160,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'forwards'
+      });
+    }
+  }
+
   // ── Navigation ────────────────────────────────────────────────────────────────
 
   // Ownership rule (oculist-l6m.19): lastTerm is kept in sync with whichever input value
@@ -7513,6 +7626,56 @@
         '.oc-notice-close:hover {',
         '  opacity: 1;',
         '}',
+        // oculist-tdj.3: same width:0 + min-width:100% shadow-host-stretch guard as
+        // .oc-notice above, same reasoning.
+        '.oc-pack-notice {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  flex-wrap: wrap;',
+        '  gap: 6px 10px;',
+        '  padding: 6px 10px;',
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  box-sizing: border-box;',
+        '  font: 12px/1.4 system-ui, -apple-system, sans-serif;',
+        '  background: ' + t.bg + ';',
+        '  color: ' + t.text + ';',
+        '  border-top: 1px solid ' + t.divider + ';',
+        '  border-left: 3px solid var(--oc-accent);',
+        '}',
+        '.oc-pack-notice-text {',
+        '  flex: 1;',
+        '  min-width: 120px;',
+        '  opacity: 0.85;',
+        '}',
+        // Real <button>s (unlike .oc-notice-close, a plain <span>) — reset every default
+        // button chrome property so they read as the same quiet inline controls, per the
+        // "small, quiet, easy to get rid of" brief.
+        '.oc-pack-notice-cta, .oc-pack-notice-close {',
+        '  flex-shrink: 0;',
+        '  border: none;',
+        '  background: transparent;',
+        '  font: inherit;',
+        '  cursor: pointer;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '}',
+        '.oc-pack-notice-cta {',
+        '  color: var(--oc-accent);',
+        '  font-weight: 600;',
+        '  text-decoration: underline;',
+        '}',
+        '.oc-pack-notice-cta:hover {',
+        '  opacity: 0.85;',
+        '}',
+        '.oc-pack-notice-close {',
+        '  color: ' + t.text + ';',
+        '  opacity: 0.6;',
+        '  font-size: 13px;',
+        '}',
+        '.oc-pack-notice-close:hover {',
+        '  opacity: 1;',
+        '}',
         '.oc-chip-row {',
         '  display: flex;',
         '  flex-wrap: wrap;',
@@ -7814,6 +7977,10 @@
         injectHighlightStyles();
         startDomObserver();
         checkSiteOverride(false);
+        // oculist-tdj.3: after checkSiteOverride() (a separate, session-only notice
+        // class — the two can coexist) and before the input.focus()/select() below,
+        // which must remain the last word on where focus lands on open.
+        maybeShowPackDiscoveryNotice();
         window.addEventListener('scroll', handleScroll, { passive: true });
         window.addEventListener('resize', handleResize, { passive: true });
         if (input) {
