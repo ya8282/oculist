@@ -750,6 +750,11 @@
     instant: 'Instant',
     highlightEffect: 'Highlight Effect',
     effectDesc: 'Choose match visual transition',
+    // oculist-tdj.2: store-review copy constraint — every user-facing string about this
+    // feature says "effect pack" or "seasonal effects", and avoids the extension-store
+    // vocabulary that would frame this as a separate installable module.
+    packsLabel: 'Optional Effect Packs',
+    packsDesc: 'Turn on a pack to add its seasonal effects to the list above',
     panelPosition: 'Panel Position',
     positionDesc: 'Screen quadrant placement',
     topLeft: 'Top left',
@@ -930,6 +935,34 @@
       var entry = effectsRegistry[key];
       if (!entry.pack || packs.indexOf(entry.pack) !== -1) {
         out[key] = entry;
+      }
+    }
+    return out;
+  }
+
+  // oculist-tdj.2: display name for a pack id, for the settings-panel toggle list below.
+  // Falls back to a title-cased version of the id rather than the raw id string, so a
+  // pack that ships without an entry here still reads as a name, not a slug.
+  var PACK_LABELS = {};
+  function packLabel(packId) {
+    if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
+    return packId.charAt(0).toUpperCase() + packId.slice(1);
+  }
+
+  // oculist-tdj.2: the settings-panel pack toggle list is driven off effectsRegistry
+  // itself (every distinct `pack` value actually in use), not a separately maintained
+  // list — so a pack with no registry entries yet stays entirely absent from the panel
+  // instead of appearing as a checkbox with nothing behind it, and a newly promoted pack
+  // needs no companion edit here to become toggleable.
+  function knownPacks() {
+    var seen = {};
+    var out = [];
+    for (var key in effectsRegistry) {
+      if (!effectsRegistry.hasOwnProperty(key)) continue;
+      var p = effectsRegistry[key].pack;
+      if (p && !seen[p]) {
+        seen[p] = true;
+        out.push(p);
       }
     }
     return out;
@@ -5641,6 +5674,47 @@
     return list;
   }
 
+  // oculist-tdj.2: multi-select sibling of makeRadioList above — same native-<button>-
+  // per-row shape (so Enter/Space/Tab all work for free, per settings_panel_enter_
+  // activation.test.js) and the same groupKey + ':' + value data-oc-key convention (so
+  // rebuildSettingsPanelPreservingFocus() can re-resolve a checked row after a rebuild),
+  // but each row toggles independently instead of exclusively selecting one.
+  function makeCheckboxList(items, checkedValues, onToggle, groupKey) {
+    var list = document.createElement('div');
+    list.className = 'oc-checkbox-list';
+
+    items.forEach(function (item) {
+      var checked = checkedValues.indexOf(item.value) !== -1;
+
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'oc-checkbox-item' + (checked ? ' active' : '');
+      // role="checkbox" + aria-checked on a real <button>: a button's native keyboard
+      // activation (Enter/Space) is kept, its exposed role is overridden to match what
+      // it visually is. See oc-radio-item above for the same real-<button> rationale.
+      row.setAttribute('role', 'checkbox');
+      row.setAttribute('aria-checked', String(checked));
+      if (groupKey) row.setAttribute('data-oc-key', groupKey + ':' + item.value);
+
+      var box = document.createElement('span');
+      box.className = 'oc-checkbox-box';
+      box.setAttribute('aria-hidden', 'true');
+      box.textContent = checked ? '☑' : '☐';
+
+      var lbl = document.createElement('span');
+      lbl.textContent = item.label;
+
+      row.appendChild(box);
+      row.appendChild(lbl);
+      row.addEventListener('click', function () {
+        onToggle(item.value, !checked);
+      });
+      list.appendChild(row);
+    });
+
+    return list;
+  }
+
   function makeSettingsField(labelText, descText, controlEl) {
     var field = document.createElement('div');
     field.className = 'oc-settings-field';
@@ -5825,6 +5899,41 @@
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
+
+    // oculist-tdj.2: the pack toggle list. Empty (no registry entry carries a `pack` yet,
+    // per oculist-tdj.1) means knownPacks() returns [] and this whole field is skipped —
+    // deliberately no empty section header rendered for a feature with nothing to offer.
+    var packIds = knownPacks();
+    if (packIds.length) {
+      var packOptions = packIds.map(function (id) {
+        return { value: id, label: packLabel(id) };
+      });
+      packOptions.sort(function (a, b) {
+        return a.label.localeCompare(b.label);
+      });
+
+      var packsField = makeSettingsField(i18n.packsLabel, i18n.packsDesc, makeCheckboxList(
+        packOptions,
+        settings.enabledPacks || [],
+        function (packId, nowChecked) {
+          if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+          var idx = settings.enabledPacks.indexOf(packId);
+          if (nowChecked) {
+            if (idx === -1) settings.enabledPacks.push(packId);
+          } else if (idx !== -1) {
+            settings.enabledPacks.splice(idx, 1);
+          }
+          saveSettings();
+          // Rebuilds in place (same path as theme/position/reset above) so the effect
+          // picker's options — sourced from availableEffects(), which reads
+          // settings.enabledPacks — reflect the new pack state immediately, no reload.
+          rebuildSettingsPanelPreservingFocus();
+        },
+        'pack'
+      ));
+      packsField.style.marginTop = '8px';
+      col1.appendChild(packsField);
+    }
 
     // Col 2: Position & Colors
     var col2 = document.createElement('div');
@@ -7310,6 +7419,54 @@
         '  opacity: 1;',
         '}',
         '.oc-radio-dot {',
+        '  font-size: .75rem;',
+        '  flex-shrink: 0;',
+        '  width: 1em;',
+        '  text-align: center;',
+        '}',
+        // oculist-tdj.2: same capped-scroll idiom as .oc-radio-list (oculist-dvt.5) —
+        // this list is empty today (see knownPacks()) so it renders zero rows, but a
+        // future pack list should not be able to regrow the whole-panel overflow problem
+        // .oc-radio-list already had to fix once.
+        '.oc-checkbox-list {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 2px;',
+        '  max-height: 160px;',
+        '  overflow-y: auto;',
+        '}',
+        '.oc-checkbox-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  justify-content: flex-start;',
+        '  gap: 8px;',
+        '  padding: 5px 8px;',
+        '  border: none;',
+        '  background: transparent;',
+        '  color: var(--oc-text);',
+        '  font-size: .875rem;',
+        '  font-family: inherit;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  border-radius: 4px;',
+        '  text-align: left;',
+        '  width: 100%;',
+        '  opacity: 0.7;',
+        '  box-sizing: border-box;',
+        '  box-shadow: none;',
+        '  margin: 0;',
+        '  flex-shrink: 0;',
+        '  transition: background-color 120ms, opacity 120ms, color 120ms;',
+        '}',
+        '.oc-checkbox-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '  opacity: 1;',
+        '}',
+        '.oc-checkbox-item.active {',
+        '  color: var(--oc-accent);',
+        '  opacity: 1;',
+        '}',
+        '.oc-checkbox-box {',
         '  font-size: .75rem;',
         '  flex-shrink: 0;',
         '  width: 1em;',
