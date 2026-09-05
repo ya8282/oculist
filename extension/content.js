@@ -35,14 +35,26 @@
     // anyway: saveSettings() writes the whole settings object, so a key missing from
     // SETTINGS_KEYS would be dropped from storage on the next write and the default
     // blocklist would re-seed itself on every extension update.
-    seededDefaultBlocklist: false
+    seededDefaultBlocklist: false,
+    // oculist-tdj: which optional effect packs are turned on, an array of pack ids. Empty
+    // means core-only — today's twelve effects, unchanged for every existing user. Read
+    // exclusively through availableEffects() (defined by the effectsRegistry below);
+    // nothing else should index settings.enabledPacks directly.
+    enabledPacks: [],
+    // oculist-tdj.3: whether the one-time "a pack is available" discovery prompt
+    // (maybeShowPackDiscoveryNotice() below) has already been answered — either its close
+    // control or its "Open Settings" link, both routed through
+    // dismissPackDiscoveryNotice(). false means "keep showing it on every overlay open
+    // that has a pack available"; flips to true exactly once and, being an ordinary
+    // SETTINGS_KEYS member, syncs and never reverts on any device from then on.
+    packsNoticeDismissed: false
   };
 
   var SETTINGS_KEYS = [
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist'
+    'seededDefaultBlocklist', 'enabledPacks', 'packsNoticeDismissed'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -375,11 +387,14 @@
 
   // Same test-reachability reasoning as getDebounceTimer above. Both the boot-time
   // coercion (`if (!effectsRegistry[settings.effect]) settings.effect = 'hud'`) and the
-  // storage.onChanged guard normalise a stale/removed effect key back to 'hud' before
-  // animate() ever runs, so nothing outside this closure can drive settings.effect to a
-  // bogus value at animate()-time anymore (oculist-jq6). This hook writes settings.effect
-  // directly, bypassing every guard, so animate()'s own fallback
-  // (effectsRegistry[effectKey] || effectsRegistry.hud) can still be exercised.
+  // storage.onChanged guard normalise a genuinely-unknown (never-registered) effect key
+  // back to 'hud' before animate() ever runs, so nothing outside this closure can drive
+  // settings.effect to a bogus value at animate()-time anymore (oculist-jq6). A
+  // pack-disabled key (registered, just not currently available — oculist-tdj) is
+  // deliberately NOT normalised by those guards, so this hook writes settings.effect
+  // directly, bypassing every guard, to exercise BOTH animate()'s own fallback
+  // (availableEffects()[effectKey] || availableEffects().hud, as of oculist-tdj) and the
+  // genuinely-unknown case.
   window.__ocTest.setEffectKey = function (key) { settings.effect = key; };
 
   // ── Saved lists (named, persisted across devices) ──────────────────────────────
@@ -742,6 +757,16 @@
     instant: 'Instant',
     highlightEffect: 'Highlight Effect',
     effectDesc: 'Choose match visual transition',
+    // oculist-tdj.2: store-review copy constraint — every user-facing string about this
+    // feature says "effect pack" or "seasonal effects", and avoids the extension-store
+    // vocabulary that would frame this as a separate installable module.
+    packsLabel: 'Optional Effect Packs',
+    packsDesc: 'Turn on a pack to add its seasonal effects to the list above',
+    // oculist-tdj.3: one-time discovery prompt for the packsLabel/packsDesc toggle above —
+    // same store-review copy constraint (never "plugin"/"add-on").
+    packsNoticeText: 'New seasonal effects are available as an optional effect pack — turn them on in Settings.',
+    packsNoticeCta: 'Open Settings',
+    packsNoticeDismiss: 'Dismiss',
     panelPosition: 'Panel Position',
     positionDesc: 'Screen quadrant placement',
     topLeft: 'Top left',
@@ -877,6 +902,10 @@
 
   // ── Plugins & Effects Registry ────────────────────────────────────────────────
 
+  // oculist-tdj: an entry may carry an optional `pack` field (a string pack id). Absent
+  // means core — always available. None of the twelve below carry one yet; this is the
+  // mechanism only, nothing is gated on it until a future bead promotes a packed effect
+  // in. See availableEffects() just below for the one place `pack` is actually read.
   var effectsRegistry = {
     hud: { label: i18n.effectAnimeLaser, run: animateAnimeLaser },
     iris: { label: i18n.effectSpotlight, run: animateIris },
@@ -891,6 +920,78 @@
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision }
   };
+
+  // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
+  // the subset of effectsRegistry that is currently selectable — every entry with no
+  // `pack`, plus every entry whose `pack` is in settings.enabledPacks. Every other
+  // consumer of effectsRegistry (the settings-panel picker, the storage-change and
+  // load-time coercions, and animate()'s run-time resolution) must read through this
+  // instead of effectsRegistry directly: filtering some call sites and not others is
+  // exactly how a disabled effect ends up hidden from the picker but still firing.
+  //
+  // Deliberately does NOT mutate `settings.effect` or read/write chrome.storage — pure
+  // and side-effect-free, so it's safe to call as often as needed (once per render is
+  // fine at this scale: twelve entries today).
+  function availableEffects() {
+    var out = {};
+    // `|| []` rather than trusting settings.enabledPacks to be an array. The
+    // Array.isArray guard on the coercion path runs AFTER this function is first
+    // called there, and SETTINGS_KEYS happens to order 'effect' before
+    // 'enabledPacks' — so today this is only safe because no entry carries a `pack`
+    // and indexOf is never reached. The moment oculist-tdj.2 ships a real pack, a
+    // malformed stored value would throw here instead. Not worth leaving as a
+    // sequencing coincidence.
+    var packs = settings.enabledPacks || [];
+    for (var key in effectsRegistry) {
+      if (!effectsRegistry.hasOwnProperty(key)) continue;
+      var entry = effectsRegistry[key];
+      if (!entry.pack || packs.indexOf(entry.pack) !== -1) {
+        out[key] = entry;
+      }
+    }
+    return out;
+  }
+
+  // oculist-tdj.2: display name for a pack id, for the settings-panel toggle list below.
+  // Falls back to a title-cased version of the id rather than the raw id string, so a
+  // pack that ships without an entry here still reads as a name, not a slug.
+  var PACK_LABELS = {};
+  function packLabel(packId) {
+    if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
+    return packId.charAt(0).toUpperCase() + packId.slice(1);
+  }
+
+  // oculist-tdj.2: the settings-panel pack toggle list is driven off effectsRegistry
+  // itself (every distinct `pack` value actually in use), not a separately maintained
+  // list — so a pack with no registry entries yet stays entirely absent from the panel
+  // instead of appearing as a checkbox with nothing behind it, and a newly promoted pack
+  // needs no companion edit here to become toggleable.
+  function knownPacks() {
+    var seen = {};
+    var out = [];
+    for (var key in effectsRegistry) {
+      if (!effectsRegistry.hasOwnProperty(key)) continue;
+      var p = effectsRegistry[key].pack;
+      if (p && !seen[p]) {
+        seen[p] = true;
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  // oculist-tdj: the one place the "genuinely unknown" question is answered — is `key`
+  // a real effect (registered in effectsRegistry) at all, regardless of pack state?
+  // False for a real, registered effect whose pack just happens to be disabled right
+  // now (availableEffects() answers "is it offered right now"; this answers "does it
+  // exist"). The distinction matters for exactly one decision, at the three coercion
+  // sites below and at load time: a pack-disabled key must NOT rewrite settings.effect
+  // (the pack may come back), while a genuinely unknown key (never registered, e.g. an
+  // effect removed in a past build, or hand-edited storage) still must, same as before
+  // oculist-tdj.
+  function isGenuinelyUnknownEffect(key) {
+    return !effectsRegistry.hasOwnProperty(key);
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -1037,6 +1138,12 @@
   var domObserver           = null;
   var domObserverTimer      = null;
   var noticeEl              = null;
+  // oculist-tdj.3: the pack-discovery notice's own element, separate from noticeEl/
+  // dismissedNotices above — those are showNotice()'s session-only banner (cleared by
+  // __ocDestroy() on every close), this one's dismissal is a persisted setting instead
+  // (settings.packsNoticeDismissed), so it needs its own handle rather than sharing that
+  // machinery.
+  var packNoticeEl          = null;
   // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
   // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')
   // never silences an unrelated one (e.g. 'term-cap'). An unrecognized/missing key
@@ -1126,6 +1233,7 @@
     if (s) s.remove();
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
+    packNoticeEl = null;
     listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = []; termStarved = [];
@@ -3927,7 +4035,15 @@
     // Lite Mode uses the selected effect but scales down the particle counts
     // and complex geometries inside each effect function.
     var effectKey = settings.effect;
-    var effectObj = effectsRegistry[effectKey] || effectsRegistry.hud;
+    // oculist-tdj: reads availableEffects(), not effectsRegistry directly. This is the
+    // actual run-time resolution point for a pack-disabled selection: the coercions
+    // below deliberately leave settings.effect untouched when its pack is off (so
+    // re-enabling the pack restores the choice), which means THIS lookup is what falls
+    // back to hud instead of firing an effect the user currently can't see in the
+    // picker. A genuinely-unknown key (never registered at all) falls back here too,
+    // same as it always did.
+    var effects = availableEffects();
+    var effectObj = effects[effectKey] || effects.hud;
     if (effectObj && typeof effectObj.run === 'function') {
       // ponytail: every effectsRegistry entry guards run(rect) with the identical
       // `if (!rect || rect.width === 0 || rect.height === 0) return;` (audited
@@ -4683,6 +4799,100 @@
       showNotice('No matches found. If you can see the text on screen, this page may render it in a way Oculist can\'t scan.', 'site-override');
     } else {
       removeNotice();
+    }
+  }
+
+  // ── Pack discovery notice ───────────────────────────────────────────────────────
+  //
+  // oculist-tdj.3: packs default OFF (settings.enabledPacks starts empty), so once a
+  // pack ships (knownPacks(), extension/content.js, returns something) it is otherwise
+  // undiscoverable — the settings-panel toggle it lives behind is opt-in UI nobody has a
+  // reason to open. This is the single dismissible nudge toward that toggle, chosen over
+  // defaulting a pack on.
+
+  // Removes the notice element (if present) and, unless already recorded, marks it
+  // permanently answered — settings.packsNoticeDismissed is an ordinary SETTINGS_KEYS
+  // member, so this persists through saveSettings()'s normal sync write and, once it
+  // syncs, suppresses the notice on every other device too. Called by both the notice's
+  // own close control and its "Open Settings" link — either one is "the user has been
+  // told", not just the close control alone.
+  function dismissPackDiscoveryNotice() {
+    if (packNoticeEl) {
+      packNoticeEl.remove();
+      packNoticeEl = null;
+    }
+    if (!settings.packsNoticeDismissed) {
+      settings.packsNoticeDismissed = true;
+      saveSettings();
+    }
+  }
+
+  // Called once per overlay open (window.__ocToggle()'s build branch, below). A no-op
+  // once settings.packsNoticeDismissed is true, or while no registry entry carries a
+  // `pack` yet (knownPacks() empty — true for every existing user today) — see
+  // oculist-tdj.2's knownPacks() for why "a pack exists" and "a pack is enabled" are
+  // deliberately different questions; this gates on the former; the settings-panel
+  // toggle itself gates on the latter.
+  //
+  // Appended into wrapRoot (the overlay's own shadow root) like showNotice()'s noticeEl
+  // above — never document.body — so this can't reflow the host page or be reached by
+  // anything outside the .oc- subtree. Deliberately does not call .focus() on anything:
+  // buildUI()/window.__ocToggle() already put focus in the find input, and that must
+  // stay put (this notice is announced via role="status" instead — see below).
+  function maybeShowPackDiscoveryNotice() {
+    if (!wrapRoot || packNoticeEl || settings.packsNoticeDismissed) return;
+    if (knownPacks().length === 0) return;
+
+    packNoticeEl = document.createElement('div');
+    packNoticeEl.className = 'oc-pack-notice';
+    // role="status" (an implicit polite live region) announces the text to a screen
+    // reader without moving focus — an alertdialog or an explicit focus() call would
+    // both yank focus off the find input, which is exactly what must not happen here.
+    packNoticeEl.setAttribute('role', 'status');
+
+    var textEl = document.createElement('span');
+    textEl.className = 'oc-pack-notice-text';
+    textEl.textContent = i18n.packsNoticeText;
+    packNoticeEl.appendChild(textEl);
+
+    var ctaEl = document.createElement('button');
+    ctaEl.type = 'button';
+    ctaEl.className = 'oc-pack-notice-cta';
+    ctaEl.textContent = i18n.packsNoticeCta;
+    ctaEl.addEventListener('click', function () {
+      // Reaching the toggle is itself the answer this prompt was looking for — see
+      // dismissPackDiscoveryNotice()'s header comment.
+      dismissPackDiscoveryNotice();
+      // Same mutual-exclusion step toggleSettings() takes before opening the panel.
+      if (listsPanel) { closeListsMenu({ skipFocusReturn: true }); }
+      if (!settingsPanel) openSettings();
+    });
+    packNoticeEl.appendChild(ctaEl);
+
+    var closeEl = document.createElement('button');
+    closeEl.type = 'button';
+    closeEl.className = 'oc-pack-notice-close';
+    closeEl.textContent = '✕';
+    closeEl.setAttribute('aria-label', i18n.packsNoticeDismiss);
+    closeEl.addEventListener('click', function () {
+      dismissPackDiscoveryNotice();
+    });
+    packNoticeEl.appendChild(closeEl);
+
+    wrapRoot.appendChild(packNoticeEl);
+
+    // Same two-tier motion gate as listsPanel's own entrance animation (buildListsMenu()
+    // above): only 'full' runs it, 'reduced' and 'off' both render the notice fully in
+    // place with no animate() call at all — "static", not merely a shorter animation.
+    if (effectiveMotion() === 'full') {
+      packNoticeEl.animate([
+        { opacity: 0, transform: 'translateY(-4px)' },
+        { opacity: 1, transform: 'translateY(0)' }
+      ], {
+        duration: 160,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'forwards'
+      });
     }
   }
 
@@ -5577,6 +5787,47 @@
     return list;
   }
 
+  // oculist-tdj.2: multi-select sibling of makeRadioList above — same native-<button>-
+  // per-row shape (so Enter/Space/Tab all work for free, per settings_panel_enter_
+  // activation.test.js) and the same groupKey + ':' + value data-oc-key convention (so
+  // rebuildSettingsPanelPreservingFocus() can re-resolve a checked row after a rebuild),
+  // but each row toggles independently instead of exclusively selecting one.
+  function makeCheckboxList(items, checkedValues, onToggle, groupKey) {
+    var list = document.createElement('div');
+    list.className = 'oc-checkbox-list';
+
+    items.forEach(function (item) {
+      var checked = checkedValues.indexOf(item.value) !== -1;
+
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'oc-checkbox-item' + (checked ? ' active' : '');
+      // role="checkbox" + aria-checked on a real <button>: a button's native keyboard
+      // activation (Enter/Space) is kept, its exposed role is overridden to match what
+      // it visually is. See oc-radio-item above for the same real-<button> rationale.
+      row.setAttribute('role', 'checkbox');
+      row.setAttribute('aria-checked', String(checked));
+      if (groupKey) row.setAttribute('data-oc-key', groupKey + ':' + item.value);
+
+      var box = document.createElement('span');
+      box.className = 'oc-checkbox-box';
+      box.setAttribute('aria-hidden', 'true');
+      box.textContent = checked ? '☑' : '☐';
+
+      var lbl = document.createElement('span');
+      lbl.textContent = item.label;
+
+      row.appendChild(box);
+      row.appendChild(lbl);
+      row.addEventListener('click', function () {
+        onToggle(item.value, !checked);
+      });
+      list.appendChild(row);
+    });
+
+    return list;
+  }
+
   function makeSettingsField(labelText, descText, controlEl) {
     var field = document.createElement('div');
     field.className = 'oc-settings-field';
@@ -5737,9 +5988,12 @@
     col1.appendChild(scrollBehaviorField);
 
     var effectOptions = [];
-    for (var key in effectsRegistry) {
-      if (effectsRegistry.hasOwnProperty(key)) {
-        effectOptions.push({ value: key, label: effectsRegistry[key].label });
+    // oculist-tdj: availableEffects(), not effectsRegistry — a pack-disabled entry must
+    // not be offered here, or picking it would look valid but silently fall back to hud.
+    var pickerEffects = availableEffects();
+    for (var key in pickerEffects) {
+      if (pickerEffects.hasOwnProperty(key)) {
+        effectOptions.push({ value: key, label: pickerEffects[key].label });
       }
     }
     effectOptions.sort(function (a, b) {
@@ -5758,6 +6012,41 @@
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
+
+    // oculist-tdj.2: the pack toggle list. Empty (no registry entry carries a `pack` yet,
+    // per oculist-tdj.1) means knownPacks() returns [] and this whole field is skipped —
+    // deliberately no empty section header rendered for a feature with nothing to offer.
+    var packIds = knownPacks();
+    if (packIds.length) {
+      var packOptions = packIds.map(function (id) {
+        return { value: id, label: packLabel(id) };
+      });
+      packOptions.sort(function (a, b) {
+        return a.label.localeCompare(b.label);
+      });
+
+      var packsField = makeSettingsField(i18n.packsLabel, i18n.packsDesc, makeCheckboxList(
+        packOptions,
+        settings.enabledPacks || [],
+        function (packId, nowChecked) {
+          if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+          var idx = settings.enabledPacks.indexOf(packId);
+          if (nowChecked) {
+            if (idx === -1) settings.enabledPacks.push(packId);
+          } else if (idx !== -1) {
+            settings.enabledPacks.splice(idx, 1);
+          }
+          saveSettings();
+          // Rebuilds in place (same path as theme/position/reset above) so the effect
+          // picker's options — sourced from availableEffects(), which reads
+          // settings.enabledPacks — reflect the new pack state immediately, no reload.
+          rebuildSettingsPanelPreservingFocus();
+        },
+        'pack'
+      ));
+      packsField.style.marginTop = '8px';
+      col1.appendChild(packsField);
+    }
 
     // Col 2: Position & Colors
     var col2 = document.createElement('div');
@@ -7248,6 +7537,54 @@
         '  width: 1em;',
         '  text-align: center;',
         '}',
+        // oculist-tdj.2: same capped-scroll idiom as .oc-radio-list (oculist-dvt.5) —
+        // this list is empty today (see knownPacks()) so it renders zero rows, but a
+        // future pack list should not be able to regrow the whole-panel overflow problem
+        // .oc-radio-list already had to fix once.
+        '.oc-checkbox-list {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 2px;',
+        '  max-height: 160px;',
+        '  overflow-y: auto;',
+        '}',
+        '.oc-checkbox-item {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  justify-content: flex-start;',
+        '  gap: 8px;',
+        '  padding: 5px 8px;',
+        '  border: none;',
+        '  background: transparent;',
+        '  color: var(--oc-text);',
+        '  font-size: .875rem;',
+        '  font-family: inherit;',
+        '  font-weight: 500;',
+        '  cursor: pointer;',
+        '  border-radius: 4px;',
+        '  text-align: left;',
+        '  width: 100%;',
+        '  opacity: 0.7;',
+        '  box-sizing: border-box;',
+        '  box-shadow: none;',
+        '  margin: 0;',
+        '  flex-shrink: 0;',
+        '  transition: background-color 120ms, opacity 120ms, color 120ms;',
+        '}',
+        '.oc-checkbox-item:hover {',
+        '  background: var(--oc-btn-hover-bg);',
+        '  opacity: 1;',
+        '}',
+        '.oc-checkbox-item.active {',
+        '  color: var(--oc-accent);',
+        '  opacity: 1;',
+        '}',
+        '.oc-checkbox-box {',
+        '  font-size: .75rem;',
+        '  flex-shrink: 0;',
+        '  width: 1em;',
+        '  text-align: center;',
+        '}',
         '.oc-color-badge input.oc-color-input {',
         '  position: absolute;',
         '  top: 0;',
@@ -7287,6 +7624,56 @@
         '  font-size: 13px;',
         '}',
         '.oc-notice-close:hover {',
+        '  opacity: 1;',
+        '}',
+        // oculist-tdj.3: same width:0 + min-width:100% shadow-host-stretch guard as
+        // .oc-notice above, same reasoning.
+        '.oc-pack-notice {',
+        '  display: flex;',
+        '  align-items: center;',
+        '  flex-wrap: wrap;',
+        '  gap: 6px 10px;',
+        '  padding: 6px 10px;',
+        '  width: 0;',
+        '  min-width: 100%;',
+        '  box-sizing: border-box;',
+        '  font: 12px/1.4 system-ui, -apple-system, sans-serif;',
+        '  background: ' + t.bg + ';',
+        '  color: ' + t.text + ';',
+        '  border-top: 1px solid ' + t.divider + ';',
+        '  border-left: 3px solid var(--oc-accent);',
+        '}',
+        '.oc-pack-notice-text {',
+        '  flex: 1;',
+        '  min-width: 120px;',
+        '  opacity: 0.85;',
+        '}',
+        // Real <button>s (unlike .oc-notice-close, a plain <span>) — reset every default
+        // button chrome property so they read as the same quiet inline controls, per the
+        // "small, quiet, easy to get rid of" brief.
+        '.oc-pack-notice-cta, .oc-pack-notice-close {',
+        '  flex-shrink: 0;',
+        '  border: none;',
+        '  background: transparent;',
+        '  font: inherit;',
+        '  cursor: pointer;',
+        '  padding: 0;',
+        '  margin: 0;',
+        '}',
+        '.oc-pack-notice-cta {',
+        '  color: var(--oc-accent);',
+        '  font-weight: 600;',
+        '  text-decoration: underline;',
+        '}',
+        '.oc-pack-notice-cta:hover {',
+        '  opacity: 0.85;',
+        '}',
+        '.oc-pack-notice-close {',
+        '  color: ' + t.text + ';',
+        '  opacity: 0.6;',
+        '  font-size: 13px;',
+        '}',
+        '.oc-pack-notice-close:hover {',
         '  opacity: 1;',
         '}',
         '.oc-chip-row {',
@@ -7590,6 +7977,10 @@
         injectHighlightStyles();
         startDomObserver();
         checkSiteOverride(false);
+        // oculist-tdj.3: after checkSiteOverride() (a separate, session-only notice
+        // class — the two can coexist) and before the input.focus()/select() below,
+        // which must remain the last word on where focus lands on open.
+        maybeShowPackDiscoveryNotice();
         window.addEventListener('scroll', handleScroll, { passive: true });
         window.addEventListener('resize', handleResize, { passive: true });
         if (input) {
@@ -7683,7 +8074,15 @@
         // the comparison makes that echo a no-op while a genuine change (a different
         // valid effect, or a stale value landing while memory holds something else)
         // still compares unequal and rebuilds as before.
-        var incoming = k === 'effect' && !effectsRegistry[nv[k]] ? 'hud' : nv[k];
+        // oculist-tdj: routed through availableEffects() to ask "is it offered right
+        // now" (a pack-disabled key is not), but the coercion itself still gates on
+        // isGenuinelyUnknownEffect() (the raw registry) — a pack-disabled key must NOT
+        // be rewritten to 'hud' here, or re-enabling its pack would never restore it.
+        // See isGenuinelyUnknownEffect()'s header and animate() for where a
+        // pack-disabled key is actually resolved to hud, at run time, without this
+        // mutation.
+        var effectUnavailable = k === 'effect' && !availableEffects()[nv[k]];
+        var incoming = (effectUnavailable && isGenuinelyUnknownEffect(nv[k])) ? 'hud' : nv[k];
         if (stableStringify(incoming) !== stableStringify(settings[k])) {
           changed = true;
           if (k === 'performanceMode') performanceModeChanged = true;
@@ -7693,7 +8092,15 @@
       });
       if (!changed) return;
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
-      if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
+      // Same defensive shape as disabledSites above: availableEffects() below indexOf()s
+      // into settings.enabledPacks, so a malformed stored value (not an array) must be
+      // corrected before that call, not after.
+      if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+      // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as above, defensive
+      // re-check — a pack-disabled settings.effect is left alone here too.
+      if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
+        settings.effect = 'hud';
+      }
       if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
         window.__ocDestroy();
       } else {
@@ -7764,8 +8171,17 @@
         if (k in saved) settings[k] = saved[k];
       });
       if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+      // Same defensive shape as disabledSites above, and for the same reason as the
+      // onChanged listener's own copy of this guard: availableEffects() below indexOf()s
+      // into settings.enabledPacks.
+      if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
     }
-    if (!effectsRegistry[settings.effect]) settings.effect = 'hud';
+    // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as the onChanged
+    // listener above — a pack-disabled effect surviving a restart is left alone, since
+    // it may still be selectable once availableEffects() sees its pack re-enabled.
+    if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
+      settings.effect = 'hud';
+    }
     if (needsMigration) {
       // Reuses saveSettings()'s own pendingSelfWrites bookkeeping so the write this
       // migration makes is recognized and swallowed as an echo by the
