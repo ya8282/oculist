@@ -1144,6 +1144,18 @@
   // (settings.packsNoticeDismissed), so it needs its own handle rather than sharing that
   // machinery.
   var packNoticeEl          = null;
+  // oculist-3rq: the notice's own rendered height (0 while it isn't showing), folded into
+  // #oc-settings-panel's/#oc-lists-panel's max-height cap alongside barChromePx (see its
+  // comment in injectHighlightStyles()) — the notice renders between the bar and either
+  // panel, so its height is chrome those caps must also subtract. Unlike barChromePx this
+  // is not a fixed literal (the text is i18n'd and can wrap at narrow widths), so it is a
+  // live getBoundingClientRect() measurement taken right after the notice is appended —
+  // safe here (unlike a live read of the bar) because .oc-pack-notice's own CSS is already
+  // attached to wrapRoot by the time maybeShowPackDiscoveryNotice() runs (injectHighlightStyles()
+  // always runs first in window.__ocToggle()'s build branch), so the measurement reflects the
+  // fully-styled element, not an unstyled one. Set back to 0 on dismissal/destroy so the caps
+  // regain their space rather than staying permanently shrunk.
+  var packNoticeChromePx    = 0;
   // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
   // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')
   // never silences an unrelated one (e.g. 'term-cap'). An unrecognized/missing key
@@ -1209,6 +1221,15 @@
     clearActiveImmediateDrawTimer();
     clearOrphanedImmediateDrawTimers();
 
+    // oculist-30k: clearAutoScrollFlag() (see its declaration, below in this closure, for
+    // the oculist-z8n grace-timer mechanism it tears down) removes the 'scroll'/'scrollend'
+    // listeners triggerAutoScrollFlag() arms and clears autoScrollTimer. Without this, on a
+    // page that keeps generating 'scroll' events forever (an infinite auto-scroller, a stuck
+    // momentum scroll), the still-attached 'scroll' listener keeps re-arming that timer
+    // indefinitely after teardown — bounded (a reopen's triggerAutoScrollFlag() removes both
+    // listeners by reference before re-adding, so they don't accumulate), but not zero.
+    clearAutoScrollFlag();
+
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
     } catch (e) {}
@@ -1234,6 +1255,7 @@
 
     wrap = wrapRoot = bar = input = countEl = prevBtn = nextBtn = replayBtn = gearBtn = closeBtn = settingsPanel = noticeEl = null;
     packNoticeEl = null;
+    packNoticeChromePx = 0;
     listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = []; termStarved = [];
@@ -4820,6 +4842,11 @@
     if (packNoticeEl) {
       packNoticeEl.remove();
       packNoticeEl = null;
+      // oculist-3rq: give #oc-settings-panel/#oc-lists-panel their full space back now that
+      // the notice's chrome is gone, rather than leaving their max-height cap permanently
+      // shrunk by a notice that no longer exists.
+      packNoticeChromePx = 0;
+      injectHighlightStyles();
     }
     if (!settings.packsNoticeDismissed) {
       settings.packsNoticeDismissed = true;
@@ -4880,6 +4907,15 @@
     packNoticeEl.appendChild(closeEl);
 
     wrapRoot.appendChild(packNoticeEl);
+
+    // oculist-3rq: measure the notice's own rendered height now that it's attached (its CSS
+    // is already on wrapRoot — injectHighlightStyles() always runs before this in
+    // window.__ocToggle()'s build branch, see packNoticeChromePx's declaration for why that
+    // makes this live read safe), then regenerate the dialog stylesheet so #oc-settings-panel/
+    // #oc-lists-panel's max-height cap subtracts it too, same as barChromePx already does for
+    // the bar.
+    packNoticeChromePx = packNoticeEl.getBoundingClientRect().height;
+    injectHighlightStyles();
 
     // Same two-tier motion gate as listsPanel's own entrance animation (buildListsMenu()
     // above): only 'full' runs it, 'reduced' and 'off' both render the notice fully in
@@ -5446,6 +5482,16 @@
     window.addEventListener('scroll', extendAutoScrollFlag);
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
+
+  // Same test-reachability reasoning as window.__ocTest.getDebounceTimer above (see its
+  // comment near the top of this closure): autoScrollTimer is a plain closure variable with
+  // no other way for a test to observe whether the grace timer armed by
+  // triggerAutoScrollFlag()/extendAutoScrollFlag() is still pending. oculist-30k's
+  // regression test polls this after __ocDestroy() on a continuously-scrolling page: if the
+  // 'scroll' listener were still attached (the bug), further scroll events would keep
+  // re-arming this to a fresh non-null value; if __ocDestroy() has torn it down via
+  // clearAutoScrollFlag(), it stays null no matter how much more scrolling follows.
+  window.__ocTest.getAutoScrollTimer = function () { return autoScrollTimer; };
 
   function fadeActiveBeacons() {
     if (activeBeacons === 0) return;
@@ -7092,6 +7138,12 @@
       // for cross-platform subpixel rounding rather than the tight margin the original
       // comment's (wrong) 26px-tallest-child arithmetic implied (oculist-7de review).
       var barChromePx = 44;
+      // oculist-3rq: the total chrome above #oc-settings-panel/#oc-lists-panel — the bar
+      // (barChromePx, fixed) plus the pack-discovery notice when it's showing
+      // (packNoticeChromePx, live-measured, 0 otherwise; see its declaration). Both panels'
+      // max-height caps use this combined figure so bar + notice + panel always fit the
+      // viewport together, the same way bar + panel already did before the notice existed.
+      var hostChromePx = barChromePx + packNoticeChromePx;
 
       var dialogCss = [
         ':host {',
@@ -7256,11 +7308,12 @@
         // instead, since a bottom-anchored host grows upward. This predates oculist-dvt's
         // effect-list growth (oculist-dvt.5 capped .oc-radio-list, one level down, for the
         // same underlying reason) and is independent of effect-registry size entirely.
-        // Capping this panel at 100vh minus the bar's own chrome (barChromePx, above) keeps
-        // panel + bar together within the viewport regardless of which of the four positions
-        // is active — the same numeric cap applies to all four since the bar's contribution
-        // to total host height does not depend on which edge it is anchored to.
-        '  max-height: calc(100vh - ' + barChromePx + 'px);',
+        // Capping this panel at 100vh minus the host chrome above it (hostChromePx, above —
+        // the bar, plus the pack-discovery notice whenever it's showing, oculist-3rq) keeps
+        // panel + bar (+ notice) together within the viewport regardless of which of the four
+        // positions is active — the same numeric cap applies to all four since neither
+        // contribution to total host height depends on which edge it is anchored to.
+        '  max-height: calc(100vh - ' + hostChromePx + 'px);',
         '  overflow-y: auto;',
         '}',
         ':host(.is-bottom) #oc-settings-panel {',
@@ -7825,9 +7878,10 @@
         // grows-past-the-viewport failure oculist-6cd fixed for #oc-settings-panel, just
         // needing a shorter viewport to trigger since a flat cap doesn't shrink to leave room
         // for the bar the way this one does. Same fix, same cap: bound to whatever's left of
-        // the viewport once the bar (barChromePx, above) is accounted for, so bar + panel
-        // together always fit regardless of which of the four positions is active.
-        '  max-height: calc(100vh - ' + barChromePx + 'px);',
+        // the viewport once the host chrome above it (hostChromePx, above — bar + notice,
+        // oculist-3rq) is accounted for, so bar + notice + panel together always fit
+        // regardless of which of the four positions is active.
+        '  max-height: calc(100vh - ' + hostChromePx + 'px);',
         '  overflow-y: auto;',
         '  box-sizing: border-box;',
         '}',
