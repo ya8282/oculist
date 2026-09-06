@@ -60,4 +60,47 @@ async function waitForContentScriptValue(evalInContentScript, expression, predic
   return waitForCondition(() => evalInContentScript(expression), predicate, opts);
 }
 
-module.exports = { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT };
+// popup.html's own DOMContentLoaded handler (extension/popup.js) attaches every `change`
+// listener it registers — #vision-profile, #magnifier, #beacon-size, etc. — before its
+// first `await` (a `chrome.storage.sync.get('oc-settings')` round trip) resolves. A caller
+// that only waits for a control to exist in the DOM (true from HTML parse time, via e.g.
+// `page.waitForSelector('#vision-profile')`) can still be racing that pending promise: if a
+// driven `change` event (Playwright's selectOption()/fill() etc. all dispatch one) lands on
+// the control before its listener is attached, the event is dropped for good — browsers do
+// not queue or replay it — and the application code that would have run silently never does,
+// with no error and no timeout at the point of the drop; only a caller polling the outcome
+// times out later, mis-diagnosing what actually failed.
+//
+// #status-text starts as the literal 'Checking...' (popup.html) and is only ever overwritten
+// by the tail of that same DOMContentLoaded handler — every branch (the 'Restricted' /
+// 'Unavailable' early-returns and updateUI()'s 'Enabled'/'Disabled') rewrites it.
+//
+// WHAT THIS DOES AND DOES NOT PROVE. Every branch sits below the `chrome.tabs.query` await,
+// so once the text reads anything other than 'Checking...', every listener registered above
+// that await is attached. That covers the settings controls: #vision-profile, the custom
+// controls, the colour pickers. It does NOT cover #toggle-site, whose listener is registered
+// after updateUI(): on the 'Restricted' and 'Unavailable' early-return paths that listener is
+// never attached at all, and this helper still reports ready. In the extension test fixtures
+// #status-text commonly resolves to 'Unavailable', so that path is the normal one, not an
+// edge case. Before driving #toggle-site, wait for something that proves its own listener.
+//
+// Call this once, right after opening popup.html and waiting for the control(s) you'll drive
+// to exist, and before driving any of them — not per-assertion. Once listener wiring is
+// proven, the assertions that follow need no further wait of their own.
+async function waitForPopupReady(popup, opts = {}) {
+  const { timeout = POLL_TIMEOUT } = opts;
+  await popup.waitForFunction(
+    () => document.getElementById('status-text').textContent !== 'Checking...',
+    null,
+    { timeout }
+  );
+}
+
+module.exports = {
+  waitForCondition,
+  waitForContentScriptValue,
+  waitForPopupReady,
+  TIMEOUT_SCALE,
+  POLL_TIMEOUT,
+  LONG_TIMEOUT
+};
