@@ -1221,6 +1221,15 @@
     clearActiveImmediateDrawTimer();
     clearOrphanedImmediateDrawTimers();
 
+    // oculist-30k: clearAutoScrollFlag() (see its declaration, below in this closure, for
+    // the oculist-z8n grace-timer mechanism it tears down) removes the 'scroll'/'scrollend'
+    // listeners triggerAutoScrollFlag() arms and clears autoScrollTimer. Without this, on a
+    // page that keeps generating 'scroll' events forever (an infinite auto-scroller, a stuck
+    // momentum scroll), the still-attached 'scroll' listener keeps re-arming that timer
+    // indefinitely after teardown — bounded (a reopen's triggerAutoScrollFlag() removes both
+    // listeners by reference before re-adding, so they don't accumulate), but not zero.
+    clearAutoScrollFlag();
+
     try {
       window.removeEventListener('scroll', handleScroll, { passive: true });
     } catch (e) {}
@@ -5473,6 +5482,16 @@
     window.addEventListener('scroll', extendAutoScrollFlag);
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
+
+  // Same test-reachability reasoning as window.__ocTest.getDebounceTimer above (see its
+  // comment near the top of this closure): autoScrollTimer is a plain closure variable with
+  // no other way for a test to observe whether the grace timer armed by
+  // triggerAutoScrollFlag()/extendAutoScrollFlag() is still pending. oculist-30k's
+  // regression test polls this after __ocDestroy() on a continuously-scrolling page: if the
+  // 'scroll' listener were still attached (the bug), further scroll events would keep
+  // re-arming this to a fresh non-null value; if __ocDestroy() has torn it down via
+  // clearAutoScrollFlag(), it stays null no matter how much more scrolling follows.
+  window.__ocTest.getAutoScrollTimer = function () { return autoScrollTimer; };
 
   function fadeActiveBeacons() {
     if (activeBeacons === 0) return;
