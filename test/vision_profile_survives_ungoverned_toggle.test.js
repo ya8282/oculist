@@ -15,7 +15,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForPopupReady, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -45,6 +45,14 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
 
+    // #vision-profile existing in the DOM is true from HTML parse time — it says nothing
+    // about whether popup.js's DOMContentLoaded handler has finished wiring its `change`
+    // listeners yet (that only happens after an internal chrome.storage.sync.get() round
+    // trip resolves). Wait for that wiring to actually finish before driving any control
+    // below: a driven `change` event that lands before its listener is attached is dropped
+    // for good, with nothing to poll for afterwards — see waitForPopupReady()'s own comment.
+    await waitForPopupReady(popup);
+
     // The custom-settings controls (magnifier, beacon size, ...) live inside a collapsed
     // <details> drawer — open it or selectOption() can never see them.
     await popup.evaluate(() => {
@@ -61,16 +69,17 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     // colours sections for, so a spurious drop to 'custom' is directly observable via
     // either lock badge, not just the dropdown's own value.
     //
-    // No wait after selectOption(): the 'change' listener's DOM updates (dropdown value,
-    // lock badges) run synchronously, before its own `await saveSettings()` — only the
-    // storage write itself is async, and only readStoredSettings() below needs that to
-    // have landed, so it waits for the write directly instead of every selectOption()
-    // guessing a settle window it doesn't need.
+    // No wait after this selectOption(): Playwright's injected selectOptions() sets the
+    // <select>'s value directly and dispatches 'change' before resolving (see
+    // node_modules/playwright-core's InjectedScript.selectOptions), so the dropdown's own
+    // value is never dependent on any application listener having run — there's nothing to
+    // wait for here.
     await popup.selectOption('#vision-profile', 'eye-strain');
     assert.strictEqual(await popup.locator('#vision-profile').inputValue(), 'eye-strain');
 
     // Magnifier is deliberately absent from every PRESETS entry (oculist-l6m.39) — toggling
-    // it must not force the profile to 'custom' (oculist-l6m.40).
+    // it must not force the profile to 'custom' (oculist-l6m.40). Same reasoning as above:
+    // the raw dropdown value is set directly by selectOption() itself, not by a listener.
     await popup.selectOption('#magnifier', 'true');
 
     assert.strictEqual(
@@ -79,8 +88,14 @@ describe('Vision profile survives ungoverned setting toggles', () => {
       'toggling the magnifier must not drop the active named vision profile'
     );
 
-    // The effects and colours sections must stay locked — they mirror the surviving named
-    // profile, not a spurious drop to custom. updateOverridesUI() drives both lock badges.
+    // The lock badges are different: they are only ever written by updateOverridesUI(),
+    // called from inside #vision-profile's and #magnifier's own 'change' listeners in
+    // popup.js. Those DOM writes run synchronously within the listener, before its own
+    // `await saveSettings()` — and openPopup()'s waitForPopupReady() call already proved
+    // both listeners were attached before either selectOption() above ran. Playwright's
+    // selectOption() dispatches 'change' and waits for the page-side call to return before
+    // resolving, so by the time it resolves here the listener's synchronous portion (the
+    // lock-badge writes) has already run too. No poll needed; assert directly.
     const locked = await popup.evaluate(() => ({
       effects: document.getElementById('effects-section').classList.contains('drawer-locked'),
       colors: document.getElementById('colors-section').classList.contains('drawer-locked')
@@ -115,6 +130,13 @@ describe('Vision profile survives ungoverned setting toggles', () => {
     // it did before this fix — proving the fix did not make forcing-to-custom a dead path.
     await popup.selectOption('#beacon-size', 's');
 
+    // Unlike #vision-profile's own value (set directly by selectOption() itself), 'custom'
+    // here only ever gets written by applyDirectSettingChange() inside #beacon-size's
+    // 'change' listener in popup.js. openPopup()'s waitForPopupReady() call already proved
+    // that listener was attached before this selectOption() ran, and — same reasoning as the
+    // previous test — selectOption() only resolves after the listener's synchronous portion
+    // (which is all of applyDirectSettingChange(), before its caller's own `await
+    // saveSettings()`) has already run. No poll needed; assert directly.
     assert.strictEqual(
       await popup.locator('#vision-profile').inputValue(),
       'custom',
