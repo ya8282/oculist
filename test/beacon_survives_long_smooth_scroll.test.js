@@ -25,7 +25,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, LONG_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -182,15 +182,28 @@ describe('a beacon drawn after a long smooth scroll survives its full intended l
     // speed. Check at appearedAt + 1900ms: comfortably inside the beacon's own intended
     // lifetime, and comfortably past the ~800-900ms mark where the pre-fix suppression
     // window closes mid-scroll and the extension's own trailing scroll events fade it.
+    //
+    // checkAt is a deadline sitting inside the beacon's real-wall-clock 2100ms lifetime, not a
+    // timeout — it must NOT scale with OCULIST_TEST_TIMEOUT_SCALE (scaling it risks pushing the
+    // check past the beacon's own expiry). Only the outer poll budget below is allowed to grow.
+    //
+    // performance.now() and the aliveness check are read in a single in-page evaluation once
+    // the deadline is reached, rather than polling via repeated Node<->page round trips and then
+    // making a *second* round trip to check aliveness — that combination was measured eating
+    // most of the ~200ms nominal headroom below getBeaconDuration(2100), leaving only ~140-170ms.
     const checkAt = appearedAt + 1900;
-    await waitForCondition(
-      () => page.evaluate(() => performance.now()),
-      (now) => now >= checkAt,
-      { timeout: LONG_TIMEOUT, message: 'never reached the scheduled mid-lifetime check time' }
+    const aliveAtDeadline = await page.waitForFunction(
+      (deadline) => {
+        if (performance.now() < deadline) return undefined;
+        const el = window.__ocBeaconEl;
+        return { alive: !!el && el.isConnected && parseFloat(getComputedStyle(el).opacity) > 0 };
+      },
+      checkAt,
+      { timeout: LONG_TIMEOUT, polling: 30 }
     );
 
     assert.ok(
-      await beaconStillAlive(),
+      (await aliveAtDeadline.jsonValue()).alive,
       'the beacon drawn for a match reached via a long smooth scroll must survive most of its ' +
         'own ~2100ms intended lifetime, not fade shortly after appearing once the fixed 800ms ' +
         'auto-scroll suppression window closes mid-scroll'
@@ -244,7 +257,7 @@ describe('a beacon drawn after a long smooth scroll survives its full intended l
         return !!el && el.style.opacity === '0';
       },
       null,
-      { timeout: 600 }
+      { timeout: 600 * TIMEOUT_SCALE }
     );
   });
 });
