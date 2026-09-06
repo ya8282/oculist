@@ -5409,12 +5409,42 @@
   var isAutoScrolling = false;
   var autoScrollTimer = null;
 
+  // oculist-z8n: isAutoScrolling used to expire on a flat 800ms timer measured from the
+  // moment the auto-scroll started, regardless of how long the browser's own smooth
+  // scrollIntoView animation actually ran. Chrome's native smooth scroll can run well past
+  // 800ms on an ordinary distance (measured: 1034ms at 3000px, 1546ms at 12000px), so on a
+  // long enough scroll the suppression closed while the scroll was still in flight, and the
+  // extension's own trailing 'scroll' events reached handleScroll() with isAutoScrolling
+  // already false — fading a beacon that had only just been drawn.
+  //
+  // Same last-event-plus-grace-period idiom as onScrollEndDebounced/onScrollEnd above: the
+  // grace timer is re-armed on every real 'scroll' event, so the flag stays live for
+  // whatever the auto-scroll's actual duration turns out to be, and clears immediately on
+  // native 'scrollend' when that fires. It still always terminates even if 'scrollend'
+  // never fires: once scroll events genuinely stop arriving, the grace timer runs out on
+  // its own 300ms later.
+  function clearAutoScrollFlag() {
+    isAutoScrolling = false;
+    if (autoScrollTimer) { clearTimeout(autoScrollTimer); autoScrollTimer = null; }
+    window.removeEventListener('scrollend', clearAutoScrollFlag);
+    window.removeEventListener('scroll', extendAutoScrollFlag);
+  }
+
+  function extendAutoScrollFlag() {
+    if (autoScrollTimer) clearTimeout(autoScrollTimer);
+    autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
+  }
+
   function triggerAutoScrollFlag() {
     isAutoScrolling = true;
+    // Re-entrant-safe: a navigation superseding an already-in-flight auto-scroll removes
+    // the previous listeners before re-adding, rather than accumulating duplicates.
+    window.removeEventListener('scrollend', clearAutoScrollFlag);
+    window.removeEventListener('scroll', extendAutoScrollFlag);
     if (autoScrollTimer) clearTimeout(autoScrollTimer);
-    autoScrollTimer = setTimeout(function () {
-      isAutoScrolling = false;
-    }, 800);
+    window.addEventListener('scrollend', clearAutoScrollFlag, { once: true });
+    window.addEventListener('scroll', extendAutoScrollFlag);
+    autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
   function fadeActiveBeacons() {
