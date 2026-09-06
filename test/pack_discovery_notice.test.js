@@ -507,3 +507,74 @@ describe('Pack discovery notice: settings-panel height cap accounts for the noti
     }
   });
 });
+
+// oculist-3b7: packNoticeChromePx (content.js, see its declaration) is only a safe upper bound
+// because maybeShowPackDiscoveryNotice()'s one call site always measures the notice while
+// .oc-count is still empty and sitting on its 58px min-width floor — the narrowest, and
+// therefore tallest, the notice can ever be. This guard checks .oc-count's own rendered state
+// right as the notice becomes visible: window.__ocToggle()'s build branch runs buildUI(),
+// checkSiteOverride() and maybeShowPackDiscoveryNotice() (which does the actual
+// getBoundingClientRect() measurement) all synchronously with no yield in between, so by the
+// time Playwright's waitForSelector(NOTICE) resolves, .oc-count's text and width are exactly
+// what they were at measurement time — nothing has had a chance to type into the find input or
+// resize anything yet. A future change that lets the measurement happen after a search has
+// already run, or after the bar has otherwise grown — the two ways described at the
+// packNoticeChromePx declaration — leaves .oc-count non-empty and/or wider than its floor here.
+describe('Pack discovery notice: chrome measurement happens at the bar\'s narrowest (oculist-3b7)', () => {
+  let server, ctx, page, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test('the notice is never measured while .oc-count is wider than its min-width floor', async () => {
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+
+    const state = await page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const countEl = root.querySelector('.oc-count');
+      return {
+        countText: countEl.textContent,
+        countWidth: countEl.getBoundingClientRect().width,
+        countMinWidth: parseFloat(getComputedStyle(countEl).minWidth),
+      };
+    });
+
+    assert.strictEqual(
+      state.countText,
+      '',
+      '.oc-count must still be empty (no search run yet) at the moment the pack-discovery ' +
+      `notice is measured — got text ${JSON.stringify(state.countText)}`
+    );
+    assert.ok(
+      Math.abs(state.countWidth - state.countMinWidth) <= EPS,
+      `.oc-count must be sitting exactly on its min-width floor (${state.countMinWidth}px) when ` +
+      `the pack-discovery notice is measured — got ${state.countWidth}px, meaning the bar was ` +
+      'already wider than its narrowest possible state'
+    );
+  });
+});
