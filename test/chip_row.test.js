@@ -239,6 +239,33 @@ describe('Chip row and working-list state', () => {
       { expected: before + 1, term },
       { timeout: POLL_TIMEOUT }
     );
+
+    // The chip DOM update above is synchronous, but the underlying persistWorkList() ->
+    // chrome.storage.session.set() write it triggers is fire-and-forget from here — this
+    // function returns without ever waiting on it. beforeEach's cleanup for the NEXT test
+    // only calls chrome.storage.session.remove('oc-worklist') once; if this test's own
+    // write is still in flight and lands after that remove(), it resurrects this test's
+    // chip into what the next test expects to be an empty working list (observed: a
+    // leftover 'quarklet' chip bleeding into the very next test's chip list). A cap hit
+    // (term-length/term-cap) never calls persistWorkList() at all, so it has nothing to
+    // wait for here.
+    await waitForContentScriptValue(
+      evalInContentScript,
+      `(function () {
+        return new Promise(function (resolve) {
+          chrome.storage.session.get('oc-worklist', function (d) {
+            var terms = (d && d['oc-worklist'] && d['oc-worklist'].terms) || [];
+            var root = document.getElementById('oc-wrap');
+            var capHit = !!(root && root.shadowRoot && root.shadowRoot.querySelector(
+              '.oc-notice[data-oc-notice="term-cap"], .oc-notice[data-oc-notice="term-length"]'
+            ));
+            resolve({ terms: terms, capHit: capHit });
+          });
+        });
+      })()`,
+      (v) => v.capHit || (Array.isArray(v.terms) && v.terms.indexOf(term) !== -1),
+      { timeout: POLL_TIMEOUT, message: `persistWorkList() write for "${term}" never landed in chrome.storage.session` }
+    );
   }
 
   function chipTerms() {

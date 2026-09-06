@@ -102,21 +102,57 @@ describe('Settings panel survives its own storage writes', () => {
   // looks like a foreign change — the panel rebuilt and the dialog closed. A slower pair
   // of clicks never hit this, which is why the gap here is deliberately zero.
   test('two colour picks in the same tick do not close the picker', async () => {
-    const result = await page.evaluate(async () => {
+    // A fixed sleep here is guessing how long BOTH writes' chrome.storage.onChanged
+    // echoes take to arrive and be processed — under contention that round trip can
+    // outrun any fixed duration, and reading connected/value before the second (real)
+    // echo has actually landed catches a mid-flight state instead of the settled one.
+    // Arm a MutationObserver that flags every moment `input` becomes detached (the
+    // panel tearing itself down for a rebuild) and wait for a quiet window with no such
+    // detachment, which proves every pending echo — the stale #ff0000 one and the real
+    // #00ff00 one — has already been processed, rather than guessing a duration.
+    await page.evaluate(() => {
       const root = document.getElementById('oc-wrap').shadowRoot;
       const badge = [...root.querySelectorAll('.oc-color-badge')].find((b) => /beacon/i.test(b.textContent));
       const input = badge.querySelector('.oc-color-input');
+      window.__ocColorPickerCapturedInput = input;
+
+      window.__ocColorPickerTornDown = false;
+      window.__ocColorPickerLastCheckAt = performance.now();
+      if (window.__ocColorPickerObserver) window.__ocColorPickerObserver.disconnect();
+      window.__ocColorPickerObserver = new MutationObserver(() => {
+        window.__ocColorPickerLastCheckAt = performance.now();
+        if (!input.isConnected) window.__ocColorPickerTornDown = true;
+      });
+      // rebuildSettingsPanelPreservingFocus() removes/re-appends the panel on wrapRoot,
+      // which IS #oc-wrap's shadowRoot — a MutationObserver on document.body never sees
+      // that mutation, since MutationObserver does not cross shadow boundaries. Observing
+      // the shadow root itself is what makes __ocColorPickerLastCheckAt a real signal
+      // instead of a disguised fixed delay.
+      window.__ocColorPickerObserver.observe(root, { childList: true, subtree: true });
 
       input.value = '#ff0000';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.value = '#00ff00';
       input.dispatchEvent(new Event('input', { bubbles: true }));
-
-      await new Promise((r) => setTimeout(r, 900));
-      return { connected: input.isConnected, value: input.value };
     });
 
-    assert.strictEqual(result.connected, true, 'the picker was torn down by two rapid picks');
+    const QUIET_MS = 400;
+    await page.waitForFunction(
+      (quiet) => performance.now() - window.__ocColorPickerLastCheckAt > quiet,
+      QUIET_MS,
+      { timeout: POLL_TIMEOUT }
+    );
+
+    const result = await page.evaluate(() => {
+      // Read from the originally captured node, not a fresh query — a rebuilt panel would
+      // create a brand-new (still-connected) input, which a re-query would report as
+      // "connected: true" even though the original one was detached.
+      const input = window.__ocColorPickerCapturedInput;
+      return { connected: input.isConnected, value: input.value, tornDown: window.__ocColorPickerTornDown };
+    });
+
+    assert.strictEqual(result.tornDown, false, 'the picker was torn down by two rapid picks');
+    assert.strictEqual(result.connected, true, 'no colour input survives at all — the whole panel is gone');
     assert.strictEqual(result.value, '#00ff00', 'the second pick should win, not be rolled back by a stale echo');
 
     // The stale echo must not roll persisted state back to the first colour either.
