@@ -82,6 +82,20 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
 
     await page.goto(origin);
     await waitForIsolatedContext();
+
+    // Install the scrollend counter here — before openFinder(), fill(), Enter, or
+    // startNeverEndingScroll() ever run — so there is no window in which a native
+    // 'scrollend' could fire uncounted. Installing it any later (even "right after the wait
+    // for the armed timer resolves") leaves a CDP-round-trip-sized gap between confirming
+    // the timer armed and the addEventListener call actually landing; a scrollend in that
+    // gap would run the real clearAutoScrollFlag() listener, tearing down the very state
+    // this test is trying to observe, without ever being counted. Registering it before any
+    // scrolling of any kind happens in this suite closes that gap outright rather than
+    // narrowing it.
+    await evalInContentScript(
+      'window.__ocDebugScrollendCount = 0;' +
+        'window.addEventListener("scrollend", function () { window.__ocDebugScrollendCount++; });'
+    );
   });
 
   after(async () => {
@@ -152,7 +166,13 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
         // prior animation settles, keeps one scroll operation continuously in flight instead.
         const y = window.scrollY;
         if (y > 300) window.__ocNeverEndingScrollDir = -1;
-        if (y < 0) window.__ocNeverEndingScrollDir = 1;
+        // scrollY clamps at 0 and can never go negative, so the lower-bound check must be
+        // reachable at exactly 0 (not '< 0', which nothing ever satisfies) or the motion
+        // stalls the instant it descends to the clamp: every subsequent target is negative,
+        // clamps right back to 0, produces no further motion, and stops generating
+        // 'scroll'/'scrollend' events at all — silently defeating the "page that never
+        // stops scrolling" premise this test depends on.
+        if (y <= 0) window.__ocNeverEndingScrollDir = 1;
         window.scrollTo({ top: y + window.__ocNeverEndingScrollDir * 30, behavior: 'smooth' });
       }, 40);
     });
@@ -194,13 +214,10 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
         message: 'autoScrollTimer was never armed by the Enter navigation',
       });
 
-      // Sanity instrument: a native 'scrollend' firing during this test would clear
-      // everything on its own, independent of __ocDestroy(), making the assertion below
-      // vacuous. Counted (not just checked once) so a failure names exactly how many fired.
-      await evalInContentScript(
-        'window.__ocDebugScrollendCount = 0;' +
-          'window.addEventListener("scrollend", function () { window.__ocDebugScrollendCount++; });'
-      );
+      // The scrollend counter (sanity instrument: a native 'scrollend' firing during this
+      // test would clear everything on its own, independent of __ocDestroy(), making the
+      // assertion below vacuous) was installed in before(), before any scrolling of any
+      // kind in this suite — see that comment for why.
 
       // __ocDestroy() itself — the same function window.__ocToggle() and the
       // 'toggle'/'destroy' runtime messages invoke.
