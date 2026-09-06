@@ -29,6 +29,42 @@ const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world, noth
 const INPUT = '#oc-wrap >> .oc-input';
 const NOTICE = '#oc-wrap >> .oc-pack-notice';
 const NOTICE_CLOSE = '#oc-wrap >> .oc-pack-notice-close';
+const NOTICE_CTA = '#oc-wrap >> .oc-pack-notice-cta';
+const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
+
+// Shared across all describe blocks below (each launches its own context/page against a
+// freshly-dismissed profile) — same retry-Control+f-until-the-input-appears rationale as
+// several sibling browser tests (e.g. settings_panel_viewport_overflow.test.js): no CDP
+// session in this file to gate on content-script readiness instead.
+async function openFinder(page) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await page.keyboard.press('Control+f');
+    try {
+      // Intentional unscaled sub-poll: the scaled waitForSelector below surfaces the
+      // real timeout error if all 20 attempts fail.
+      await page.waitForSelector(INPUT, { timeout: 250 });
+      return;
+    } catch (e) {
+      // keep retrying
+    }
+  }
+  await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
+}
+
+async function waitForOverlayClosed(page) {
+  await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
+}
+
+// Same bounded-retry idiom as effect_pack_settings_control.test.js's closeOverlayFully: a
+// single Escape only closes whichever panel (settings, in the CTA test below) is open on
+// top — the overlay itself needs a second Escape once no panel is left open.
+async function closeOverlayFully(page) {
+  for (let attempts = 0; attempts < 5 && (await page.locator('#oc-wrap').count()) > 0; attempts++) {
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: 300 }).catch(() => {});
+  }
+  await waitForOverlayClosed(page);
+}
 
 // Copies extension/ into a fresh temp dir and patches the copy's content.js so exactly
 // one effectsRegistry entry carries `pack: 'seasonal'` — the one thing knownPacks() (see
@@ -53,28 +89,6 @@ function createPackedFixtureExtension() {
 
 describe('Pack discovery notice (oculist-tdj.3)', () => {
   let server, ctx, page, fixtureDir;
-
-  async function waitForOverlayClosed() {
-    await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
-  }
-
-  // Same retry-Control+f-until-the-input-appears rationale as several sibling browser
-  // tests (e.g. settings_panel_viewport_overflow.test.js) — no CDP session in this file to
-  // gate on content-script readiness instead.
-  async function openFinder() {
-    for (let attempt = 0; attempt < 20; attempt++) {
-      await page.keyboard.press('Control+f');
-      try {
-        // Intentional unscaled sub-poll: the scaled waitForSelector below surfaces the
-        // real timeout error if all 20 attempts fail.
-        await page.waitForSelector(INPUT, { timeout: 250 });
-        return;
-      } catch (e) {
-        // keep retrying
-      }
-    }
-    await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT }); // surfaces the real timeout error
-  }
 
   before(async () => {
     fixtureDir = createPackedFixtureExtension();
@@ -109,7 +123,7 @@ describe('Pack discovery notice (oculist-tdj.3)', () => {
   test('appears on first open, does not steal focus from the find input, is dismissible, and never reappears once dismissed', async () => {
     // First open: the notice must show, since a pack is available (the fixture's patched
     // `cybervision` entry) and nothing has dismissed it yet.
-    await openFinder();
+    await openFinder(page);
     await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
 
     // Must not have stolen focus from the find input — the whole point of the overlay
@@ -135,8 +149,8 @@ describe('Pack discovery notice (oculist-tdj.3)', () => {
 
     // Close the whole overlay, then reopen it — the second open.
     await page.keyboard.press('Escape');
-    await waitForOverlayClosed();
-    await openFinder();
+    await waitForOverlayClosed(page);
+    await openFinder(page);
 
     // Assert-absence: give it a real beat to (not) reappear, then confirm it stayed gone.
     await page.waitForTimeout(500);
@@ -145,6 +159,206 @@ describe('Pack discovery notice (oculist-tdj.3)', () => {
       noticeCountOnSecondOpen,
       0,
       'the pack-discovery notice must not reappear on the second overlay open once dismissed'
+    );
+  });
+});
+
+// oculist-tdj.6: the sibling describe above covers appearance, focus retention, and
+// dismissal persistence (three of oculist-tdj.3's five done-criteria). The three describes
+// below regression-guard the remaining two behaviours plus the CTA path, each verified
+// correct by the tdj.3 reviewer but previously unguarded by any assertion. Each gets its
+// own context/fixture/profile (rather than sharing the describe above's) because
+// settings.packsNoticeDismissed persists for the lifetime of a profile once set — a test
+// needs the notice un-dismissed and available to show, which a shared, already-dismissed
+// page cannot provide again without reaching into extension storage directly.
+
+describe('Pack discovery notice: reduced motion renders statically (oculist-tdj.6)', () => {
+  let server, ctx, page, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // reducedMotion:'reduce' at launch, same as the OS-level prefers-reduced-motion query
+    // effectiveMotion() (content.js) reads live — see prefers_reduced_motion.test.js for
+    // the established way this repo drives the query. channel:'chromium' is load-bearing,
+    // same note as the sibling describe above.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+      reducedMotion: 'reduce',
+    });
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test('under prefers-reduced-motion the notice has no running Web Animations', async () => {
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+
+    // getAnimations().length, not a duration value: a duration assertion would still pass
+    // on a "shorter" animation, not a genuinely static render. maybeShowPackDiscoveryNotice()
+    // (content.js) must skip its .animate() call entirely under reduced motion, the same
+    // two-tier motion gate buildListsMenu() uses for its own entrance animation.
+    const animationCount = await page.evaluate(() => {
+      const notice = document.getElementById('oc-wrap').shadowRoot.querySelector('.oc-pack-notice');
+      return notice.getAnimations().length;
+    });
+    assert.strictEqual(
+      animationCount,
+      0,
+      'the pack-discovery notice must render statically (zero running animations) under prefers-reduced-motion'
+    );
+  });
+});
+
+describe('Pack discovery notice: does not reflow the host page (oculist-tdj.6)', () => {
+  let server, ctx, page, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test('the notice lives only in the overlay shadow root and never touches the host page layout', async () => {
+    // Baseline: scroll metrics of the actual host document, captured before the overlay
+    // (and its notice) exist at all.
+    const before = await page.evaluate(() => ({
+      bodyScrollWidth: document.body.scrollWidth,
+      bodyScrollHeight: document.body.scrollHeight,
+      docScrollWidth: document.documentElement.scrollWidth,
+      docScrollHeight: document.documentElement.scrollHeight,
+    }));
+
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+
+    const afterMetrics = await page.evaluate(() => ({
+      bodyScrollWidth: document.body.scrollWidth,
+      bodyScrollHeight: document.body.scrollHeight,
+      docScrollWidth: document.documentElement.scrollWidth,
+      docScrollHeight: document.documentElement.scrollHeight,
+      // Native querySelectorAll on the top document — unlike Playwright's own
+      // shadow-piercing locators, this respects shadow-root encapsulation, so it only
+      // finds a match if the notice actually leaked into the light DOM.
+      lightDomNoticeCount: document.querySelectorAll('.oc-pack-notice').length,
+    }));
+
+    assert.deepStrictEqual(
+      {
+        bodyScrollWidth: afterMetrics.bodyScrollWidth,
+        bodyScrollHeight: afterMetrics.bodyScrollHeight,
+        docScrollWidth: afterMetrics.docScrollWidth,
+        docScrollHeight: afterMetrics.docScrollHeight,
+      },
+      before,
+      'the host page\'s own scroll metrics must not change when the pack-discovery notice appears'
+    );
+    assert.strictEqual(
+      afterMetrics.lightDomNoticeCount,
+      0,
+      'the pack-discovery notice must never appear in the host page\'s light DOM, only inside the overlay shadow root'
+    );
+  });
+});
+
+describe('Pack discovery notice: Open Settings CTA (oculist-tdj.6)', () => {
+  let server, ctx, page, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test('clicking Open Settings opens the settings panel and dismisses the notice permanently', async () => {
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+
+    // The CTA's click handler (content.js) dismisses the notice before calling
+    // openSettings(), so by the time the panel exists the notice is already gone — this
+    // test never overlaps with the known oculist-3rq defect (the notice, while showing,
+    // adds ~46.6px the settings-panel max-height formula does not subtract), since the
+    // notice and the settings panel are never both on screen at once here.
+    await page.locator(NOTICE_CTA).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
+
+    const noticeGoneAfterClick = await page.locator(NOTICE).count();
+    assert.strictEqual(
+      noticeGoneAfterClick,
+      0,
+      'the Open Settings CTA must dismiss the notice as part of opening the settings panel'
+    );
+
+    // Permanence: close the whole overlay (settings panel, then the overlay itself) and
+    // reopen — the notice must not come back just because the CTA (rather than the close
+    // control) was what dismissed it.
+    await closeOverlayFully(page);
+    await openFinder(page);
+    await page.waitForTimeout(500);
+    const noticeCountOnSecondOpen = await page.locator(NOTICE).count();
+    assert.strictEqual(
+      noticeCountOnSecondOpen,
+      0,
+      'the pack-discovery notice must not reappear after being dismissed via the Open Settings CTA'
     );
   });
 });
