@@ -31,6 +31,9 @@ const NOTICE = '#oc-wrap >> .oc-pack-notice';
 const NOTICE_CLOSE = '#oc-wrap >> .oc-pack-notice-close';
 const NOTICE_CTA = '#oc-wrap >> .oc-pack-notice-cta';
 const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
+const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
+
+const EPS = 1; // subpixel-rounding tolerance, same order of magnitude as sibling geometry tests
 
 // Shared across all describe blocks below (each launches its own context/page against a
 // freshly-dismissed profile) — same retry-Control+f-until-the-input-appears rationale as
@@ -360,5 +363,147 @@ describe('Pack discovery notice: Open Settings CTA (oculist-tdj.6)', () => {
       0,
       'the pack-discovery notice must not reappear after being dismissed via the Open Settings CTA'
     );
+  });
+});
+
+// oculist-3rq: #oc-settings-panel's max-height cap (barChromePx, content.js) only subtracts
+// the bar's own chrome, not the pack-discovery notice's height — when the notice is showing
+// (undismissed, >=1 known pack) it renders BETWEEN the bar and the settings panel, so bar +
+// notice + panel can overflow the viewport by roughly the notice's own ~46.6px, at any
+// viewport height (the error is a constant-per-viewport formula gap, not something that
+// scales with vh). Placed in this file rather than settings_panel_viewport_overflow.test.js
+// (the oculist-6cd coverage) because that file has no packed-registry fixture at all and
+// every one of its cases predates knownPacks() ever returning anything non-empty; this file
+// already carries createPackedFixtureExtension() (single 'seasonal'-packed cybervision entry)
+// and is where the notice's own geometry is otherwise exercised.
+describe('Pack discovery notice: settings-panel height cap accounts for the notice (oculist-3rq)', () => {
+  let server, ctx, page, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // channel:'chromium' is load-bearing — the default bundled build is the headless
+    // shell, which silently loads no extensions at all.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+    await page.goto(origin);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  // Default position ('tr', top-anchored) is enough here — settings_panel_viewport_overflow.
+  // test.js already exercises all four POS_DATA anchors for the barChromePx mechanism itself;
+  // this describe only needs to show the notice's height gets folded into the same cap, which
+  // does not depend on which edge the bar is pinned to (per the bead: the overflow reproduced
+  // identically at both 1280x800 and 1280x600).
+  async function openSettingsWithNoticeShowing() {
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+    await page.locator(GEAR_BTN).click();
+    await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
+  }
+
+  async function hostBottom() {
+    return page.evaluate(() => document.getElementById('oc-wrap').getBoundingClientRect().bottom);
+  }
+
+  // Every test below runs its assertions inside try/finally so a failed assertion still
+  // leaves the overlay closed (and the viewport restored) for the next test in this describe
+  // — otherwise a failure here would cascade into unrelated-looking timeouts downstream
+  // (e.g. the settings panel already open from a previous test's aborted teardown, so the
+  // next test's gear-button click toggles it closed instead of open).
+  test('host bottom stays within an 800px viewport with the notice showing and the settings panel open', async () => {
+    try {
+      await openSettingsWithNoticeShowing();
+
+      const bottom = await hostBottom();
+      assert.ok(
+        bottom <= 800 + EPS,
+        `host bottom (${bottom}) must stay within the 800px viewport with the pack-discovery notice showing above ` +
+        "#oc-settings-panel — the panel's max-height cap (barChromePx, content.js) must also subtract the notice's " +
+        'own rendered height'
+      );
+    } finally {
+      // Leaves the notice undismissed on purpose — the next test in this describe reuses
+      // the same profile/page and needs it still eligible to show at a different viewport.
+      await closeOverlayFully(page);
+    }
+  });
+
+  test('the same holds at a shorter, 600px viewport (the overflow is viewport-height independent)', async () => {
+    try {
+      await page.setViewportSize({ width: 1280, height: 600 });
+      await openSettingsWithNoticeShowing();
+
+      const bottom = await hostBottom();
+      assert.ok(
+        bottom <= 600 + EPS,
+        `host bottom (${bottom}) must stay within the 600px viewport with the pack-discovery notice showing`
+      );
+    } finally {
+      await closeOverlayFully(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+  });
+
+  test("dismissing the notice returns the panel's max-height cap to what barChromePx alone allows, not a permanently smaller cap", async () => {
+    try {
+      await openFinder(page);
+      await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+
+      const noticeHeight = await page.evaluate(() => {
+        const notice = document.getElementById('oc-wrap').shadowRoot.querySelector('.oc-pack-notice');
+        return notice.getBoundingClientRect().height;
+      });
+
+      await page.locator(GEAR_BTN).click();
+      await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
+      const maxHeightWithNotice = await page.evaluate(() => {
+        const panel = document.getElementById('oc-wrap').shadowRoot.querySelector('#oc-settings-panel');
+        return parseFloat(getComputedStyle(panel).maxHeight);
+      });
+
+      await page.locator(NOTICE_CLOSE).click();
+      await page.waitForFunction(
+        () => !document.getElementById('oc-wrap').shadowRoot.querySelector('.oc-pack-notice'),
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+
+      const maxHeightAfterDismiss = await page.evaluate(() => {
+        const panel = document.getElementById('oc-wrap').shadowRoot.querySelector('#oc-settings-panel');
+        return parseFloat(getComputedStyle(panel).maxHeight);
+      });
+
+      assert.ok(
+        maxHeightAfterDismiss > maxHeightWithNotice + 1,
+        'panel max-height must grow back once the notice is dismissed — with notice: ' +
+        `${maxHeightWithNotice}px, after dismiss: ${maxHeightAfterDismiss}px`
+      );
+      assert.ok(
+        Math.abs((maxHeightAfterDismiss - maxHeightWithNotice) - noticeHeight) <= 2,
+        `the max-height regained after dismissal (${maxHeightAfterDismiss - maxHeightWithNotice}px) must match the ` +
+        `notice's own measured height (${noticeHeight}px) within 2px`
+      );
+    } finally {
+      await closeOverlayFully(page);
+    }
   });
 });
