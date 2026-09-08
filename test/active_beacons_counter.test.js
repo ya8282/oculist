@@ -326,11 +326,25 @@ describe('activeBeacons counter: incremented only on a run that can actually dra
       // transition, then removes the element once that transition lands.
       //
       // The timeout here is deliberately far below the reduced-motion beacon's own
-      // lifetime (2500ms for the arrows+spotlight variant, 3000ms for the plain glow):
-      // those runs self-remove on their WAAPI anim.finished, so a generous POLL_TIMEOUT
-      // would be satisfied by natural completion and this wait would pass with or without
-      // the fade. Keeping it under a second means only the scroll-triggered fade can
-      // satisfy it.
+      // lifetime: getBeaconDuration(2500) for the arrows+spotlight variant
+      // (content.js:3524, gated by animationSpeed), and a bare literal 3000 for the plain
+      // glow (content.js:3594, not gated by anything). The default displayPreset here runs
+      // the plain-glow branch, so the fixed 3000 is the load-bearing one. Both self-remove
+      // on their WAAPI anim.finished, so a
+      // generous POLL_TIMEOUT would be satisfied by natural completion and this wait
+      // would pass with or without the fade. Keeping it under a second means only the
+      // scroll-triggered fade can satisfy it.
+      //
+      // oculist-e7l (see also the oculist-4fh precedent): FADE_TIMEOUT must NOT scale
+      // with OCULIST_TEST_TIMEOUT_SCALE. It is a deadline, not a timeout — its only job is
+      // to stay comfortably below the 2500/3000ms figures above, which are real wall-clock
+      // product durations set by animationSpeed or by a literal, never by machine speed, and
+      // so do not grow under OCULIST_TEST_TIMEOUT_SCALE. Scaling FADE_TIMEOUT up (x3 = 3000) would
+      // push it to meet or exceed those durations, so the wait could then be satisfied by
+      // the beacon's own natural expiry even if the scroll-fade code path were broken —
+      // a silent false green, not a fixed flake. (This file has not shown the opposite
+      // failure mode either: 5/5 solo runs and 7/7 full-suite runs green at scale 1, so
+      // there is no observed pressure to grow the 1000ms budget itself.)
       const FADE_TIMEOUT = 1000;
       await page.mouse.wheel(0, 400);
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
