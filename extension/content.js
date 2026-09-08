@@ -1155,6 +1155,25 @@
   // always runs first in window.__ocToggle()'s build branch), so the measurement reflects the
   // fully-styled element, not an unstyled one. Set back to 0 on dismissal/destroy so the caps
   // regain their space rather than staying permanently shrunk.
+  //
+  // oculist-3b7: this measurement's safety also depends on WHEN it runs, not just that the CSS
+  // is attached. The one call site (window.__ocToggle()'s build branch, right after
+  // checkSiteOverride()) fires before any search has run, while .oc-count sits at its 58px
+  // min-width floor. Every other child of the `nowrap` .oc-bar is a fixed px width; .oc-count
+  // is the only content-sized one (min-width plus nowrap — it is flex-shrink:0 like the rest,
+  // so shrink behaviour is not what sets it apart), and with the count empty its min-content
+  // equals its max-content. The bar is therefore at its NARROWEST here, which makes the notice
+  // its TALLEST, so packNoticeChromePx is an upper bound and the cap can only over-subtract.
+  // What actually inverts that: moving this call out of the build branch, so the notice can
+  // first be measured while a search is active and the bar already wide. That records a SHORT
+  // (unwrapped) notice; when the search is then cleared the bar returns to its floor, the
+  // notice wraps taller than the recorded value, and the cap under-subtracts and lets the panel
+  // overflow. Localizing i18n's 'of'/'noMatch' does NOT invert it on its own — a longer count
+  // widens the bar, which only unwraps the notice shorter (measured 46.594 to 31.188px), so the
+  // stale value stays an upper bound and merely gets more conservative. It does widen the swing
+  // that scenario 2 would then get wrong. Guarded by the measured-at-floor test in
+  // test/pack_discovery_notice.test.js. If the call site ever moves, this needs re-measurement
+  // machinery, not just this comment.
   var packNoticeChromePx    = 0;
   // Per-notice-class dismissal (oculist-l6m.12): keyed by the notice-key each
   // showNotice() call passes, so dismissing one notice class (e.g. 'site-override')

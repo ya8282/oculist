@@ -182,11 +182,17 @@ describe('closing and reopening within an instant-behavior scroll draws only the
   }
 
   async function waitForRedrawCountToSettle() {
-    const QUIET_MS = 400;
+    // QUIET_MS must outlast the 4000ms stretch installed on mfar's instant-draw timer above
+    // (its real 50ms setTimeout, stretched so destroy() has a deterministic window to win the
+    // race). A shorter quiet window can resolve before that timer would have fired, so a
+    // surviving orphaned timer — the very regression this test exists to catch — would never
+    // be observed. The timeout is widened to match (rather than left at the bare POLL_TIMEOUT),
+    // since it now has to cover the quiet window itself, not just ordinary poll slack.
+    const QUIET_MS = 4600;
     await page.waitForFunction(
       (quiet) => window.__ocRedrawCount > 0 && performance.now() - window.__ocRedrawAt > quiet,
       QUIET_MS,
-      { timeout: POLL_TIMEOUT }
+      { timeout: QUIET_MS + POLL_TIMEOUT }
     );
     return page.evaluate(() => window.__ocRedrawCount);
   }
@@ -214,13 +220,44 @@ describe('closing and reopening within an instant-behavior scroll draws only the
     // Enter #1: commits the typed term as a chip, landing on m1 — already in view, no
     // scroll branch, draws once.
     await page.keyboard.press('Enter');
-    // Let m1's own draw land for real before moving on, so the count below isolates
-    // this bug (mfar's orphaned instant-branch timer) instead of conflating it with a
-    // second, still-pending in-viewport draw of its own (oculist-44y Site B, covered by
-    // its own regression test).
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Wait for m1's own inViewDrawTimer to actually fire before moving on, so the count
+    // below isolates this bug (mfar's orphaned instant-branch timer) instead of
+    // conflating it with a second, still-pending in-viewport draw of its own (oculist-44y
+    // Site B, covered by its own regression test). A fixed sleep here races: Enter #2's
+    // own instant-behavior branch calls clearActiveImmediateDrawTimer() on entry, which
+    // CANCELS (not merely delays) m1's still-pending 50ms timer if it hasn't fired yet —
+    // silently dropping m1's legitimate draw rather than just running it late. Waiting
+    // for the counter to actually observe that draw proves the timer fired for real.
+    await page.waitForFunction(() => window.__ocRedrawCount > 0, null, { timeout: POLL_TIMEOUT });
+
+    // Stretch the isolated world's own window.setTimeout so any 50ms call armed from here
+    // on (mfar's own instant-draw timer, below) actually fires much later. This test's
+    // whole point is that __ocDestroy() must cancel that timer while it is still pending —
+    // for that to mean anything, destroy() has to genuinely run before the timer fires,
+    // and racing a real 50ms browser timer against two CDP round trips (destroy, then
+    // rebuild) under concurrency is a wall-clock coin flip, not a property of the code
+    // under test. Stretching the delay buys destroy() a deterministic, generous window to
+    // win that race every time; clearTimeout() on the (now longer) timer cancels it just as
+    // completely regardless of how much delay was left, so what happens when the timer
+    // fires — or gets cancelled — is exercised exactly as before, just decoupled from how
+    // fast this run's CDP round trips happen to be. m1's own draw above already fired on
+    // the real, unpatched 50ms, so this is scoped to only the timer armed after it.
+    await evalInContentScript(`
+      (function () {
+        if (window.__ocStretchedInstantTimerInstalled) return true;
+        window.__ocStretchedInstantTimerInstalled = true;
+        var orig = window.setTimeout;
+        window.setTimeout = function (fn, delay) {
+          var stretched = (delay === 50) ? 4000 : delay;
+          var args = [fn, stretched].concat(Array.prototype.slice.call(arguments, 2));
+          return orig.apply(window, args);
+        };
+        return true;
+      })()
+    `);
+
     // Enter #2: findNext() to mfar — out of view, takes the instant-behavior branch,
-    // jumps synchronously, and arms the bare 50ms draw timer under test.
+    // jumps synchronously, and arms the bare draw timer under test (now stretched above).
     await page.keyboard.press('Enter');
 
     // Close, then reopen, via window.__ocToggle() directly — the same function the
