@@ -25,7 +25,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForContentScriptValue } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -160,13 +160,6 @@ describe('closing and reopening within an instant-behavior scroll draws only the
     await page.evaluate(() => {
       window.__ocRedrawCount = 0;
       window.__ocRedrawAt = performance.now();
-      // Set by the isolated-world setTimeout patch (below) arming the stretched orphan
-      // timer under test. A content script's isolated world does not share plain JS
-      // globals with this main-world page.evaluate(), only the DOM — so the patch
-      // signals its arm time the same way the redraw counter above already crosses
-      // that boundary: by mutating the shared DOM and letting this MutationObserver
-      // (which watches both) record a main-world timestamp when it sees it.
-      window.__ocOrphanArmedAt = null;
       if (window.__ocRedrawObserver) window.__ocRedrawObserver.disconnect();
       window.__ocRedrawObserver = new MutationObserver((records) => {
         for (const r of records) {
@@ -175,8 +168,6 @@ describe('closing and reopening within an instant-behavior scroll draws only the
             if (n.classList.contains('oc-beacon') && !n.classList.contains('oc-beacon-transient') && !n.id) {
               window.__ocRedrawCount++;
               window.__ocRedrawAt = performance.now();
-            } else if (n.classList.contains('oc-orphan-armed-marker')) {
-              window.__ocOrphanArmedAt = performance.now();
             }
           }
         }
@@ -186,42 +177,29 @@ describe('closing and reopening within an instant-behavior scroll draws only the
   }
 
   async function waitForRedrawCountToSettle() {
-    // The deadline below must be derived from the orphan timer's own arm time
-    // (window.__ocOrphanArmedAt, set by the setTimeout patch below), not from m1's
-    // earlier draw (__ocRedrawAt) — the two CDP round trips between m1's draw and the
-    // point mfar's timer is actually armed are unaccounted-for overhead, not a
-    // structural guarantee that a fixed offset from m1's draw still covers the orphan.
-    // Anchoring on the arm time itself makes coverage structural instead of a guess.
-
-    // Guard: if the patched setTimeout was never called with delay===50 (e.g. the
-    // instant-scroll branch wasn't taken, or the patch failed to intercept it),
-    // __ocOrphanArmedAt stays null forever and a deadline computed from it would be
-    // meaningless. Fail loudly and promptly instead of hanging or silently passing.
-    try {
-      await page.waitForFunction(() => window.__ocOrphanArmedAt !== null, null, { timeout: POLL_TIMEOUT });
-    } catch (e) {
-      throw new Error(
-        'the stretched instant-draw timer was never armed (no delay===50 setTimeout call ' +
-          'observed) — the quiet-window deadline below has no orphan arm time to derive from'
-      );
-    }
-    const armedAt = await page.evaluate(() => window.__ocOrphanArmedAt);
-
-    // STRETCH_MS mirrors the 4000ms stretch installed on mfar's instant-draw timer
-    // above. FIRE_JITTER_MS is slack purely for real setTimeout firing granularity and
-    // the MutationObserver/task-queue hop that follows it firing — not a stand-in for
-    // CDP round-trip overhead, which no longer factors into this deadline at all.
-    const STRETCH_MS = 4000;
-    const FIRE_JITTER_MS = 500;
-    const deadline = armedAt + STRETCH_MS + FIRE_JITTER_MS;
-
-    const now = await page.evaluate(() => performance.now());
-    const timeout = Math.max(0, deadline - now) + POLL_TIMEOUT;
-    await page.waitForFunction(
-      (dl) => window.__ocRedrawCount > 0 && performance.now() > dl,
-      deadline,
-      { timeout }
-    );
+    // No numeric margin here at all: the setTimeout patch below arms a sibling timer at
+    // the same instant and with the same stretched delay as mfar's orphan draw timer.
+    // Same-delay setTimeout calls fire in the order they were registered (verified
+    // separately, see oculist-4z3's report — 0/200 violations at a 50ms delay and 0/15 at
+    // the actual 4000ms stretch used here, across plain Chromium pages), so the sibling
+    // firing proves the orphan's slot has already come and gone, whether or not the
+    // orphan itself actually fired (i.e. whether or not it was cancelled). That is a
+    // structural guarantee, not a guess at how much overhead to budget for.
+    //
+    // The sibling reports back through window.__ocSiblingFired, a plain isolated-world
+    // global — not a DOM mutation. The setTimeout patch runs in the same isolated world
+    // as this flag, so no cross-world signaling is needed at all here (unlike the
+    // .oc-beacon redraw counter above, which does have to cross from the isolated world's
+    // real DOM insertions into this main-world MutationObserver).
+    // If the patched setTimeout was never called with delay===50 (e.g. the instant-scroll
+    // branch wasn't taken, or the patch failed to intercept it), __ocSiblingFired stays
+    // false forever and this fails loudly and promptly instead of hanging or silently
+    // passing.
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocSiblingFired === true', (v) => v === true, {
+      timeout: POLL_TIMEOUT,
+      message: 'the stretched instant-draw sibling timer never fired (no delay===50 setTimeout ' +
+        'call observed, or the patch failed to intercept it) — nothing proves the orphan\'s slot has passed.',
+    });
     return page.evaluate(() => window.__ocRedrawCount);
   }
 
@@ -274,23 +252,22 @@ describe('closing and reopening within an instant-behavior scroll draws only the
       (function () {
         if (window.__ocStretchedInstantTimerInstalled) return true;
         window.__ocStretchedInstantTimerInstalled = true;
+        window.__ocSiblingFired = false;
         var orig = window.setTimeout;
         window.setTimeout = function (fn, delay) {
           var stretched = (delay === 50) ? 4000 : delay;
-          if (delay === 50) {
-            // Record the arm moment for the main-world test to read back. This
-            // isolated world does not share plain JS globals with the page's main
-            // world, so a marker DOM node — a real, shared mutation the main-world
-            // MutationObserver in armRedrawCounter() is already watching for — carries
-            // it across, the same way the existing redraw counter crosses that
-            // boundary via .oc-beacon nodes.
-            var marker = document.createElement('span');
-            marker.className = 'oc-orphan-armed-marker';
-            marker.style.display = 'none';
-            document.documentElement.appendChild(marker);
-          }
           var args = [fn, stretched].concat(Array.prototype.slice.call(arguments, 2));
-          return orig.apply(window, args);
+          var handle = orig.apply(window, args);
+          if (delay === 50) {
+            // Arm a sibling timer immediately after the orphan, with the exact same
+            // (stretched) delay, no synchronous work between the two orig.apply/orig
+            // calls. Same-delay timers fire in registration order, so this sibling
+            // firing proves the orphan's slot has passed — whether or not the orphan
+            // itself actually fired — without guessing at any margin for it. See
+            // waitForRedrawCountToSettle() above for how this flag is consumed.
+            orig(function () { window.__ocSiblingFired = true; }, stretched);
+          }
+          return handle;
         };
         return true;
       })()
