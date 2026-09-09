@@ -42,6 +42,10 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
 const INPUT = '#oc-wrap >> .oc-input';
 
+// How far the isolated world's setTimeout patch stretches any delay===50 call (see
+// waitForRedrawCountToSettle() and the patch below, which both need this same number).
+const STRETCH_DELAY_MS = 4000;
+
 describe('closing and reopening within an instant-behavior scroll draws only the legitimate match (oculist-44y)', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
@@ -153,13 +157,16 @@ describe('closing and reopening within an instant-behavior scroll draws only the
   }
 
   // Arms a MutationObserver that counts every time a brand-new, non-transient border
-  // overlay (`.oc-beacon`, no id) lands in the DOM, and records the timestamp of the
-  // most recent one so callers can wait for the count to go quiet instead of guessing a
-  // fixed duration.
+  // overlay (`.oc-beacon`, no id) lands in the DOM. Unlike the sibling stale-draw tests,
+  // this file does not wait for that count to go quiet — waitForRedrawCountToSettle()
+  // below waits on the sibling-timer's window.__ocSiblingFired flag instead, which proves
+  // the orphan's slot has passed without needing any redraw-timing signal at all. The
+  // count is read twice, never watched for quiescence: once before the stretch, waiting
+  // for a positive edge that proves m1's own draw landed, and once at the end for the
+  // final assertion.
   async function armRedrawCounter() {
     await page.evaluate(() => {
       window.__ocRedrawCount = 0;
-      window.__ocRedrawAt = performance.now();
       if (window.__ocRedrawObserver) window.__ocRedrawObserver.disconnect();
       window.__ocRedrawObserver = new MutationObserver((records) => {
         for (const r of records) {
@@ -167,7 +174,6 @@ describe('closing and reopening within an instant-behavior scroll draws only the
             if (n.nodeType !== 1 || !n.classList) continue;
             if (n.classList.contains('oc-beacon') && !n.classList.contains('oc-beacon-transient') && !n.id) {
               window.__ocRedrawCount++;
-              window.__ocRedrawAt = performance.now();
             }
           }
         }
@@ -177,11 +183,13 @@ describe('closing and reopening within an instant-behavior scroll draws only the
   }
 
   async function waitForRedrawCountToSettle() {
-    // No numeric margin here at all: the setTimeout patch below arms a sibling timer at
-    // the same instant and with the same stretched delay as mfar's orphan draw timer.
-    // Same-delay setTimeout calls fire in the order they were registered (verified
-    // separately, see oculist-4z3's report — 0/200 violations at a 50ms delay and 0/15 at
-    // the actual 4000ms stretch used here, across plain Chromium pages), so the sibling
+    // No numeric margin here for how long the orphan's slot takes to pass: the setTimeout
+    // patch below arms a sibling timer at the same instant and with the same stretched
+    // delay as mfar's orphan draw timer. Same-delay setTimeout calls fire in the order
+    // they were registered: HTML's timer initialisation steps order same-delay timers by
+    // registration order within one global (same ordering identifier), so this is
+    // spec-mandated rather than merely conventional (oculist-4z3's report carries the
+    // empirical trials) — so the sibling
     // firing proves the orphan's slot has already come and gone, whether or not the
     // orphan itself actually fired (i.e. whether or not it was cancelled). That is a
     // structural guarantee, not a guess at how much overhead to budget for.
@@ -195,8 +203,16 @@ describe('closing and reopening within an instant-behavior scroll draws only the
     // branch wasn't taken, or the patch failed to intercept it), __ocSiblingFired stays
     // false forever and this fails loudly and promptly instead of hanging or silently
     // passing.
+    //
+    // Timeout budget: the sibling is armed at the same instant as the orphan (see the
+    // patch below), before any of the close/reopen CDP round trips that follow, so in the
+    // worst case almost the entire STRETCH_DELAY_MS could still be left to elapse by the
+    // time this wait actually starts polling. Budgeting POLL_TIMEOUT + STRETCH_DELAY_MS
+    // covers that worst case and still leaves the original POLL_TIMEOUT of margin on top
+    // of it for CDP/polling overhead, rather than budgeting POLL_TIMEOUT alone against a
+    // wait that can itself take most of STRETCH_DELAY_MS.
     await waitForContentScriptValue(evalInContentScript, 'window.__ocSiblingFired === true', (v) => v === true, {
-      timeout: POLL_TIMEOUT,
+      timeout: POLL_TIMEOUT + STRETCH_DELAY_MS,
       message: 'the stretched instant-draw sibling timer never fired (no delay===50 setTimeout ' +
         'call observed, or the patch failed to intercept it) — nothing proves the orphan\'s slot has passed.',
     });
@@ -255,7 +271,7 @@ describe('closing and reopening within an instant-behavior scroll draws only the
         window.__ocSiblingFired = false;
         var orig = window.setTimeout;
         window.setTimeout = function (fn, delay) {
-          var stretched = (delay === 50) ? 4000 : delay;
+          var stretched = (delay === 50) ? ${STRETCH_DELAY_MS} : delay;
           var args = [fn, stretched].concat(Array.prototype.slice.call(arguments, 2));
           var handle = orig.apply(window, args);
           if (delay === 50) {
@@ -265,7 +281,9 @@ describe('closing and reopening within an instant-behavior scroll draws only the
             // firing proves the orphan's slot has passed — whether or not the orphan
             // itself actually fired — without guessing at any margin for it. See
             // waitForRedrawCountToSettle() above for how this flag is consumed.
-            orig(function () { window.__ocSiblingFired = true; }, stretched);
+            // Called with orig.apply(window, ...), same as the orphan's own call two
+            // lines up, so the two are identical in every respect but the callback.
+            orig.apply(window, [function () { window.__ocSiblingFired = true; }, stretched]);
           }
           return handle;
         };
