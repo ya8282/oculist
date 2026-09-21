@@ -143,6 +143,17 @@ function loadBackground({
 
 // Flushes the setTimeout(0) chain far enough to let both get/mutate/set round trips
 // (four hops: get, set, get, set) settle, without a real wall-clock sleep.
+//
+// oculist-nq1x.2: every call site below is generously over-budgeted (30 hops) rather than
+// tuned to each scenario's exact minimum. background.js's onInstalled now chains a SECOND
+// seed (seedHalloweenPack) after seedDefaultBlocklist, so the true minimum shifted upward
+// per test; more importantly, chrome/navigator here are real process globals shared by
+// every test in this file (not per-test sandboxes), so a test that returns before its OWN
+// async chain has actually finished leaves a stray setTimeout callback that later fires
+// against whichever test's global.chrome is current by then — bleeding an extra get()/
+// set() into a LATER, unrelated test. Measured directly: under-provisioning here made
+// tests (a) and (e) below observe calls their own code never made. Over-flushing has no
+// such failure mode, only unused ticks, so it is the safe default everywhere in this file.
 function flush(hops) {
   return new Promise((resolve) => {
     let remaining = hops;
@@ -171,7 +182,7 @@ test('a concurrent write landing between the two onInstalled writes survives, an
 
   fire({ reason: 'install' });
 
-  await flush(12);
+  await flush(30);
 
   const settings = backing['oc-settings'];
   assert.ok(
@@ -193,13 +204,16 @@ test('a concurrent write landing between the two onInstalled writes survives, an
 });
 
 test('an already-seeded blocklist is not rewritten (user re-enabling github.com is not undone)', async () => {
-  const backing = { 'oc-settings': { disabledSites: [], seededDefaultBlocklist: true } };
+  // oculist-nq1x.2: onInstalled now also chains seedHalloweenPack (background.js) after
+  // this one — seededHalloweenPack: true here keeps that second seed a no-op too, so this
+  // test still isolates the single invariant it was written for.
+  const backing = { 'oc-settings': { disabledSites: [], seededDefaultBlocklist: true, seededHalloweenPack: true } };
 
   const { fire, calls } = loadBackground({ backing, hardwareConcurrency: 8 });
 
   fire({ reason: 'update' });
 
-  await flush(4);
+  await flush(30);
 
   assert.strictEqual(calls.set, 0, 'no write should happen once already seeded');
   assert.deepStrictEqual(backing['oc-settings'].disabledSites, [], 'disabledSites must be left untouched');
@@ -257,7 +271,7 @@ test('a concurrent write landing in the seed\'s own get-to-set gap survives (is 
 
   fire({ reason: 'install' });
 
-  await flush(10);
+  await flush(30);
 
   const settings = backing['oc-settings'];
   assert.strictEqual(
@@ -289,7 +303,7 @@ test('a legacy visionProfile present at background\'s read is not resurrected by
 
   fire({ reason: 'update' }); // 'update' skips the performanceMode branch — irrelevant to this race
 
-  await flush(6);
+  await flush(30);
 
   const settings = backing['oc-settings'];
   assert.strictEqual(
@@ -363,6 +377,11 @@ test('(a) a mutate() that throws synchronously still calls done exactly once, an
     enumerable: false,
     configurable: true,
   });
+  // oculist-nq1x.2: onInstalled now also chains seedHalloweenPack (background.js) after
+  // this one, regardless of whether it errored — a plain (non-throwing) flag here keeps
+  // that second seed a no-op, so this test's "no set() at all" assertion still isolates
+  // the single invariant it was written for (a throwing mutate() issues no set()).
+  hostile.seededHalloweenPack = true;
   const backing = { 'oc-settings': hostile };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
@@ -376,7 +395,7 @@ test('(a) a mutate() that throws synchronously still calls done exactly once, an
     });
 
     fire({ reason: 'install' });
-    await flush(6);
+    await flush(30);
 
     assert.strictEqual(calls.set, 0, 'a throwing mutate() must not be followed by any set(): ' + JSON.stringify(calls));
     assert.strictEqual(
@@ -397,7 +416,11 @@ test('(a) a mutate() that throws synchronously still calls done exactly once, an
 });
 
 test('(b) a get() reporting chrome.runtime.lastError calls done exactly once, issues NO set(), and leaves storage untouched', async () => {
-  const original = { untouchedMarker: 'do-not-clobber-me' };
+  // oculist-nq1x.2: seededHalloweenPack: true keeps the chained seedHalloweenPack call
+  // (background.js's onInstalled now runs it after seedDefaultBlocklist) a no-op, so its
+  // own (unaffected) get() never turns into a set() either — this test still isolates the
+  // single get()-failure invariant it was written for.
+  const original = { untouchedMarker: 'do-not-clobber-me', seededHalloweenPack: true };
   const backing = { 'oc-settings': Object.assign({}, original) };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
@@ -406,12 +429,12 @@ test('(b) a get() reporting chrome.runtime.lastError calls done exactly once, is
     const { fire, calls } = loadBackground({
       backing,
       hardwareConcurrency: 8,
-      getLastErrorOnCall: 1, // the very first (only) get() this run makes
+      getLastErrorOnCall: 1, // only the very first get() (seedDefaultBlocklist's) fails
       onTabsCreate: () => { tabsCreateCalls++; },
     });
 
     fire({ reason: 'install' });
-    await flush(6);
+    await flush(30);
 
     assert.strictEqual(calls.set, 0, 'a failed get() must never be followed by a set(): ' + JSON.stringify(calls));
     assert.deepStrictEqual(
@@ -436,7 +459,12 @@ test('(b) a get() reporting chrome.runtime.lastError calls done exactly once, is
 });
 
 test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, and done can tell the write failed', async () => {
-  const backing = { 'oc-settings': {} };
+  // oculist-nq1x.2: seededHalloweenPack: true keeps the chained seedHalloweenPack call
+  // (background.js's onInstalled now runs it after seedDefaultBlocklist, whether or not
+  // that first write failed) a no-op, so the "only set() this run makes" comment below
+  // still holds and this test isolates the single set()-failure invariant it was written
+  // for.
+  const backing = { 'oc-settings': { seededHalloweenPack: true } };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
 
@@ -449,7 +477,7 @@ test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, an
     });
 
     fire({ reason: 'install' });
-    await flush(6);
+    await flush(30);
 
     assert.strictEqual(calls.set, 1, 'the set() must have been attempted exactly once (no blind retry on set failure): ' + JSON.stringify(calls));
     assert.strictEqual(
@@ -475,7 +503,10 @@ test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, an
 });
 
 test('(e) the plain success path still calls done exactly once (no double-call from the new error branches)', async () => {
-  const backing = { 'oc-settings': {} };
+  // oculist-nq1x.2: seededHalloweenPack: true keeps the chained seedHalloweenPack call
+  // (background.js's onInstalled runs it right after this one) a no-op, so the call
+  // counts below still isolate seedDefaultBlocklist's own plain-success cycle.
+  const backing = { 'oc-settings': { seededHalloweenPack: true } };
   let tabsCreateCalls = 0;
 
   const { fire, calls } = loadBackground({
@@ -485,11 +516,15 @@ test('(e) the plain success path still calls done exactly once (no double-call f
   });
 
   fire({ reason: 'install' });
-  await flush(6);
+  await flush(30);
 
   assert.strictEqual(tabsCreateCalls, 1, 'done must fire exactly once on the plain success path');
-  assert.strictEqual(calls.get, 2, 'expected exactly one initial get() and one confirming re-read: ' + JSON.stringify(calls));
-  assert.strictEqual(calls.set, 1, 'expected exactly one set() on the plain success path: ' + JSON.stringify(calls));
+  // oculist-nq1x.2: 3, not 2 — seedDefaultBlocklist's own initial get() + confirming
+  // re-read (2), plus the chained seedHalloweenPack's own initial get() (1), which finds
+  // seededHalloweenPack already true and returns before its own confirming re-read or any
+  // set().
+  assert.strictEqual(calls.get, 3, 'expected seedDefaultBlocklist\'s get()+confirming re-read, plus seedHalloweenPack\'s single no-op get(): ' + JSON.stringify(calls));
+  assert.strictEqual(calls.set, 1, 'expected exactly one set() on the plain success path (seedHalloweenPack is a no-op here): ' + JSON.stringify(calls));
   assert.ok(
     Array.isArray(backing['oc-settings'].disabledSites) && backing['oc-settings'].disabledSites.includes('github.com'),
     'the seed write must still land: ' + JSON.stringify(backing['oc-settings'])
@@ -514,7 +549,7 @@ test('(e) the confirm-then-retry (oculist-b65) path still calls done exactly onc
   });
 
   fire({ reason: 'install' });
-  await flush(10);
+  await flush(30);
 
   assert.strictEqual(
     tabsCreateCalls, 1,

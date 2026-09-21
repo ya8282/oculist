@@ -244,6 +244,23 @@ function seedDefaultBlocklist(done) {
   }, done);
 }
 
+// oculist-nq1x.2: seeds the Halloween pack ON by default, exactly once, for both fresh
+// installs and existing users picking up an update — same shape as seedDefaultBlocklist
+// just above, including the early-return flag that makes this a one-time default rather
+// than a standing override: once a user turns the pack back off, seededHalloweenPack is
+// already true and this never re-adds it.
+function seedHalloweenPack(done) {
+  updateSettings((settings) => {
+    if (settings.seededHalloweenPack) return false;
+    // Guards the write side against a non-array enabledPacks (a malformed stored value,
+    // or a legacy/corrupt sync blob) — availableEffects()'s own read-side guard
+    // (oculist-nq1x.1) is a separate fix and does not cover this mutation.
+    if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+    if (settings.enabledPacks.indexOf('halloween') === -1) settings.enabledPacks.push('halloween');
+    settings.seededHalloweenPack = true;
+  }, done);
+}
+
 // First-run onboarding.
 chrome.runtime.onInstalled.addListener((details) => {
   // Runs on update too, so existing installs pick the default up once. The flag inside
@@ -258,21 +275,34 @@ chrome.runtime.onInstalled.addListener((details) => {
     if (err) {
       console.error('Oculist: seedDefaultBlocklist failed; proceeding with onboarding anyway.', err);
     }
-    if (details.reason === 'install') {
-      chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
-
-      // Auto-enable Lite Mode for low-spec devices. hardwareConcurrency is the only
-      // capability signal available in a service worker (no rAF/DOM here for an FPS
-      // sample), so cores is the whole heuristic — good enough as a starting default,
-      // and the user can always flip it manually in the popup.
-      if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4) {
-        updateSettings((settings) => {
-          settings.performanceMode = true;
-        });
+    // oculist-nq1x.2: waits for the blocklist seed's write to finish first (same
+    // updateSettings sequencing reasoning as the performanceMode write below), so
+    // neither write clobbers the other. Onboarding proceeds regardless of the outcome,
+    // same as the blocklist seed above — the failure is only surfaced via console.error.
+    seedHalloweenPack((packErr) => {
+      if (packErr) {
+        console.error('Oculist: seedHalloweenPack failed; proceeding with onboarding anyway.', packErr);
       }
-    }
+      onInstalledOnboarding(details);
+    });
   });
 });
+
+function onInstalledOnboarding(details) {
+  if (details.reason === 'install') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+
+    // Auto-enable Lite Mode for low-spec devices. hardwareConcurrency is the only
+    // capability signal available in a service worker (no rAF/DOM here for an FPS
+    // sample), so cores is the whole heuristic — good enough as a starting default,
+    // and the user can always flip it manually in the popup.
+    if (navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4) {
+      updateSettings((settings) => {
+        settings.performanceMode = true;
+      });
+    }
+  }
+}
 
 let cachedDisabledImageDatas = null;
 

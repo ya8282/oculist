@@ -36,6 +36,11 @@
     // SETTINGS_KEYS would be dropped from storage on the next write and the default
     // blocklist would re-seed itself on every extension update.
     seededDefaultBlocklist: false,
+    // oculist-nq1x.2: written by background.js, never read here — same round-trip
+    // reasoning as seededDefaultBlocklist just above. A key missing from SETTINGS_KEYS
+    // would be dropped from storage on the next whole-object write, and the Halloween
+    // pack would re-seed itself back on for a user who deliberately turned it off.
+    seededHalloweenPack: false,
     // oculist-tdj: which optional effect packs are turned on, an array of pack ids. Empty
     // means core-only — today's twelve effects, unchanged for every existing user. Read
     // exclusively through availableEffects() (defined by the effectsRegistry below);
@@ -54,7 +59,7 @@
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist', 'enabledPacks', 'packsNoticeDismissed'
+    'seededDefaultBlocklist', 'seededHalloweenPack', 'enabledPacks', 'packsNoticeDismissed'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -972,7 +977,9 @@
   // oculist-tdj.2: display name for a pack id, for the settings-panel toggle list below.
   // Falls back to a title-cased version of the id rather than the raw id string, so a
   // pack that ships without an entry here still reads as a name, not a slug.
-  var PACK_LABELS = {};
+  var PACK_LABELS = {
+    halloween: 'Halloween'
+  };
   function packLabel(packId) {
     if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
     return packId.charAt(0).toUpperCase() + packId.slice(1);
