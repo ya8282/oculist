@@ -934,14 +934,20 @@
   // fine at this scale: twelve entries today).
   function availableEffects() {
     var out = {};
-    // `|| []` rather than trusting settings.enabledPacks to be an array. The
-    // Array.isArray guard on the coercion path runs AFTER this function is first
-    // called there, and SETTINGS_KEYS happens to order 'effect' before
-    // 'enabledPacks' — so today this is only safe because no entry carries a `pack`
-    // and indexOf is never reached. The moment oculist-tdj.2 ships a real pack, a
-    // malformed stored value would throw here instead. Not worth leaving as a
-    // sequencing coincidence.
-    var packs = settings.enabledPacks || [];
+    // oculist-nq1x.1: guards against settings.enabledPacks being anything other than
+    // an array — a stored value from chrome.storage.sync can be a string, a number,
+    // null, an object, or whatever a previous version of this extension (or a
+    // hand-edited sync profile) left behind. This used to read
+    // `settings.enabledPacks || []` on the theory that it was safe by a sequencing
+    // coincidence: the Array.isArray coercions below (storage-change and load paths)
+    // ran before any registry entry carried a `pack`, so indexOf was never reached
+    // against the bad value. That coincidence was never load-bearing and nothing here
+    // depends on it anymore — this guard degrades a malformed stored value to
+    // core-only on its own, right at the one place `pack` is actually read. The
+    // Array.isArray coercions further down (extension/content.js, storage-change and
+    // load paths) still stand: they repair the stored value itself for every future
+    // writer; this guard only protects this one read.
+    var packs = Array.isArray(settings.enabledPacks) ? settings.enabledPacks : [];
     for (var key in effectsRegistry) {
       if (!effectsRegistry.hasOwnProperty(key)) continue;
       var entry = effectsRegistry[key];
@@ -951,6 +957,17 @@
     }
     return out;
   }
+
+  // Same test-reachability reasoning as window.__ocTest.setEffectKey above:
+  // settings.enabledPacks and availableEffects() are both module-private, invisible to
+  // anything outside this closure. oculist-nq1x.1's regression test uses this pair to
+  // drive availableEffects() directly with a malformed stored value (a string, a
+  // number, null, undefined, a plain object) that a real chrome.storage read could
+  // plausibly hand back — bypassing the load-path Array.isArray coercions entirely, so
+  // the guard above is exercised on its own rather than relying on those coercions
+  // having already run.
+  window.__ocTest.setEnabledPacksRaw = function (v) { settings.enabledPacks = v; };
+  window.__ocTest.getAvailableEffectKeys = function () { return Object.keys(availableEffects()); };
 
   // oculist-tdj.2: display name for a pack id, for the settings-panel toggle list below.
   // Falls back to a title-cased version of the id rather than the raw id string, so a
