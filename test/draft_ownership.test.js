@@ -240,15 +240,10 @@ describe('Draft input vs. active chip ownership', () => {
     );
   }
 
-  // The mutation-observer rescan's own DOM-visible effect (oculist-match's content) can be
-  // a no-op when the rescanned term is unchanged from before the mutation (as in the
-  // zero-chip-mutation test below, which rescans the same lastTerm both before and after)
-  // — waiting on that would be a vacuous poll. Monkeypatch window.setTimeout inside the
-  // content script's own isolated world (same technique chip_row.test.js's debounce
-  // counter and list_menu.test.js's mid-debounce test use) to count calls scheduled at the
-  // mutation observer's own 350ms delay (content.js's sole use of that exact delay) that
-  // have actually executed, so this polls the real event instead of either guessing a
-  // duration or a DOM diff that isn't guaranteed to move.
+  // The mutation-observer rescan's DOM-visible effect can be a no-op when the rescanned
+  // term is unchanged (as in the zero-chip test below). Wait on the observer's own 350ms
+  // callback instead. Publish that callback's counter on documentElement so Playwright can
+  // wait inside the browser, without repeatedly crossing CDP to poll the isolated world.
   async function armMutationRescanCounter() {
     return evalInContentScript(`
       (function () {
@@ -259,14 +254,22 @@ describe('Draft input vs. active chip ownership', () => {
           window.setTimeout = function (fn, delay) {
             if (delay === 350) {
               var wrapped = function () {
-                window.__ocMutationRescanFires++;
-                return fn.apply(this, arguments);
+                try {
+                  return fn.apply(this, arguments);
+                } finally {
+                  window.__ocMutationRescanFires++;
+                  document.documentElement.setAttribute(
+                    'data-oc-test-mutation-rescan-fires',
+                    String(window.__ocMutationRescanFires)
+                  );
+                }
               };
               var args = [wrapped, delay].concat(Array.prototype.slice.call(arguments, 2));
               return orig.apply(window, args);
             }
             return orig.apply(window, arguments);
           };
+          document.documentElement.setAttribute('data-oc-test-mutation-rescan-fires', '0');
         }
         return window.__ocMutationRescanFires;
       })()
@@ -274,10 +277,11 @@ describe('Draft input vs. active chip ownership', () => {
   }
 
   async function waitForMutationRescan(before) {
-    return waitForContentScriptValue(evalInContentScript, 'window.__ocMutationRescanFires', (v) => v > before, {
-      timeout: POLL_TIMEOUT,
-      message: 'the mutation-observer rescan (350ms debounce) never fired',
-    });
+    await page.waitForFunction(
+      (n) => Number(document.documentElement.getAttribute('data-oc-test-mutation-rescan-fires')) > n,
+      before,
+      { timeout: POLL_TIMEOUT }
+    );
   }
 
   // Arm a probe listener inside the content script's own isolated world *before* changing
@@ -441,20 +445,15 @@ describe('Draft input vs. active chip ownership', () => {
 
     // loadWorkList() on mount only populates workListTerms/activeTermIndex; a real DOM
     // mutation is what triggers the rescanAfterMutation() -> performListSearch() call
-    // that actually builds termRanges/the dim registry for the restored list. Poll on the
-    // exact condition the assertion below checks (the 350ms mutation-observer debounce
-    // firing) instead of guessing "debounce + margin" as a wall-clock number.
+    // that actually builds termRanges/the dim registry for the restored list.
+    const mutationBefore = await armMutationRescanCounter();
     await page.evaluate(() => {
       const marker = document.createElement('span');
       marker.textContent = 'trigger-rescan';
       document.body.appendChild(marker);
     });
-    const dimTexts = await waitForContentScriptValue(
-      evalInContentScript,
-      `(function(){var h=CSS.highlights.get('oculist-dim-match'); return h?Array.from(h).map(function(r){return r.toString();}):[];})()`,
-      (v) => Array.isArray(v) && v.length === 5,
-      { timeout: POLL_TIMEOUT, message: 'mutation-observer rescan never rebuilt oculist-dim-match with both terms\' matches' }
-    );
+    await waitForMutationRescan(mutationBefore);
+    const dimTexts = await rangeTexts('oculist-dim-match');
 
     assert.strictEqual(await page.locator(NOTICE).count(), 0, 'no chip being active must not be reported as "no matches found"');
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '', 'the count slot must stay blank, not "no match"');
