@@ -44,14 +44,17 @@ const THEME_LIGHT_BTN = '#oc-wrap >> [data-oc-key="theme:light"]';
 
 // The registry as of oculist-dvt (content.js:685-698). Compared as a Set against the live
 // DOM's data-oc-key values below, so this pins membership/count, not row order (order is
-// alphabetical-by-label and derived from the live DOM, not assumed here).
+// alphabetical-by-label and derived from the live DOM, not assumed here). oculist-nq1x.2
+// seeds the Halloween pack ON by default on a fresh profile — this file's own before()
+// explicitly forces enabledPacks back to [] before any test runs, so this stays pinned at
+// exactly the twelve core (unpacked) entries regardless of that seed's own timing.
 const EXPECTED_EFFECT_KEYS = [
   'hud', 'iris', 'sweep', 'flame', 'lightning', 'electron', 'arrows',
   'dispersion', 'trail', 'speedlines', 'chrono', 'cybervision',
 ];
 
 describe('Settings panel effect picker at 12 registry entries (oculist-dvt.5)', () => {
-  let server, ctx, page;
+  let server, ctx, page, client, isolatedContextId;
 
   async function waitForOverlayClosed() {
     await page.waitForFunction(() => !document.getElementById('oc-wrap'), null, { timeout: POLL_TIMEOUT });
@@ -140,11 +143,82 @@ describe('Settings panel effect picker at 12 registry entries (oculist-dvt.5)', 
     });
 
     page = await ctx.newPage();
+
+    // Attach CDP before navigating so the isolated-world execution-context-created event
+    // is never missed — needed only to force enabledPacks back to [] below (oculist-tdj's
+    // pack mechanism is module-private, invisible to page.evaluate()'s main world).
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
     await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
+
+    // oculist-nq1x.2 seeds the Halloween pack ON by default on a fresh profile, via
+    // background.js's own get->mutate->set round trip off chrome.runtime.onInstalled
+    // (seedHalloweenPack, extension/background.js), which sets enabledPacks and
+    // seededHalloweenPack together in the SAME write. Overriding enabledPacks back to []
+    // before that write has landed would just lose the race to it (background.js's own
+    // get() would still be holding a pre-override snapshot) — wait for
+    // seededHalloweenPack to actually be true in storage first, which is this file's proof
+    // that write is done, before applying this file's own override, so this stays pinned
+    // at exactly the twelve core (unpacked) entries regardless of the seed's own timing.
+    await waitForCondition(
+      () =>
+        evalInContentScript(
+          "new Promise(function (resolve) {" +
+            "chrome.storage.sync.get('oc-settings', function (data) {" +
+            "resolve(!!(data && data['oc-settings'] && data['oc-settings'].seededHalloweenPack));" +
+            "});" +
+            "})"
+        ),
+      Boolean,
+      { timeout: POLL_TIMEOUT, message: 'seedHalloweenPack never finished writing seededHalloweenPack' }
+    );
+    await evalInContentScript(
+      "new Promise(function (resolve) {" +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        "var next = Object.assign({}, current, { enabledPacks: [] });" +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        "});" +
+        "})"
+    );
+    await waitForCondition(
+      () => evalInContentScript('window.__ocTest.getAvailableEffectKeys()'),
+      (keys) => keys.indexOf('boneassembly') === -1,
+      { timeout: POLL_TIMEOUT, message: 'enabledPacks override never applied in the content script' }
+    );
+
     await openFinder();
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
   });
+
+  function evalInContentScript(expression) {
+    return client
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: isolatedContextId,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  }
 
   after(async () => {
     if (ctx) await ctx.close();

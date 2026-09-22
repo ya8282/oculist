@@ -89,7 +89,25 @@ function createPackedFixtureExtension() {
     "ocTdj5PackedEffect: { label: 'OC TDJ5 Packed Effect', run: animateCyberVision, pack: 'seasonal' }, " +
     fillerEntries;
   assert.notStrictEqual(original.indexOf(target), -1);
-  fs.writeFileSync(contentJsPath, original.replace(target, patched), 'utf8');
+  let contentJs = original.replace(target, patched);
+
+  // oculist-nq1x.5: boneassembly (the real Halloween pack's own first entry) now exists
+  // on the real tree, which would otherwise inflate knownPacks() to eleven distinct ids
+  // (this fixture's own ten plus 'halloween') and break this file's ten-row assertions.
+  // Strip its `pack` field in THIS FIXTURE COPY ONLY — extension/content.js itself is
+  // never touched — so it counts as a core (unpacked) entry here, same as it did before
+  // any real pack shipped.
+  const boneassemblyTarget = "boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' }";
+  assert.ok(
+    contentJs.includes(boneassemblyTarget),
+    'fixture setup: expected effectsRegistry.boneassembly entry text not found in extension/content.js — did its shape change?'
+  );
+  contentJs = contentJs.replace(
+    boneassemblyTarget,
+    "boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly }"
+  );
+
+  fs.writeFileSync(contentJsPath, contentJs, 'utf8');
 
   return dir;
 }
