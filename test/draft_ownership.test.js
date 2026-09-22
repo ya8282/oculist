@@ -24,6 +24,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
+const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -90,6 +91,10 @@ describe('Draft input vs. active chip ownership', () => {
       timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
+    // beforeEach() below makes its own raw chrome.storage.session.remove() call, with no
+    // retry of its own — wait out the setAccessLevel() startup race first (oculist-434k /
+    // oculist-ilkz; see helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
     await openFinder();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
     await page.keyboard.press('Escape');
