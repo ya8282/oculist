@@ -4181,7 +4181,11 @@
     var spriteLeft = rearX - SPRITE_W / 2, spriteTop = CENTER_Y - SPRITE_H / 2; // viewport space
     var pumpStartX = spriteLeft + (direction > 0 ? handRot[0] : VB_W - handRot[0]) * SCALE; // viewport space
     var pumpStartY = spriteTop + handRot[1] * SCALE; // viewport space
-    var pumpTargetX = mcx, pumpTargetY = rect.top - 8; // viewport space
+    // Pinned so the pumpkin's own bottom edge (offset-anchor 50% 50%, so the box extends
+    // PUMPKIN_SIZE/2 = 13*beaconScale below this center point) always lands a constant 5px
+    // into the match rect, at every Beacon Size -- not a flat center offset, which let the
+    // painted intrusion balloon as PUMPKIN_SIZE grew with beaconScale (oculist-4afn).
+    var pumpTargetX = mcx, pumpTargetY = rect.top + 5 - 13 * beaconScale; // viewport space
     var ARC_HEIGHT = 70;
     var pMidX = (pumpStartX + pumpTargetX) / 2, pMidY = (pumpStartY + pumpTargetY) / 2 - ARC_HEIGHT; // viewport space
     var pumpPath = 'M ' + (pumpStartX + SCROLL_X) + ' ' + (pumpStartY + SCROLL_Y) +
