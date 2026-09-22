@@ -22,6 +22,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -79,49 +80,10 @@ describe('Stale mount loadWorkList guard (oculist-3z6)', () => {
       }
     }
 
-    // chrome.storage.session is unusable from a content script until background.js's
-    // service-worker startup call to setAccessLevel('TRUSTED_AND_UNTRUSTED_CONTEXTS')
-    // actually lands (oculist-z4s, worklist_storage.test.js's before() has the full
-    // account). This test's own oc-worklist remove()/set() calls below (oculist-434k) are
-    // raw chrome.storage.session calls with no retry of their own — unlike content.js's
-    // own loadWorkList()/saveWorkList(), which already retry once via background.js's
-    // ensureSessionAccess. Racing the access grant fails fast and silent, not slow: a
-    // call issued before the grant lands is denied within a couple of milliseconds and
-    // this test's remove()/set() calls swallow that (no lastError check), so the seed
-    // this test writes below is silently and permanently dropped, and the chip-row poll
-    // later times out at the full LONG_TIMEOUT budget waiting for data that was never
-    // written — reproduced under synthetic CPU load (oculist-434k triage) with the same
-    // "Access to storage is not allowed from this context." error worklist_storage.test.js
-    // already documents. Wait out the real precondition here, once, using the same
-    // harmless probe key, before this test ever touches chrome.storage.session itself.
-    {
-      const deadline = Date.now() + POLL_TIMEOUT;
-      for (;;) {
-        const denied = await new Promise((resolve, reject) => {
-          client
-            .send('Runtime.evaluate', {
-              expression:
-                "new Promise((resolve) => chrome.storage.session.get('__oc_access_probe__', " +
-                '() => resolve(chrome.runtime.lastError ? chrome.runtime.lastError.message : null)))',
-              contextId: isolatedContextId,
-              awaitPromise: true,
-              returnByValue: true,
-            })
-            .then((res) => {
-              if (res.exceptionDetails) {
-                reject(new Error('access-probe eval failed: ' + JSON.stringify(res.exceptionDetails)));
-                return;
-              }
-              resolve(res.result.value);
-            }, reject);
-        });
-        if (!denied) break;
-        if (Date.now() > deadline) {
-          throw new Error('chrome.storage.session access was never granted to the content script: ' + denied);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      }
-    }
+    // This test's own oc-worklist remove()/set() calls below (oculist-434k) are raw
+    // chrome.storage.session calls with no retry of their own — see
+    // helpers/session_access.js for the full account of the race they'd otherwise lose.
+    await waitForSessionAccess(client, isolatedContextId);
 
     for (let attempt = 0; attempt < 20; attempt++) {
       await page.keyboard.press('Control+f');
