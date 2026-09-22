@@ -816,6 +816,7 @@
     // Halloween pack (oculist-nq1x)
     effectBoneAssembly: 'Bone Assembly',
     effectFlappy: 'Flappy',
+    effectCheshire: 'Cheshire',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -929,7 +930,8 @@
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision },
     boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' },
-    flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' }
+    flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' },
+    cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -3279,6 +3281,239 @@
     }).catch(function () {
       flash.remove();
     });
+  }
+
+  // oculist-e2m.6: promotes fxCheshire (artifacts/prototypes/effects-playground.html,
+  // the geometric-dissolve redraw from oculist-e2m.8's character-sheet rebuild and
+  // oculist-e2m.9's own disappearance refinement) into the shipped beacon contract, the
+  // third entry in the Halloween pack. A hand-drawn cat fades in above the match (or
+  // below it when there is no room), its six head/body regions separate and dissolve
+  // while its grin settles toward the match, pops, holds, then fades -- the grin
+  // outlasts the body, it does not persist. No teeth glow: cut in the playground and
+  // stays cut here (oculist-e2m.9's own description names "no teeth glow" as an epic
+  // decision to preserve; the epic's own DESIGN CONSTANTS record why -- an animated
+  // drop-shadow washed the mouth fill, and a white halo layer cost over a third of the
+  // mouth-fill pixels, both at exactly the 120ms the pop is meant to capture attention).
+  function animateCheshire(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+
+    // Fixed identity palette, the same license the promotion contract names for the
+    // pumpkin's orange and the skeleton's ivory -- no neighbouring shipped character
+    // effect exists yet to set an accessibility-accent precedent for it, and (unlike
+    // animateTrail/animateFlappy's own absorption flash) this effect has no separate
+    // flash element to carry getEffectiveColors().beacon as an accent.
+    var OUTLINE = '#17112B';
+    var FUR = '#6D28D9';
+    var FUR_SHADOW = '#3B176D';
+    var FUR_HIGHLIGHT = '#C084FC';
+    var ACCENT = '#EC4899';
+    var EYE = '#FDE047';
+    var NOSE = '#F472B6';
+    var TEETH = '#FFF8DC';
+    var HAND_DRAWN = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var VB_W = 130, VB_H = 100;
+    var ASPECT = VB_W / VB_H;
+    var GAP = 8; // px between the cat's bounding box and the match edge
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Lite Mode (settings.performanceMode): this effect has no glow, box-shadow, or
+    // multi-state flicker to begin with -- the fragment dissolve and the grin's
+    // settle/pop/fade are all plain opacity and transform, already the cheap path, the
+    // same reasoning animateBoneAssembly's own comment gives for its own Lite Mode
+    // no-op. Full mode and Lite Mode render and time identically; settings.performanceMode
+    // is deliberately never read below.
+
+    // On-screen size: the prototype's own match-relative clamp, then the Beacon Size
+    // knob every other beacon effect's own size responds to.
+    var catHeight = Math.max(48, Math.min(110, 3.2 * rect.height)) * beaconScale;
+    var catWidth = catHeight * ASPECT;
+
+    // Placement fit is a viewport question even though the figure mounts in document
+    // space below (rule 9 of the promotion contract, oculist-nq1x): rect here is the
+    // live pre-scroll viewport rect animate() hands in, so this comparison -- and every
+    // other screenLeft/screenTop value below, until the docLeft/docTop conversion --
+    // stays in viewport space, the same split animateBoneAssembly's own side-selection
+    // above uses.
+    var mcxViewport = rect.left + rect.width / 2;
+    var above = rect.top >= catHeight + GAP;
+    var screenLeft = mcxViewport - catWidth / 2;
+    var screenTop = above ? (rect.top - GAP - catHeight) : (rect.bottom + GAP);
+
+    // #grin's settle drift is toward the match, whatever side it lands on: above the
+    // match, the match sits below the cat, so +y (down) is toward it; below the match,
+    // the match sits above the cat, so -y (up) is toward it. Re-signing the drift keeps
+    // the cat itself upright and identically drawn either way (the prototype's own
+    // reasoning, carried over verbatim) -- left unscaled by beaconScale on purpose: this
+    // value feeds grinG's own transform inside the svg's viewBox (0 0 VB_W VB_H), i.e.
+    // SVG user units, which the viewBox-to-catWidth/catHeight mapping already scales by
+    // beaconScale on render. Multiplying here too double-scales it -- at XL that pushed
+    // the grin's own rendered bbox past the match's top edge on the above branch.
+    var drift = above ? 6 : -6;
+
+    var docLeft = screenLeft + window.scrollX;
+    var docTop = screenTop + window.scrollY;
+
+    // The <svg> itself is the single oc-beacon-transient element cancelBeacons()
+    // selects -- the #cat and #grin animations below both live on child <g> nodes, so
+    // every Animation they produce is hung off this parent svg instead (rule 4 of the
+    // promotion contract; animateTrail's lineSvg is the same idiom, an <svg> that is
+    // itself the .oc-beacon element rather than a wrapping <div>).
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(catWidth));
+    svg.setAttribute('height', String(catHeight));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.setAttribute('class', 'oc-beacon oc-beacon-transient');
+    svg.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + catWidth + 'px', 'height:' + catHeight + 'px',
+      'overflow:visible',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'transform-origin:50% 50%',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(svg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var catG = document.createElementNS(NS, 'g');
+    catG.setAttribute('data-cheshire-part', 'cat');
+    svg.appendChild(catG);
+
+    // Six broad, slightly overlapping regions reconstruct the approved head silhouette
+    // (oculist-e2m.8's character-sheet redraw). They read as one cat while assembled,
+    // then become the fixed geometric pieces the dissolve below separates.
+    var fragments = [
+      addShape('path', { d: 'M 17 39 Q 10 24 17 2 L 47 24 L 43 45 Z', fill: FUR_SHADOW, 'data-cheshire-fragment': 'left-ear' }, catG),
+      addShape('path', { d: 'M 87 45 L 83 24 L 113 2 Q 120 24 113 39 Z', fill: FUR_SHADOW, 'data-cheshire-fragment': 'right-ear' }, catG),
+      addShape('path', { d: 'M 27 35 Q 42 19 65 19 Q 88 19 103 35 L 94 58 L 65 51 L 36 58 Z', fill: FUR, 'data-cheshire-fragment': 'brow' }, catG),
+      addShape('path', { d: 'M 16 38 L 39 31 L 66 50 L 59 92 Q 34 96 16 79 L 4 76 L 13 69 L 1 64 L 15 59 L 3 53 L 18 50 Z', fill: FUR_SHADOW, 'data-cheshire-fragment': 'left-cheek' }, catG),
+      addShape('path', { d: 'M 114 38 L 91 31 L 64 50 L 71 92 Q 96 96 114 79 L 126 76 L 117 69 L 129 64 L 115 59 L 127 53 L 112 50 Z', fill: FUR_HIGHLIGHT, 'data-cheshire-fragment': 'right-cheek' }, catG),
+      addShape('path', { d: 'M 35 51 L 65 46 L 95 51 L 106 75 Q 91 99 65 99 Q 39 99 24 75 Z', fill: FUR, 'data-cheshire-fragment': 'muzzle' }, catG)
+    ];
+
+    var detailsG = addShape('g', {}, catG);
+
+    // One strong perimeter keeps the assembled regions reading as a single compact
+    // silhouette at 48px; broad flat highlights preserve the sheet's upper-left light
+    // without gradients or filters.
+    addShape('path', {
+      d: 'M 17 39 Q 10 24 17 2 L 48 25 Q 56 18 65 21 Q 74 18 82 25 L 113 2 Q 120 24 113 39 L 112 50 L 127 53 L 115 59 L 129 64 L 117 69 L 126 76 L 112 79 Q 96 99 65 99 Q 34 99 18 79 L 4 76 L 13 69 L 1 64 L 15 59 L 3 53 L 18 50 Z',
+      fill: 'none', stroke: OUTLINE, 'stroke-width': '3.5', style: HAND_DRAWN
+    }, detailsG);
+    addShape('path', { d: 'M 18 5 L 43 27 L 25 20 L 22 35 Q 17 23 18 5 Z', fill: ACCENT }, detailsG);
+    addShape('path', { d: 'M 112 5 L 87 27 L 105 20 L 108 35 Q 113 23 112 5 Z', fill: ACCENT }, detailsG);
+    addShape('path', { d: 'M 20 40 Q 29 27 43 25 L 35 36 Q 25 39 18 51 Z', fill: FUR_HIGHLIGHT }, detailsG);
+    addShape('path', { d: 'M 93 34 Q 103 38 112 51 L 100 46 Z', fill: FUR_SHADOW }, detailsG);
+
+    // Three forehead marks copied from the canonical assembled head.
+    addShape('path', { d: 'M 39 25 L 51 31 L 55 48 L 45 38 Z', fill: ACCENT, stroke: OUTLINE, 'stroke-width': '1.4', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 58 20 L 66 31 L 65 50 L 61 35 Z', fill: ACCENT, stroke: OUTLINE, 'stroke-width': '1.4', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 76 24 L 71 35 L 70 50 L 81 31 L 91 25 L 83 38 Z', fill: ACCENT, stroke: OUTLINE, 'stroke-width': '1.4', style: HAND_DRAWN }, detailsG);
+
+    // Wide yellow almond eyes with vertical pupils survive at 48px.
+    addShape('path', { d: 'M 25 50 Q 38 35 55 48 Q 52 68 35 68 Q 27 63 25 50 Z', fill: EYE, stroke: OUTLINE, 'stroke-width': '3', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 105 50 Q 92 35 75 48 Q 78 68 95 68 Q 103 63 105 50 Z', fill: EYE, stroke: OUTLINE, 'stroke-width': '3', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 42 43 Q 47 52 42 65 Q 37 54 42 43 Z', fill: OUTLINE }, detailsG);
+    addShape('path', { d: 'M 88 43 Q 93 52 88 65 Q 83 54 88 43 Z', fill: OUTLINE }, detailsG);
+    addShape('circle', { cx: '37', cy: '47', r: '2', fill: '#FFFFFF' }, detailsG);
+    addShape('circle', { cx: '83', cy: '47', r: '2', fill: '#FFFFFF' }, detailsG);
+
+    addShape('path', { d: 'M 58 64 L 65 59 L 72 64 L 65 70 Z', fill: NOSE, stroke: OUTLINE, 'stroke-width': '2', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 24 66 L 2 61 M 23 71 L 0 72 M 25 76 L 5 83', fill: 'none', stroke: OUTLINE, 'stroke-width': '2', style: HAND_DRAWN }, detailsG);
+    addShape('path', { d: 'M 106 66 L 128 61 M 107 71 L 130 72 M 105 76 L 125 83', fill: 'none', stroke: OUTLINE, 'stroke-width': '2', style: HAND_DRAWN }, detailsG);
+
+    var grinG = document.createElementNS(NS, 'g');
+    grinG.setAttribute('data-cheshire-part', 'grin');
+    grinG.style.cssText = 'transform-box:fill-box;transform-origin:50% 50%;';
+    svg.appendChild(grinG);
+
+    // A single warm-ivory crescent plus five sturdy dividers makes six broad teeth. No
+    // glow -- see this function's own header comment.
+    addShape('path', {
+      d: 'M 20 66 Q 65 80 110 66 Q 103 92 65 95 Q 27 92 20 66 Z',
+      fill: TEETH, stroke: OUTLINE, 'stroke-width': '3.5', style: HAND_DRAWN
+    }, grinG);
+    addShape('path', {
+      d: 'M 35 70 L 38 88 M 49 73 L 51 92 M 65 75 L 65 94 M 81 73 L 79 92 M 95 70 L 92 88',
+      fill: 'none', stroke: OUTLINE, 'stroke-width': '2', style: HAND_DRAWN
+    }, grinG);
+
+    // Every Animation this beacon creates is collected here and hung off svg itself
+    // (the element cancelBeacons() actually selects, see the header comment above) --
+    // matching animateBoneAssembly's own track()/Promise.allSettled idiom for a figure
+    // built from many per-piece animations that settle at different times, rather than
+    // animateTrail's per-element .finished.then(remove), which would tear this figure
+    // down the instant its first (180ms) animation finished.
+    var anims = [];
+    function track(anim) { anims.push(anim); return anim; }
+
+    // 0-180ms: whole svg fades/scales in.
+    track(svg.animate([
+      { opacity: 0, transform: 'scale(0.9)' },
+      { opacity: 1, transform: 'scale(1)' }
+    ], { duration: 180 * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // 180-780ms: facial details recede, then six deterministic head regions separate
+    // along hand-authored vectors. No random/per-frame geometry (rule 11 of the
+    // promotion contract).
+    track(detailsG.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: 360 * durFactor, delay: 180 * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    var fragmentMotion = [
+      [-6, -7, -7], [6, -7, 7], [0, -8, 0],
+      [-8, 3, -5], [8, 3, 5], [0, 8, 0]
+    ];
+    fragments.forEach(function (fragment, index) {
+      var motion = fragmentMotion[index];
+      fragment.style.cssText = 'transform-box:fill-box;transform-origin:50% 50%;';
+      track(fragment.animate([
+        { opacity: 1, transform: 'translate(0,0) rotate(0deg)', offset: 0 },
+        { opacity: 1, transform: 'translate(0,0) rotate(0deg)', offset: 0.18 + index * 0.035 },
+        { opacity: 0, transform: 'translate(' + motion[0] + 'px,' + motion[1] + 'px) rotate(' + motion[2] + 'deg)', offset: 1 }
+      ], { duration: 600 * durFactor, delay: 180 * durFactor, easing: 'ease-in', fill: 'forwards' }));
+    });
+
+    // 180-900ms on #grin, as one animation so the 780ms pop composes with (rather than
+    // overwrites) the translate's held end value: 180-780 settles toward the match,
+    // 780-900 is the scale pop.
+    track(grinG.animate([
+      { transform: 'translate(0,0px) scale(1)', offset: 0, easing: 'ease-out' },
+      { transform: 'translate(0,' + drift + 'px) scale(1)', offset: 0.833, easing: 'ease-out' },
+      { transform: 'translate(0,' + drift + 'px) scale(1.12)', offset: 0.9167, easing: 'ease-in' },
+      { transform: 'translate(0,' + drift + 'px) scale(1)', offset: 1 }
+    ], { duration: 720 * durFactor, delay: 180 * durFactor, fill: 'forwards' }));
+
+    // 900-1500ms: #grin holds, then fades -- the grin outlasts the body, it does not
+    // persist (a permanent overlay would break the .oc-beacon-transient scroll-fade
+    // contract every other beacon effect honors).
+    track(grinG.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 1, offset: 0.2 },
+      { opacity: 0, offset: 1 }
+    ], { duration: 600 * durFactor, delay: 900 * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    svg.__waapiAnims = anims;
+
+    // Natural completion removes the svg only once EVERY animation has settled, the
+    // same Promise.allSettled reasoning animateBoneAssembly's own removeFig() uses.
+    // destroyBeacon() (above) still removes svg synchronously on cancel, cancelling
+    // every entry in __waapiAnims regardless of this promise.
+    function removeSvg() { svg.remove(); }
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeSvg);
   }
 
   function animateLightning(rect) {
