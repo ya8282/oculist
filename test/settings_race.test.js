@@ -502,6 +502,53 @@ test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, an
   }
 });
 
+// oculist-nq1x.14: parity with (c) above, but for seedHalloweenPack's own write instead
+// of seedDefaultBlocklist's. The (a)/(b)/(c) tests above all pre-set seededHalloweenPack:
+// true in their fixtures, which makes the chained seedHalloweenPack call a no-op and
+// means none of them ever exercise ITS failure branch — filed as oculist-nq1x.14 by the
+// oculist-nq1x.2 reviewer. This test leaves seededHalloweenPack unset (so the pack seed
+// actually attempts its write) and instead pre-seeds seededDefaultBlocklist: true, making
+// seedDefaultBlocklist itself the no-op — so the only set() this run makes is
+// seedHalloweenPack's, isolating the same single invariant (c) isolates for the other seed.
+test('(nq1x.14) seedHalloweenPack\'s own set() failing still completes onboarding without falsely setting the flag', async () => {
+  const backing = { 'oc-settings': { seededDefaultBlocklist: true } };
+  const errSpy = spyConsoleError();
+  let tabsCreateCalls = 0;
+
+  try {
+    const { fire, calls } = loadBackground({
+      backing,
+      hardwareConcurrency: 8,
+      setLastErrorOnCall: 1, // the only set() this run makes (seedDefaultBlocklist is a no-op)
+      onTabsCreate: () => { tabsCreateCalls++; },
+    });
+
+    fire({ reason: 'install' });
+    await flush(30);
+
+    assert.strictEqual(calls.set, 1, 'the set() must have been attempted exactly once (no blind retry on set failure): ' + JSON.stringify(calls));
+    assert.strictEqual(
+      backing['oc-settings'].seededHalloweenPack, undefined,
+      'a failed set() must not be treated as a successful write: ' + JSON.stringify(backing['oc-settings'])
+    );
+    assert.strictEqual(
+      tabsCreateCalls, 1,
+      'done must still fire exactly once — welcome tab opens exactly once despite the pack seed\'s write failure ' +
+      '(onboarding is judged more valuable than the seed write landing — see background.js\'s onInstalled comment)'
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('chrome.storage.sync.set failed')),
+      'the write failure must be surfaced via console.error: ' + JSON.stringify(errSpy.messages)
+    );
+    assert.ok(
+      errSpy.messages.some((m) => m.includes('seedHalloweenPack failed')),
+      'onInstalled\'s done callback must have received a truthy error argument from seedHalloweenPack: ' + JSON.stringify(errSpy.messages)
+    );
+  } finally {
+    errSpy.restore();
+  }
+});
+
 test('(e) the plain success path still calls done exactly once (no double-call from the new error branches)', async () => {
   // oculist-nq1x.2: seededHalloweenPack: true keeps the chained seedHalloweenPack call
   // (background.js's onInstalled runs it right after this one) a no-op, so the call
