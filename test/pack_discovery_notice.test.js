@@ -21,7 +21,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { waitForHalloweenSeedSettled } = require('./helpers/halloween_seed');
 
 const REAL_EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world, nothing else on this page.</p>';
@@ -575,6 +576,396 @@ describe('Pack discovery notice: chrome measurement happens at the bar\'s narrow
       `.oc-count must be sitting exactly on its min-width floor (${state.countMinWidth}px) when ` +
       `the pack-discovery notice is measured — got ${state.countWidth}px, meaning the bar was ` +
       'already wider than its narrowest possible state'
+    );
+  });
+});
+
+// oculist-nq1x.3: seedHalloweenPack() (extension/background.js, oculist-nq1x.2) now turns
+// the Halloween pack ON by default for every install — see maybeShowPackDiscoveryNotice()'s
+// own header comment (content.js) for why that makes the notice's original "a known pack
+// exists" gate too broad on its own: nudging toward a toggle that is already on teaches
+// nothing. The four describes below cover this bead's done-criteria one at a time.
+//
+// The first two need the REAL extension/content.js (not the 'seasonal'-patched fixture
+// createPackedFixtureExtension() above defines) — the thing under test is how a real,
+// already-shipped pack (halloween, boneassembly's own registry entry) interacts with the
+// seed, and reusing the fixture's synthetic pack for that would test the fixture instead of
+// the real registry. The last two still need a fixture (a genuine second pack doesn't exist
+// on the real tree yet) but layer it on top of the real halloween pack rather than
+// replacing it, so halloween stays enabled (via the real seed) while the fixture's own pack
+// stays the one thing left undiscovered.
+//
+// All four need raw CDP (evalInContentScript, same bridge as available_effects_malformed_
+// packs.test.js and boneassembly_effect.test.js) rather than page.evaluate(): settings.
+// enabledPacks and settings.packsNoticeDismissed are both content.js IIFE-internal closures,
+// invisible to the page's own main JS world.
+
+function evalInContentScriptFactory(getClient, getContextId) {
+  return function evalInContentScript(expression) {
+    return getClient()
+      .send('Runtime.evaluate', {
+        expression,
+        contextId: getContextId(),
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      .then((res) => {
+        if (res.exceptionDetails) {
+          throw new Error('content-script eval failed: ' + JSON.stringify(res.exceptionDetails));
+        }
+        return res.result.value;
+      });
+  };
+}
+
+const READ_DISMISSED_FLAG_EXPR =
+  "new Promise(function (resolve) {" +
+  "chrome.storage.sync.get('oc-settings', function (data) {" +
+  "resolve(!!(data && data['oc-settings'] && data['oc-settings'].packsNoticeDismissed));" +
+  "});" +
+  "})";
+
+describe('Pack discovery notice: default install with Halloween seeded on (oculist-nq1x.3)', () => {
+  let server, ctx, page, client, isolatedContextId, evalInContentScript;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    // channel:'chromium' is load-bearing — the default bundled build is the headless
+    // shell, which silently loads no extensions at all.
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${REAL_EXTENSION}`, `--load-extension=${REAL_EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    // Attach CDP and watch for execution-context creation *before* navigating, so the
+    // event for the content script's isolated world is never missed.
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
+    evalInContentScript = evalInContentScriptFactory(() => client, () => isolatedContextId);
+
+    // Real install on the real tree: knownPacks() returns only 'halloween' (boneassembly's
+    // real registry entry). Waits for background.js's seed write AND for content.js's own
+    // onChanged listener to apply it, so enabledPacks reliably contains 'halloween' before
+    // the assertions below run — see helpers/halloween_seed.js for why both halves matter.
+    await waitForHalloweenSeedSettled(evalInContentScript);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  test('the notice never appears, and settings.packsNoticeDismissed is still false afterwards', async () => {
+    await openFinder(page);
+
+    // Assert-absence: give it a real beat to (not) appear, same idiom as the sibling
+    // describes above, then confirm it stayed gone.
+    await page.waitForTimeout(500);
+    const noticeCount = await page.locator(NOTICE).count();
+    assert.strictEqual(
+      noticeCount,
+      0,
+      'the pack-discovery notice must not appear on a default install once every known pack ' +
+      '(halloween) is already enabled by the seed'
+    );
+
+    const dismissed = await evalInContentScript(READ_DISMISSED_FLAG_EXPR);
+    assert.strictEqual(
+      dismissed,
+      false,
+      'packsNoticeDismissed must stay false when the notice is merely suppressed (nothing left ' +
+      'to discover) — suppressed is not the same as answered, and flipping it here would wrongly ' +
+      'deny the notice forever to a user who later disables Halloween'
+    );
+  });
+});
+
+describe('Pack discovery notice: Halloween disabled by the user (oculist-nq1x.3)', () => {
+  let server, ctx, page, client, isolatedContextId, evalInContentScript;
+
+  before(async () => {
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${REAL_EXTENSION}`, `--load-extension=${REAL_EXTENSION}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
+    evalInContentScript = evalInContentScriptFactory(() => client, () => isolatedContextId);
+
+    await waitForHalloweenSeedSettled(evalInContentScript);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  // Same armSettingsEcho/waitForSettingsEcho/setSettings idiom as boneassembly_effect.
+  // test.js: a raw chrome.storage.sync.set doesn't itself prove content.js's module-private
+  // `settings` has picked the change up — only its own storage.onChanged listener does that,
+  // asynchronously. Without waiting for the echo, opening the overlay right after the write
+  // races that listener.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before) {
+    return waitForCondition(() => evalInContentScript('window.__ocSettingsEchoes'), (v) => v > before, {
+      timeout: POLL_TIMEOUT,
+      message: 'oc-settings change never echoed into the content script',
+    });
+  }
+
+  async function setSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var next = Object.assign({}, current, ' + JSON.stringify(patch) + ');' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
+  test('the notice appears on overlay open once the user turns Halloween back off', async () => {
+    // The seed already ran (halloween in enabledPacks); simulate the user turning it back
+    // off via the settings-panel toggle by writing enabledPacks straight to storage — same
+    // shape as availableEffects()'s own coercion, without going through the UI.
+    await setSettings({ enabledPacks: [] });
+
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+  });
+});
+
+describe('Pack discovery notice: a second, unenabled pack in the registry (oculist-nq1x.3)', () => {
+  let server, ctx, page, client, isolatedContextId, evalInContentScript, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
+    evalInContentScript = evalInContentScriptFactory(() => client, () => isolatedContextId);
+
+    // knownPacks() in this fixture returns both 'halloween' (the real boneassembly entry,
+    // untouched) and 'seasonal' (the fixture's patched cybervision entry). Waits for the
+    // real seed to enable 'halloween' specifically, so the assertion below is proven to be
+    // about the still-unenabled 'seasonal' pack, not a race against halloween's own seed.
+    await waitForHalloweenSeedSettled(evalInContentScript);
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test('the notice still appears, since a second known pack (seasonal) is not enabled', async () => {
+    await openFinder(page);
+    await page.waitForSelector(NOTICE, { timeout: POLL_TIMEOUT });
+  });
+});
+
+describe('Pack discovery notice: packsNoticeDismissed still wins over an undiscovered pack (oculist-nq1x.3)', () => {
+  let server, ctx, page, client, isolatedContextId, evalInContentScript, fixtureDir;
+
+  before(async () => {
+    fixtureDir = createPackedFixtureExtension();
+
+    server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+
+    ctx = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${fixtureDir}`, `--load-extension=${fixtureDir}`],
+      viewport: { width: 1280, height: 800 },
+    });
+
+    page = await ctx.newPage();
+
+    client = await ctx.newCDPSession(page);
+    await client.send('Page.enable');
+    await client.send('Runtime.enable');
+    client.on('Runtime.executionContextCreated', (event) => {
+      const c = event.context;
+      if (c.auxData && c.auxData.type === 'isolated' && c.origin && c.origin.indexOf('chrome-extension://') === 0) {
+        isolatedContextId = c.id;
+      }
+    });
+
+    await page.goto(origin);
+    await waitForCondition(() => isolatedContextId, Boolean, {
+      timeout: POLL_TIMEOUT,
+      message: 'never observed the content script isolated execution context',
+    });
+    evalInContentScript = evalInContentScriptFactory(() => client, () => isolatedContextId);
+
+    // Same fixture as the describe above: 'seasonal' stays unenabled even once the real
+    // seed lands, so — absent this describe's own dismissal write — the notice would be
+    // eligible to show on the new "an undiscovered pack still exists" gate alone. This
+    // describe proves settings.packsNoticeDismissed still gates ahead of that.
+    await waitForHalloweenSeedSettled(evalInContentScript);
+
+    await setSettings({ packsNoticeDismissed: true });
+  });
+
+  after(async () => {
+    if (ctx) await ctx.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (fixtureDir) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  // Same armSettingsEcho/waitForSettingsEcho/setSettings idiom as the "Halloween disabled
+  // by the user" describe above (and boneassembly_effect.test.js): a raw
+  // chrome.storage.sync.set doesn't itself prove content.js's module-private `settings` has
+  // picked the change up — only its own storage.onChanged listener does that, asynchronously.
+  // waitForSettingsEcho()'s counter only increments from inside that listener, so it proves
+  // the write has been APPLIED to content.js's in-memory settings, not merely that
+  // chrome.storage.sync now holds it — without this, opening the overlay right after the
+  // write races that listener.
+  async function armSettingsEcho() {
+    return evalInContentScript(`
+      (function () {
+        if (!window.__ocSettingsEchoInstalled) {
+          window.__ocSettingsEchoInstalled = true;
+          window.__ocSettingsEchoes = 0;
+          chrome.storage.onChanged.addListener(function (changes) {
+            if (changes['oc-settings']) window.__ocSettingsEchoes++;
+          });
+        }
+        return window.__ocSettingsEchoes;
+      })()
+    `);
+  }
+
+  async function waitForSettingsEcho(before) {
+    return waitForCondition(() => evalInContentScript('window.__ocSettingsEchoes'), (v) => v > before, {
+      timeout: POLL_TIMEOUT,
+      message: 'oc-settings change never echoed into the content script',
+    });
+  }
+
+  async function setSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var next = Object.assign({}, current, ' + JSON.stringify(patch) + ');' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
+  test('the notice never appears once packsNoticeDismissed is true, even with an undiscovered pack present', async () => {
+    await openFinder(page);
+
+    await page.waitForTimeout(500);
+    const noticeCount = await page.locator(NOTICE).count();
+    assert.strictEqual(
+      noticeCount,
+      0,
+      'packsNoticeDismissed must suppress the notice unconditionally, ahead of the ' +
+      '"an undiscovered pack exists" check'
     );
   });
 });

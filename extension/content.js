@@ -5607,11 +5607,23 @@
   }
 
   // Called once per overlay open (window.__ocToggle()'s build branch, below). A no-op
-  // once settings.packsNoticeDismissed is true, or while no registry entry carries a
-  // `pack` yet (knownPacks() empty — true for every existing user today) — see
-  // oculist-tdj.2's knownPacks() for why "a pack exists" and "a pack is enabled" are
-  // deliberately different questions; this gates on the former; the settings-panel
-  // toggle itself gates on the latter.
+  // once settings.packsNoticeDismissed is true (the user has already answered — neither
+  // "does a pack exist" nor "is a pack enabled"), while no registry entry carries a
+  // `pack` yet (knownPacks() empty below — "does a pack exist"), or — oculist-nq1x.3 —
+  // while every known pack is already enabled (the loop below — "is a pack enabled").
+  // See oculist-tdj.2's knownPacks() for why those last two are deliberately different
+  // questions; the settings-panel toggle itself reads the latter too.
+  //
+  // oculist-nq1x.3: seedHalloweenPack() (extension/background.js, oculist-nq1x.2) turns
+  // the Halloween pack ON by default for every install, existing and fresh alike — the
+  // human chose that over leaving it opt-in. With Halloween pre-enabled, this notice
+  // would otherwise nudge every one of those users toward a toggle that is already on:
+  // an interruption that teaches them nothing and costs a dismissal for free. The notice
+  // itself stays — a future pack may still ship off by default, and a user who turns
+  // Halloween back off is exactly who this still serves — it just no longer fires for a
+  // pack that has nothing left to discover. Only suppresses the notice; does NOT set
+  // settings.packsNoticeDismissed (that would wrongly answer the prompt for a user who
+  // never saw it, permanently hiding it once they later disable the pack).
   //
   // Appended into wrapRoot (the overlay's own shadow root) like showNotice()'s noticeEl
   // above — never document.body — so this can't reflow the host page or be reached by
@@ -5620,7 +5632,23 @@
   // stay put (this notice is announced via role="status" instead — see below).
   function maybeShowPackDiscoveryNotice() {
     if (!wrapRoot || packNoticeEl || settings.packsNoticeDismissed) return;
-    if (knownPacks().length === 0) return;
+    var known = knownPacks();
+    if (known.length === 0) return;
+
+    // Same non-array guard as availableEffects() (oculist-nq1x.1): settings.enabledPacks
+    // can be a malformed stored value (a string, a number, null, an object) rather than
+    // an array. Degrading that to "nothing enabled" here means a malformed value makes
+    // every known pack count as undiscovered — the notice stays eligible to show rather
+    // than a corrupt value silently suppressing it forever.
+    var enabled = Array.isArray(settings.enabledPacks) ? settings.enabledPacks : [];
+    var hasUndiscoveredPack = false;
+    for (var i = 0; i < known.length; i++) {
+      if (enabled.indexOf(known[i]) === -1) {
+        hasUndiscoveredPack = true;
+        break;
+      }
+    }
+    if (!hasUndiscoveredPack) return;
 
     packNoticeEl = document.createElement('div');
     packNoticeEl.className = 'oc-pack-notice';
