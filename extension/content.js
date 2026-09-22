@@ -822,6 +822,7 @@
     // naive `[^']*` scan with no escape awareness, and an escaped straight apostrophe here
     // truncates its capture at "Jack-o\" (verified), breaking every site's label match.
     effectJackOLantern: 'Jack-o’-Lantern Flicker',
+    effectHorseman: 'Galloping Throw',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -937,7 +938,8 @@
     boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' },
     flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' },
     cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' },
-    jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' }
+    jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
+    horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -3780,6 +3782,533 @@
     // entry in __waapiAnims regardless of this promise.
     function removePumpkin() { pumpkinEl.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removePumpkin);
+  }
+
+  // oculist-nq1x.6: promotes fxHorseman (artifacts/prototypes/effects-playground.html, the
+  // accepted design from oculist-1ta.7's user-approved strict-spec redesign and oculist-
+  // 1ta.31's pumpkin-as-head refinement) into the shipped beacon contract, the fifth entry
+  // in the Halloween pack. A silhouetted rider gallops in, rears, hurls a blazing jack-o'-
+  // lantern at the match, and rides off; the pumpkin rides at the rider's collar as its own
+  // head through the gallop and rear (oculist-1ta.31's own signature beat) and only becomes
+  // a projectile at the throw, leaving the collar empty for the exit. The burst is four
+  // amber bands whose inner edges stop exactly at the match's own glyph box (oculist-1ta.7's
+  // own accepted redesign), and the exit lifts the whole sprite above the match before
+  // crossing it -- both carried forward from the prototype unchanged.
+  //
+  // Fixed identity palette (the promotion contract's own license, "the pumpkin's orange"):
+  // no neighbouring shipped character effect (Bone Assembly, Flappy, Cheshire, Jack-o'-
+  // Lantern) has established an accessibility-accent precedent that applies here, and (like
+  // Jack-o'-Lantern's own shell and Cheshire's own fur) this effect has no separate flash
+  // element to carry getEffectiveColors().beacon as an accent -- the burst bands are the
+  // character's own fire, not a UI accent.
+  //
+  // Lite Mode (rule 7 of the promotion contract): a no-op, the same reasoning
+  // animateCheshire's own header comment gives for itself -- this effect has no filter, no
+  // box-shadow, and no glow anywhere in its art or its burst; every opacity swap (gallop,
+  // rear, throw, exit) is the effect's own defining beat, not a decorative flicker, so
+  // there is nothing here that fits the "drop glows/box-shadows/multi-state flicker" cut.
+  // settings.performanceMode is deliberately never read below.
+  function animateHorseman(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+
+    var INK = '#18263c';
+    var MID = '#243754';
+    var COOL = '#3f5d82';
+    var COOL_LIGHT = '#7892b5';
+    var AMBER = '#c86b2a';
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // ── Local art coordinates (one 240x160 grid, authored facing +x/right; the complete
+    // frame is mirrored when staging on the right). SPRITE_H carries getBeaconScale() (rule
+    // 6) BEFORE any placement/clearance math below is derived from it -- SCALE, SPRITE_W,
+    // GAP_CLEAR, stageNeed, and every downstream position all flow from this one root value,
+    // the same "scale before computing placement" discipline animateJackOLantern's own
+    // frameScale uses, so nothing downstream can independently forget the multiply (the
+    // defect class that hit animateFlappy: a placement offset computed from the UNSCALED
+    // sprite height while a separate transform scaled around the centre). There is also no
+    // second, independently-scaled coordinate space to double-scale by accident (the defect
+    // class that hit animateCheshire): every pixel size below (SPRITE_W/H, HEAD_SIZE,
+    // PUMPKIN_SIZE) is multiplied by beaconScale exactly once, at its own declaration. ──
+    var VB_W = 240, VB_H = 160;
+    var SPRITE_H = 100 * beaconScale;
+    var SCALE = SPRITE_H / VB_H;
+    var SPRITE_W = VB_W * SCALE;
+
+    function poly(points, parent, fill) {
+      var el = document.createElementNS(NS, 'polygon');
+      el.setAttribute('points', points);
+      el.setAttribute('fill', fill || INK);
+      parent.appendChild(el);
+      return el;
+    }
+    function ellipse(cx, cy, rx, ry, parent, fill, detail) {
+      var el = document.createElementNS(NS, 'ellipse');
+      el.setAttribute('cx', cx); el.setAttribute('cy', cy);
+      el.setAttribute('rx', rx); el.setAttribute('ry', ry);
+      el.setAttribute('fill', fill || INK);
+      if (detail) el.setAttribute('data-horseman-detail', detail);
+      parent.appendChild(el);
+      return el;
+    }
+    function path(d, parent, fill, detail) {
+      var el = document.createElementNS(NS, 'path');
+      el.setAttribute('d', d);
+      el.setAttribute('fill', fill || INK);
+      if (detail) el.setAttribute('data-horseman-detail', detail);
+      parent.appendChild(el);
+      return el;
+    }
+    function group(parent) {
+      var g = document.createElementNS(NS, 'g');
+      if (parent) parent.appendChild(g);
+      return g;
+    }
+
+    // Horse and rider common core -- authored once, then cloned for the normal and rear
+    // assemblies so both copies are byte-identical. Verbatim from the prototype.
+    function addCore(g) {
+      path('M104 37 C88 34 78 40 68 43 C52 43 38 37 22 32 C34 45 49 51 67 53 C51 56 35 53 18 47 C34 62 57 66 79 59 C66 67 50 69 34 65 C51 76 78 70 101 57 Z', g, INK, 'cape');
+      path('M98 41 C82 39 70 47 57 49 C44 49 35 46 27 43 C40 54 58 59 77 55 C65 62 54 64 45 63 C61 67 78 63 96 54 Z', g, MID);
+      path('M92 43 C78 43 68 49 58 51 C47 52 40 50 34 48 C45 55 60 57 75 54 C67 59 61 61 54 62 C69 62 82 57 94 51 Z', g, COOL);
+
+      path('M47 82 C34 71 22 66 8 68 C18 75 29 81 42 85 C28 83 17 87 6 94 C21 94 35 94 49 92 Z', g, INK);
+      path('M48 88 C34 86 19 94 6 107 C23 101 37 99 52 95 Z', g, MID);
+      path('M44 80 C32 69 21 63 10 62 C22 72 33 78 45 87 Z', g, COOL);
+
+      path('M45 84 C49 74 60 67 75 65 C90 63 105 67 120 68 C141 68 161 73 176 83 C181 89 177 98 168 103 C149 109 127 110 104 107 L84 105 C65 106 50 100 45 92 Z', g, INK);
+      path('M49 83 C53 72 65 67 78 67 C68 72 62 80 61 91 C61 97 66 101 73 104 C58 103 49 97 47 91 Z', g, MID, 'haunch');
+      path('M56 79 C63 72 72 69 84 68 C72 75 68 84 68 95 C60 91 56 86 56 79 Z', g, COOL);
+      path('M77 72 C99 67 126 70 146 74 C130 77 113 80 94 82 C85 81 80 77 77 72 Z', g, MID);
+      path('M137 73 C155 74 170 78 177 85 C179 91 175 98 166 102 C166 91 156 82 143 79 Z', g, MID, 'shoulder');
+      path('M151 77 C164 78 172 82 175 87 C174 93 171 97 166 99 C165 89 159 82 151 77 Z', g, COOL);
+      path('M88 101 C108 104 132 104 151 100 C137 108 104 112 82 105 Z', g, COOL);
+
+      path('M157 90 C164 73 174 57 188 47 C198 40 211 39 222 46 L235 56 C239 61 236 67 231 70 L220 72 C214 71 209 66 205 63 L197 60 C188 70 184 84 178 99 Z', g, INK);
+      path('M164 88 C172 68 183 53 198 46 C187 59 181 76 179 94 Z', g, MID);
+      path('M170 83 C178 64 187 51 199 47 C190 60 186 72 182 89 Z', g, COOL);
+      path('M176 73 C182 58 189 51 198 47 C190 58 187 67 184 78 Z', g, COOL_LIGHT);
+      path('M185 55 C179 50 177 45 176 40 C183 43 188 47 190 50 C187 44 188 38 188 34 C194 39 198 43 199 48 C199 41 202 36 204 32 C208 39 210 43 209 48 C211 43 215 40 218 38 C218 44 217 48 214 51 Z', g, MID, 'mane-lock');
+      path('M188 52 C185 47 184 43 184 39 C190 43 193 46 194 50 Z', g, COOL);
+      path('M202 48 C203 42 206 38 208 35 C211 41 211 45 210 49 Z', g, COOL);
+      poly('207,44 212,30 218,45', g, INK);
+      poly('217,47 223,35 226,50', g, INK);
+      path('M204 55 C211 48 221 48 228 52 L237 58 L234 67 L224 71 L214 67 L209 62 Z', g, MID);
+      path('M213 63 C220 66 228 65 235 61 L234 67 L224 71 L216 68 Z', g, COOL, 'jaw');
+      path('M230 59 C234 58 237 60 236 63 C233 62 231 62 229 63 Z', g, '#0b1220', 'nostril');
+      ellipse(214, 53, 3, 2.2, g, '#f59e0b');
+      ellipse(214.4, 52.6, 1.1, 0.8, g, '#fff06a');
+
+      path('M86 72 C98 67 117 66 130 69 L144 78 L136 88 C122 91 104 91 89 87 Z', g, COOL);
+      path('M93 76 C106 72 123 72 136 79 L130 86 C118 87 105 86 96 84 Z', g, MID);
+      path('M96 64 L94 43 C96 36 101 31 107 28 L119 28 C125 31 130 37 132 44 L132 63 C129 70 124 75 116 77 L104 74 C100 72 98 68 96 64 Z', g, INK);
+      path('M98 45 C101 37 105 32 112 30 L108 48 L111 62 L102 65 C99 57 98 50 98 45 Z', g, COOL);
+      path('M112 31 L118 42 L111 51 L104 37 Z', g, MID, 'lapel');
+      path('M118 31 L128 40 L121 51 L116 42 Z', g, COOL);
+      path('M101 35 L108 27 L122 27 L128 34 L122 42 L116 34 L109 42 Z', g, AMBER);
+      path('M105 32 L111 27 L120 27 L124 32 L119 34 L111 34 Z', g, '#05070c');
+      path('M95 61 L104 68 L103 80 L94 91 C94 82 95 72 95 61 Z', g, INK);
+      path('M123 64 L132 70 L132 85 L121 79 Z', g, MID);
+      path('M98 64 L104 69 L101 78 L96 83 Z', g, COOL);
+      path('M94 53 L100 51 L126 51 L132 54 L130 59 L96 58 Z', g, AMBER);
+      path('M110 52 L118 52 L119 58 L111 58 Z', g, '#e8a24a', 'belt-buckle');
+      path('M115 72 C123 74 130 80 134 87 L143 99 L137 104 L128 96 L119 86 L110 80 Z', g, INK);
+      path('M122 78 C129 83 134 90 138 97 L134 99 C129 92 124 87 117 83 Z', g, COOL);
+      path('M136 98 C141 99 145 100 148 103 L144 108 L132 106 C132 102 133 100 136 98 Z', g, MID, 'rider-boot');
+      path('M136 100 L145 102 L142 105 L134 104 Z', g, COOL_LIGHT);
+    }
+    function addLegsExtended(g) {
+      path('M78 98 C85 98 91 102 92 108 C84 113 76 119 69 125 L48 141 L35 141 C34 138 35 135 39 132 L59 114 C65 106 70 101 78 98 Z', g, MID);
+      path('M63 113 C67 111 72 114 73 118 C68 124 61 132 53 139 L46 138 C51 128 56 119 63 113 Z', g, COOL);
+      path('M74 97 C82 98 88 103 89 109 C84 117 78 124 72 131 L63 146 L48 147 C44 145 44 142 48 139 L58 121 C61 111 66 103 74 97 Z', g, INK);
+      path('M61 121 C65 117 70 118 73 122 C69 130 65 137 61 144 L54 144 C56 136 58 128 61 121 Z', g, COOL, 'leg-joint');
+      path('M47 141 C52 140 59 140 64 143 L61 149 L45 149 C42 147 43 144 47 141 Z', g, COOL_LIGHT, 'hoof-plane');
+
+      path('M142 98 C150 96 157 99 162 104 C168 113 177 121 188 128 L201 136 C202 139 200 142 196 143 L184 139 L170 128 C160 121 151 114 144 108 Z', g, MID);
+      path('M158 105 C163 104 167 107 168 112 C174 119 182 126 190 132 L185 137 C176 131 168 124 160 116 Z', g, COOL);
+      path('M149 96 C157 97 163 101 167 108 C175 119 184 129 196 137 L220 144 C223 147 220 151 216 152 L201 149 L181 139 C172 133 163 125 155 116 L145 109 Z', g, INK);
+      path('M174 120 C179 118 184 121 185 126 C191 134 200 139 208 143 L204 148 C193 144 183 137 176 130 Z', g, COOL, 'leg-joint');
+      path('M201 145 C208 143 217 144 222 147 C221 151 218 153 213 153 L200 150 Z', g, COOL_LIGHT, 'hoof-plane');
+    }
+    function addLegsGathered(g) {
+      path('M77 98 C85 98 91 102 92 108 C88 114 85 119 84 123 C89 125 95 128 100 132 C99 136 96 139 91 140 C82 135 75 130 70 124 C67 117 68 105 77 98 Z', g, MID);
+      path('M80 113 C84 111 88 113 89 117 C88 122 88 125 91 128 L86 132 C80 127 77 121 80 113 Z', g, COOL, 'leg-joint');
+      path('M71 98 C79 98 85 102 87 108 C81 115 75 121 70 126 C72 133 77 139 81 143 C79 147 75 149 69 149 C61 141 57 131 56 123 C59 113 62 104 71 98 Z', g, INK);
+      path('M65 121 C69 119 74 121 75 126 C74 133 77 138 80 142 L74 145 C67 138 64 130 65 121 Z', g, COOL);
+      path('M68 143 C73 140 80 141 83 145 C80 149 76 151 69 151 C65 149 65 146 68 143 Z', g, COOL_LIGHT, 'hoof-plane');
+
+      path('M144 98 C152 97 159 101 161 107 C158 114 153 119 147 123 L137 133 C132 134 127 131 124 127 C128 121 133 116 139 111 Z', g, MID);
+      path('M143 111 C148 109 153 111 154 115 C149 122 144 127 138 131 L133 128 C136 122 139 116 143 111 Z', g, COOL, 'leg-joint');
+      path('M151 98 C160 99 166 104 168 111 C172 116 176 121 178 126 C175 135 171 143 164 149 L151 149 C148 146 149 143 153 140 C156 133 158 127 160 122 C155 118 149 114 144 110 Z', g, INK);
+      path('M160 119 C165 117 170 120 171 125 C169 133 166 140 162 145 L155 145 C159 136 161 128 160 119 Z', g, COOL);
+      path('M151 144 C157 141 165 142 168 146 C166 150 162 152 154 152 C150 150 149 147 151 144 Z', g, COOL_LIGHT, 'hoof-plane');
+    }
+    function addArmDown(g) {
+      path('M102 41 C97 42 93 46 92 51 C95 58 99 64 104 69 L113 64 C109 58 107 51 108 45 Z', g, MID);
+      path('M97 49 C99 46 102 45 106 46 C104 52 106 58 110 63 L105 65 C100 60 98 55 97 49 Z', g, COOL);
+      path('M121 40 C127 40 132 43 136 48 L147 59 L143 66 C136 63 129 59 123 55 C120 50 119 45 121 40 Z', g, INK);
+      path('M138 58 L147 57 L151 62 L144 68 L138 65 Z', g, AMBER, 'cuff');
+      path('M146 58 C151 57 155 59 156 63 C153 67 148 68 143 66 Z', g, COOL_LIGHT, 'glove');
+    }
+    function addArmCocked(g) {
+      path('M102 41 C97 42 93 46 92 51 C95 58 99 64 104 69 L113 64 C109 58 107 51 108 45 Z', g, MID);
+      path('M121 42 C126 41 131 39 133 35 C130 29 126 23 121 20 L114 22 C111 28 108 35 108 41 L113 47 Z', g, INK);
+      path('M117 23 C120 20 124 20 127 23 C129 28 131 32 132 36 L126 39 C123 33 120 28 117 23 Z', g, COOL);
+      path('M113 22 L110 16 L115 12 L121 15 L123 22 L119 26 Z', g, AMBER, 'cuff');
+      path('M111 16 C111 12 114 9 118 9 C122 11 123 14 121 18 C118 20 114 19 111 16 Z', g, COOL_LIGHT, 'glove');
+    }
+    function addArmThrow(g) {
+      path('M102 41 C97 42 93 46 92 51 C95 58 99 64 104 69 L113 64 C109 58 107 51 108 45 Z', g, MID);
+      path('M120 40 C126 38 131 35 137 33 L157 23 C165 20 174 19 181 20 L187 25 C181 30 174 33 165 33 L145 41 L132 52 C126 50 122 46 120 40 Z', g, INK);
+      path('M132 37 C142 32 151 27 160 24 C167 22 174 22 179 23 C171 26 164 29 157 31 L138 44 Z', g, COOL);
+      path('M176 20 L183 19 L188 24 L183 30 L177 28 Z', g, AMBER, 'cuff');
+      path('M183 18 C187 16 190 17 190 20 L187 23 L192 21 L193 24 L188 27 L193 28 L191 31 L184 30 L180 26 Z', g, COOL_LIGHT, 'glove');
+    }
+
+    // ── Rear pose: one static SVG rotate() around the hind hoof -- pre-authored, not
+    // animated, so "rearing" is free (the usual opacity swap other frames already use). ──
+    var PIVOT_X = 55, PIVOT_Y = 140;
+    var REAR_ANGLE_DEG = -24;
+    var REAR_TRANSFORM = 'rotate(' + REAR_ANGLE_DEG + ' ' + PIVOT_X + ' ' + PIVOT_Y + ')';
+    var REAR_RAD = REAR_ANGLE_DEG * Math.PI / 180;
+    var cosA = Math.cos(REAR_RAD), sinA = Math.sin(REAR_RAD);
+    function rotPt(x, y) {
+      var dx = x - PIVOT_X, dy = y - PIVOT_Y;
+      return [PIVOT_X + dx * cosA - dy * sinA, PIVOT_Y + dx * sinA + dy * cosA];
+    }
+    var HAND_THROW_LOCAL = [186, 25]; // matches addArmThrow's release tip
+    var HEAD_LOCAL = [114, 19]; // bottom of the head meets the y=33 collar
+    var HEAD_SIZE = 18 * beaconScale;
+
+    // ── Viewport-space fit decision + travel geometry (rule 2 of the promotion contract):
+    // vw and every value below derived from `rect` (the PRE-SCROLL viewport rect animate()
+    // hands in) stay in viewport pixels through this whole block -- direction, GAP_CLEAR/
+    // stageNeed, and every travel/rear/exit position, exactly as the prototype computes
+    // them. Nothing here is a final CSS position yet: SCROLL_X/SCROLL_Y (below) are added
+    // exactly once, at the point each value is actually written into a path string or a
+    // left/top -- animateFlappy's own endX/endY precedent for an offset-path effect. ──
+    var vw = window.innerWidth;
+    var mcx = rect.left + rect.width / 2; // viewport space
+    var GAP_CLEAR = SPRITE_W * 0.8;
+    var stageNeed = SPRITE_W / 2 + GAP_CLEAR;
+    var direction = rect.left >= stageNeed || rect.left >= vw - rect.right ? 1 : -1;
+    var startX = direction > 0 ? -SPRITE_W : vw + SPRITE_W; // viewport space
+    var endX = direction > 0 ? vw + SPRITE_W : -SPRITE_W; // viewport space
+    var CENTER_Y = rect.top + rect.height * 0.3; // viewport space
+    var rearX = direction > 0
+      ? rect.left - GAP_CLEAR
+      : Math.min(rect.right + GAP_CLEAR, vw - SPRITE_W / 2); // viewport space
+    var pathLen = Math.abs(endX - startX);
+    var pctAtRear = Math.abs(rearX - startX) / pathLen * 100; // dimensionless ratio, no scroll term
+
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+    var pathStr = 'M ' + (startX + SCROLL_X) + ' ' + (CENTER_Y + SCROLL_Y) +
+      ' L ' + (endX + SCROLL_X) + ' ' + (CENTER_Y + SCROLL_Y); // document space
+
+    var outer = document.createElement('div');
+    outer.className = 'oc-beacon oc-beacon-transient';
+    outer.setAttribute('data-horseman-direction', direction > 0 ? 'normal' : 'mirrored');
+    outer.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + SPRITE_W + 'px', 'height:' + SPRITE_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
+      'opacity:1'
+    ].join(';');
+    document.documentElement.appendChild(outer);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(SPRITE_W));
+    svg.setAttribute('height', String(SPRITE_H));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.setAttribute('data-horseman-role', 'sprite');
+    svg.style.cssText = 'display:block;overflow:visible;' + (direction < 0 ? 'transform:scaleX(-1);' : '');
+    outer.appendChild(svg);
+
+    var coreTemplate = group();
+    coreTemplate.setAttribute('data-horseman-part', 'core');
+    addCore(coreTemplate);
+    var coreNormal = coreTemplate.cloneNode(true);
+    svg.appendChild(coreNormal);
+    var legsGallopA = group(svg);
+    legsGallopA.setAttribute('data-horseman-part', 'legs-extended');
+    addLegsExtended(legsGallopA);
+    var legsGallopB = group(svg);
+    legsGallopB.setAttribute('data-horseman-part', 'legs-gathered');
+    addLegsGathered(legsGallopB);
+    var armDown = group(svg);
+    armDown.setAttribute('data-horseman-part', 'arm-down');
+    addArmDown(armDown);
+
+    var coreRear = group(svg);
+    coreRear.setAttribute('transform', REAR_TRANSFORM);
+    coreRear.appendChild(coreTemplate.cloneNode(true));
+    var legsRear = group(coreRear);
+    legsRear.setAttribute('data-horseman-part', 'legs-extended-rear');
+    addLegsExtended(legsRear); // exact extended group, rotated with the shared core
+    var armCocked = group(svg);
+    armCocked.setAttribute('data-horseman-part', 'arm-cocked');
+    armCocked.setAttribute('transform', REAR_TRANSFORM);
+    addArmCocked(armCocked);
+    var armThrow = group(svg);
+    armThrow.setAttribute('data-horseman-part', 'arm-throw');
+    armThrow.setAttribute('transform', REAR_TRANSFORM);
+    addArmThrow(armThrow);
+
+    legsGallopB.style.opacity = '0';
+    coreRear.style.opacity = '0';
+    armCocked.style.opacity = '0';
+    armThrow.style.opacity = '0';
+
+    // ── Timeline (ms), scaled through durFactor (rule 6) at every duration/delay below --
+    // every boundary here stays a RAW, unscaled constant, used only for offset RATIOS
+    // (offset = time/DUR) and iteration counts, both invariant under a uniform durFactor
+    // multiply of both the numerator and denominator -- the same reasoning
+    // animateJackOLantern's own stateFrames() comment gives for its own FLICKER_DUR. ──
+    var ENTRY_DUR = 850;
+    var RISE_START = ENTRY_DUR;
+    var REAR_RISE_DUR = 160;
+    var RISE_END = RISE_START + REAR_RISE_DUR;
+    var REAR_HOLD_DUR = 130;
+    var LAUNCH_T = RISE_END + REAR_HOLD_DUR;
+    var THROW_DUR = 90;
+    var SETTLE_START = LAUNCH_T + THROW_DUR;
+    var REAR_SETTLE_DUR = 150;
+    var SETTLE_END = SETTLE_START + REAR_SETTLE_DUR;
+    var PUMPKIN_FLIGHT_DUR = 420;
+    var burstStart = LAUNCH_T + PUMPKIN_FLIGHT_DUR;
+    var BURST_DUR = 320;
+    var burstEnd = burstStart + BURST_DUR;
+    // Exit motion never resumes before the burst has fully finished (not just started) --
+    // measured (oculist-1ta.7): resuming translation while the burst was still fading let
+    // the horse's own dark silhouette sweep back into the match's rect mid-fade, compounding
+    // a second luminance dip on top of the burst's own. Waiting for burstEnd keeps the two
+    // events cleanly sequential instead of overlapping.
+    var EXIT_RESUME_T = Math.max(SETTLE_END, burstEnd);
+    var EXIT_LIFT_DUR = 100;
+    var EXIT_TRAVEL_T = EXIT_RESUME_T + EXIT_LIFT_DUR;
+    var EXIT_DUR = 850;
+    var horseExitEnd = EXIT_TRAVEL_T + EXIT_DUR;
+    var DUR = Math.max(horseExitEnd, burstEnd) + 60;
+
+    var PERIOD = 150;
+    var entryIter = ENTRY_DUR / PERIOD;
+    var exitIter = EXIT_DUR / PERIOD;
+    var galA = [
+      { opacity: 1, offset: 0 }, { opacity: 1, offset: 0.49 },
+      { opacity: 0, offset: 0.5 }, { opacity: 0, offset: 1 }
+    ];
+    var galB = [
+      { opacity: 0, offset: 0 }, { opacity: 0, offset: 0.49 },
+      { opacity: 1, offset: 0.5 }, { opacity: 1, offset: 1 }
+    ];
+
+    // Every WAAPI animation this beacon creates -- including on the many child <g>/<div>
+    // nodes below -- is collected here and hung off `outer` (one of the elements
+    // cancelBeacons() actually selects), the same track()/Promise.allSettled idiom
+    // animateCheshire's own header comment describes (rule 4/5 of the promotion contract).
+    var outerAnims = [];
+    function trackOuter(a) { outerAnims.push(a); return a; }
+
+    trackOuter(legsGallopA.animate(galA, { duration: PERIOD * durFactor, iterations: entryIter, fill: 'forwards' }));
+    trackOuter(legsGallopB.animate(galB, { duration: PERIOD * durFactor, iterations: entryIter, fill: 'forwards' }));
+    // Fade the gallop legs out in the SAME window, on the SAME schedule, as coreNormal
+    // below -- they are coreNormal's own legs, not coreRear's (which bakes its own legs
+    // into addLegsExtended(coreRear) above, fading in at exactly coreRear's own opacity).
+    trackOuter(legsGallopA.animate([{ opacity: 0 }, { opacity: 0 }], { duration: 40 * durFactor, delay: RISE_START * durFactor, fill: 'forwards' }));
+    trackOuter(legsGallopB.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: RISE_START * durFactor, fill: 'forwards' }));
+    // Standing/settled legs: coreRear's rotated legs fade out at SETTLE_START, but the
+    // gallop-cycle legs below don't resume until EXIT_RESUME_T (after the throw's flight
+    // and burst finish) -- without this the horse stood there legless for that stretch.
+    trackOuter(legsGallopB.animate([{ opacity: 1 }, { opacity: 1 }], { duration: 1 * durFactor, delay: SETTLE_START * durFactor, fill: 'forwards' }));
+    trackOuter(legsGallopA.animate(galA, { duration: PERIOD * durFactor, delay: EXIT_TRAVEL_T * durFactor, iterations: exitIter, fill: 'forwards' }));
+    trackOuter(legsGallopB.animate(galB, { duration: PERIOD * durFactor, delay: EXIT_TRAVEL_T * durFactor, iterations: exitIter, fill: 'forwards' }));
+
+    trackOuter(coreNormal.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: RISE_START * durFactor, fill: 'forwards' }));
+    trackOuter(armDown.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: RISE_START * durFactor, fill: 'forwards' }));
+    trackOuter(coreNormal.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 40 * durFactor, delay: SETTLE_START * durFactor, fill: 'forwards' }));
+    trackOuter(armDown.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 40 * durFactor, delay: SETTLE_START * durFactor, fill: 'forwards' }));
+
+    trackOuter(coreRear.animate([{ opacity: 0 }, { opacity: 1 }], { duration: REAR_RISE_DUR * durFactor, delay: RISE_START * durFactor, easing: 'ease-out', fill: 'forwards' }));
+    trackOuter(coreRear.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: SETTLE_START * durFactor, fill: 'forwards' }));
+
+    trackOuter(armCocked.animate([{ opacity: 0 }, { opacity: 1 }], { duration: REAR_RISE_DUR * durFactor, delay: RISE_START * durFactor, easing: 'ease-out', fill: 'forwards' }));
+    // The reaching arm cuts to the throw arm at the same instant the head detaches and
+    // appears at the release hand.
+    trackOuter(armCocked.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1 * durFactor, delay: (RISE_END - 1) * durFactor, fill: 'forwards' }));
+    trackOuter(armThrow.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1 * durFactor, delay: (RISE_END - 1) * durFactor, fill: 'forwards' }));
+    trackOuter(armThrow.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: SETTLE_START * durFactor, fill: 'forwards' }));
+
+    trackOuter(outer.animate([
+      { offsetDistance: '0%', offset: 0 },
+      { offsetDistance: pctAtRear + '%', offset: ENTRY_DUR / DUR },
+      { offsetDistance: pctAtRear + '%', offset: EXIT_TRAVEL_T / DUR },
+      { offsetDistance: '100%', offset: horseExitEnd / DUR },
+      { offsetDistance: '100%', offset: 1 }
+    ], { duration: DUR * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // Lift the full sprite box above #match before horizontal exit travel, hold it there
+    // until the box clears the far edge, then settle back to baseline -- a pure vertical
+    // TRANSLATE DELTA computed entirely from viewport-space distances (rect.top, CENTER_Y,
+    // SPRITE_H), so it needs no scroll term of its own: it moves the element relative to
+    // wherever the offset-path animation above already placed it.
+    var EXIT_CLEARANCE = 8;
+    var exitDY = rect.top - EXIT_CLEARANCE - (CENTER_Y + SPRITE_H / 2);
+    var exitSpan = Math.abs(endX - rearX);
+    var clearCenterX = direction > 0 ? rect.right + SPRITE_W / 2 : rect.left - SPRITE_W / 2;
+    var exitClearT = EXIT_TRAVEL_T + Math.abs(clearCenterX - rearX) / exitSpan * EXIT_DUR;
+    var exitDropEndT = Math.min(horseExitEnd, exitClearT + EXIT_LIFT_DUR);
+    trackOuter(outer.animate([
+      { transform: 'translateY(0px)', offset: 0 },
+      { transform: 'translateY(0px)', offset: EXIT_RESUME_T / DUR },
+      { transform: 'translateY(' + exitDY + 'px)', offset: EXIT_TRAVEL_T / DUR },
+      { transform: 'translateY(' + exitDY + 'px)', offset: exitClearT / DUR },
+      { transform: 'translateY(0px)', offset: exitDropEndT / DUR },
+      { transform: 'translateY(0px)', offset: 1 }
+    ], { duration: DUR * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // ── Pumpkin: normal and rear heads are bound to their matching pose groups (oculist-
+    // 1ta.31's own signature beat -- the pumpkin rides as the rider's head until the
+    // throw), then the existing projectile takes over at the throw. spriteLeft/spriteTop
+    // and everything derived from them below stay in viewport space, like rearX/CENTER_Y
+    // above; SCROLL_X/SCROLL_Y are added once, at pumpPath's own construction. ──
+    var handRot = rotPt(HAND_THROW_LOCAL[0], HAND_THROW_LOCAL[1]);
+    var spriteLeft = rearX - SPRITE_W / 2, spriteTop = CENTER_Y - SPRITE_H / 2; // viewport space
+    var pumpStartX = spriteLeft + (direction > 0 ? handRot[0] : VB_W - handRot[0]) * SCALE; // viewport space
+    var pumpStartY = spriteTop + handRot[1] * SCALE; // viewport space
+    var pumpTargetX = mcx, pumpTargetY = rect.top - 8; // viewport space
+    var ARC_HEIGHT = 70;
+    var pMidX = (pumpStartX + pumpTargetX) / 2, pMidY = (pumpStartY + pumpTargetY) / 2 - ARC_HEIGHT; // viewport space
+    var pumpPath = 'M ' + (pumpStartX + SCROLL_X) + ' ' + (pumpStartY + SCROLL_Y) +
+      ' Q ' + (pMidX + SCROLL_X) + ' ' + (pMidY + SCROLL_Y) + ' ' +
+      (pumpTargetX + SCROLL_X) + ' ' + (pumpTargetY + SCROLL_Y); // document space
+
+    var PUMPKIN_SIZE = 26 * beaconScale;
+    var pumpkin = document.createElement('div');
+    pumpkin.className = 'oc-beacon oc-beacon-transient';
+    pumpkin.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + PUMPKIN_SIZE + 'px', 'height:' + PUMPKIN_SIZE + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pumpPath + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(pumpkin);
+
+    function makePumpkin() {
+      var art = document.createElementNS(NS, 'svg');
+      art.setAttribute('viewBox', '0 0 30 30');
+      art.setAttribute('width', '100%');
+      art.setAttribute('height', '100%');
+      art.setAttribute('data-horseman-part', 'pumpkin');
+      art.style.cssText = 'display:block;overflow:visible;';
+      path('M14 6 C13 2 15 0 19 1 C17 2 17 4 18 7 Z', art, '#365314');
+      ellipse(15, 17, 12, 11, art, '#b93808');
+      ellipse(9, 17, 6, 10, art, '#e85d04');
+      ellipse(15, 17, 6, 11, art, '#f97316');
+      ellipse(21, 17, 6, 10, art, '#e85d04');
+      path('M5 14 L12 9 L11 18 Z M25 14 L18 9 L19 18 Z', art, '#fff06a');
+      path('M5 19 L10 21 L14 18 L18 21 L25 18 L22 26 L18 24 L14 28 L10 24 L7 26 Z', art, '#fff06a');
+      path('M6 9 C10 5 20 5 24 10 C21 8 18 8 15 8 C12 8 9 8 6 9 Z', art, '#f59e0b');
+      return art;
+    }
+    var pumpkinTemplate = makePumpkin();
+    var pumpSpin = document.createElement('div');
+    pumpSpin.style.cssText = 'position:relative;width:100%;height:100%;';
+    pumpSpin.appendChild(pumpkinTemplate.cloneNode(true));
+    pumpkin.appendChild(pumpSpin);
+
+    var headNormal = document.createElement('div');
+    headNormal.setAttribute('data-horseman-part', 'head-normal');
+    headNormal.style.cssText = 'position:absolute;width:' + HEAD_SIZE + 'px;height:' + HEAD_SIZE + 'px;' +
+      'left:' + (HEAD_LOCAL[0] * SCALE - HEAD_SIZE / 2) + 'px;' +
+      'top:' + (HEAD_LOCAL[1] * SCALE - HEAD_SIZE / 2) + 'px;';
+    headNormal.appendChild(pumpkinTemplate.cloneNode(true));
+    var headLayer = document.createElement('div');
+    headLayer.setAttribute('data-horseman-part', 'head-layer');
+    headLayer.style.cssText = 'position:absolute;inset:0;' + (direction < 0 ? 'transform:scaleX(-1);' : '');
+    outer.appendChild(headLayer);
+    headLayer.appendChild(headNormal);
+
+    // cloneNode(true) also copies data-horseman-part='head-normal' -- overwritten below so
+    // the two heads stay independently selectable.
+    var headRear = headNormal.cloneNode(true);
+    headRear.setAttribute('data-horseman-part', 'head-rear');
+    headRear.style.opacity = '0';
+    headRear.style.transform = 'rotate(' + REAR_ANGLE_DEG + 'deg)';
+    headRear.style.transformOrigin =
+      (PIVOT_X * SCALE - (HEAD_LOCAL[0] * SCALE - HEAD_SIZE / 2)) + 'px ' +
+      (PIVOT_Y * SCALE - (HEAD_LOCAL[1] * SCALE - HEAD_SIZE / 2)) + 'px';
+    headLayer.appendChild(headRear);
+
+    trackOuter(headNormal.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 40 * durFactor, delay: RISE_START * durFactor, fill: 'forwards' }));
+    trackOuter(headRear.animate([{ opacity: 0 }, { opacity: 1 }], { duration: REAR_RISE_DUR * durFactor, delay: RISE_START * durFactor, easing: 'ease-out', fill: 'forwards' }));
+    // The head detaches at the exact instant armCocked cuts to armThrow above (RISE_END-1).
+    trackOuter(headRear.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1 * durFactor, delay: (RISE_END - 1) * durFactor, fill: 'forwards' }));
+
+    // Pumpkin's own animations: hung off `pumpkin` itself (rule 4), not `outer` -- it is
+    // its own top-level .oc-beacon element, detached from the rider at the throw.
+    var pumpkinAnims = [];
+    function trackPumpkin(a) { pumpkinAnims.push(a); return a; }
+
+    trackPumpkin(pumpkin.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1 * durFactor, delay: (RISE_END - 1) * durFactor, fill: 'forwards' }));
+    trackPumpkin(pumpkin.animate([
+      { offsetDistance: '0%' }, { offsetDistance: '100%' }
+    ], { duration: PUMPKIN_FLIGHT_DUR * durFactor, delay: LAUNCH_T * durFactor, easing: 'ease-out', fill: 'forwards' }));
+    trackPumpkin(pumpSpin.animate([
+      { transform: 'rotate(0deg)' }, { transform: 'rotate(900deg)' }
+    ], { duration: PUMPKIN_FLIGHT_DUR * durFactor, delay: LAUNCH_T * durFactor, easing: 'linear', fill: 'forwards' }));
+    trackPumpkin(pumpkin.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 60 * durFactor, delay: burstStart * durFactor, fill: 'forwards' }));
+
+    outer.__waapiAnims = outerAnims;
+    pumpkin.__waapiAnims = pumpkinAnims;
+
+    function removeOuter() { outer.remove(); }
+    function removePumpkin2() { pumpkin.remove(); }
+    Promise.allSettled(outerAnims.map(function (a) { return a.finished; })).then(removeOuter);
+    Promise.allSettled(pumpkinAnims.map(function (a) { return a.finished; })).then(removePumpkin2);
+
+    // ── Burst: four bands pulse OUTSIDE the match rect, inner edges stopping exactly at
+    // the glyph box (oculist-1ta.7's own accepted strict-spec redesign -- the word stays
+    // byte-for-byte unchanged, rule 10). Each band's width and height come from the match's
+    // own real dimensions and burstPad is a flat 10px; neither is multiplied by
+    // getBeaconScale(), for the same "hard geometric requirement, not a stylistic one"
+    // reasoning animateJackOLantern's own mouth-mode comment gives for its frameScale: the
+    // bands frame the word, so they track the word, not the figure. Each band is its own
+    // top-level .oc-beacon element (rule 3/4). ──
+    var burstPad = 10;
+    [
+      [rect.left - burstPad, rect.top - burstPad, rect.width + burstPad * 2, burstPad, '50% 100%', 'scale(0.72,0.2)', 'scale(1.08,1.35)', 'polygon(0 100%,18% 15%,32% 72%,50% 0,68% 72%,82% 15%,100% 100%)'],
+      [rect.left - burstPad, rect.bottom, rect.width + burstPad * 2, burstPad, '50% 0%', 'scale(0.72,0.2)', 'scale(1.08,1.35)', 'polygon(0 0,18% 85%,32% 28%,50% 100%,68% 28%,82% 85%,100% 0)'],
+      [rect.left - burstPad, rect.top, burstPad, rect.height, '100% 50%', 'scale(0.2,0.72)', 'scale(1.35,1.08)', 'polygon(100% 0,15% 18%,72% 32%,0 50%,72% 68%,15% 82%,100% 100%)'],
+      [rect.right, rect.top, burstPad, rect.height, '0% 50%', 'scale(0.2,0.72)', 'scale(1.35,1.08)', 'polygon(0 0,85% 18%,28% 32%,100% 50%,28% 68%,85% 82%,0 100%)']
+    ].forEach(function (side) {
+      var burst = document.createElement('div');
+      burst.className = 'oc-beacon oc-beacon-transient';
+      burst.style.cssText = [
+        'position:absolute',
+        'left:' + (side[0] + SCROLL_X) + 'px', 'top:' + (side[1] + SCROLL_Y) + 'px', // document space
+        'width:' + side[2] + 'px', 'height:' + side[3] + 'px',
+        'pointer-events:none',
+        'z-index:2147483642',
+        'background:#f59e0b', 'clip-path:' + side[7], 'opacity:0', 'transform-origin:' + side[4]
+      ].join(';');
+      document.documentElement.appendChild(burst);
+      var burstAnim = burst.animate([
+        { opacity: 0, transform: side[5] },
+        { opacity: 0.9, transform: side[6], offset: 0.4 },
+        { opacity: 0, transform: side[5] }
+      ], { duration: BURST_DUR * durFactor, delay: burstStart * durFactor, easing: 'ease-out', fill: 'forwards' });
+      burst.__waapiAnims = [burstAnim];
+      burstAnim.finished.then(function () { burst.remove(); }).catch(function () { burst.remove(); });
+    });
   }
 
   function animateLightning(rect) {
