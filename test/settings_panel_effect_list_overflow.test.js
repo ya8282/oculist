@@ -32,6 +32,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
+const { waitForHalloweenSeedSettled } = require('./helpers/halloween_seed');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -168,22 +169,10 @@ describe('Settings panel effect picker at 12 registry entries (oculist-dvt.5)', 
     // (seedHalloweenPack, extension/background.js), which sets enabledPacks and
     // seededHalloweenPack together in the SAME write. Overriding enabledPacks back to []
     // before that write has landed would just lose the race to it (background.js's own
-    // get() would still be holding a pre-override snapshot) — wait for
-    // seededHalloweenPack to actually be true in storage first, which is this file's proof
-    // that write is done, before applying this file's own override, so this stays pinned
+    // get() would still be holding a pre-override snapshot) — wait for the seed to fully
+    // settle (oculist-e5c5) before applying this file's own override, so this stays pinned
     // at exactly the twelve core (unpacked) entries regardless of the seed's own timing.
-    await waitForCondition(
-      () =>
-        evalInContentScript(
-          "new Promise(function (resolve) {" +
-            "chrome.storage.sync.get('oc-settings', function (data) {" +
-            "resolve(!!(data && data['oc-settings'] && data['oc-settings'].seededHalloweenPack));" +
-            "});" +
-            "})"
-        ),
-      Boolean,
-      { timeout: POLL_TIMEOUT, message: 'seedHalloweenPack never finished writing seededHalloweenPack' }
-    );
+    await waitForHalloweenSeedSettled(evalInContentScript);
     await evalInContentScript(
       "new Promise(function (resolve) {" +
         "chrome.storage.sync.get('oc-settings', function (data) {" +

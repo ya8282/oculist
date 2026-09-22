@@ -30,6 +30,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForHalloweenSeedSettled } = require('./helpers/halloween_seed');
 
 const REAL_EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>hello quarklet world, nothing else on this page.</p>';
@@ -117,6 +118,13 @@ describe('availableEffects() guards a malformed settings.enabledPacks (oculist-n
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
     await openFinder();
+
+    // oculist-e5c5: wait for background.js's async seedHalloweenPack() write to land AND
+    // for content.js's own onChanged listener to have applied it, before any test below
+    // writes its own fixture value into settings.enabledPacks (via setEnabledPacksRaw) and
+    // reads it straight back -- otherwise the seed's own async fallout can land in between
+    // and clobber the fixture value first.
+    await waitForHalloweenSeedSettled(evalInContentScript);
   });
 
   after(async () => {
@@ -146,6 +154,7 @@ describe('availableEffects() guards a malformed settings.enabledPacks (oculist-n
       .send('Runtime.evaluate', {
         expression,
         contextId: isolatedContextId,
+        awaitPromise: true,
         returnByValue: true,
       })
       .then((res) => {
