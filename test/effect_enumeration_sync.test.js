@@ -41,6 +41,28 @@ const DOCS_INDEX_HTML = path.resolve(__dirname, '../docs/index.html');
 // as a name.
 const PACKED_EMPTY_PLACEHOLDER = 'None in this release';
 
+// Reverses the JS string-literal escapes that can appear inside a single-quoted
+// literal captured by extractKeyedStringLiteral's escape-aware pattern: `\'`
+// becomes `'` and `\\` becomes `\`. Any other backslash-escape is left as-is
+// (none of today's labels use one, and this is deliberately minimal).
+function unescapeJsStringLiteral(raw) {
+  return raw.replace(/\\(.)/g, (_, ch) => (ch === '\\' || ch === "'" ? ch : '\\' + ch));
+}
+
+// Finds `<key>: '...'` in source and returns the literal's unescaped value, or
+// null if no such literal exists. The capture group `(?:[^'\\]|\\.)*` is
+// escape-aware: it does not stop at an escaped quote (`\'`), unlike a plain
+// `[^']*` capture, which truncates on the first `\'` it meets (oculist-cfyh —
+// verified: a label written as 'Jack-o\'-Lantern Flicker' truncated to
+// 'Jack-o\'). The shipped label sidesteps this today by using a curly
+// apostrophe (U+2019) instead of an escaped straight one; this fix makes the
+// parser correct either way.
+function extractKeyedStringLiteral(source, key) {
+  const pattern = new RegExp('\\b' + key + '\\s*:\\s*\'((?:[^\'\\\\]|\\\\.)*)\'');
+  const match = source.match(pattern);
+  return match ? { raw: match[0], value: unescapeJsStringLiteral(match[1]) } : null;
+}
+
 // Pulls every effectsRegistry entry out of content.js's source text, in
 // declaration order, as { label, pack }. `label` comes from resolving the
 // entry's `label: i18n.<key>` reference against the key's literal string value
@@ -81,14 +103,16 @@ function extractRegistryEntries(contentJsSource) {
       `an effectsRegistry entry has no "label: i18n.<key>" field in ${CONTENT_JS}: ${body}`
     );
     const key = labelKeyMatch[1];
-    const literalPattern = new RegExp('\\b' + key + '\\s*:\\s*\'([^\']*)\'');
-    const literalMatch = contentJsSource.match(literalPattern);
+    const literalMatch = extractKeyedStringLiteral(contentJsSource, key);
     assert.ok(
       literalMatch,
       `effectsRegistry references i18n.${key}, but no "${key}: '...'" literal exists in ${CONTENT_JS}`
     );
-    const packMatch = body.match(/pack:\s*'([^']*)'/);
-    return { label: literalMatch[1], pack: packMatch ? packMatch[1] : null };
+    const packMatch = body.match(/pack:\s*'((?:[^'\\]|\\.)*)'/);
+    return {
+      label: literalMatch.value,
+      pack: packMatch ? unescapeJsStringLiteral(packMatch[1]) : null,
+    };
   });
 }
 
@@ -184,6 +208,24 @@ function assertPackedProseSite(fileContent, searchFrom, searchTo, packedLabels, 
   assertLabelsInOrder(slice, packedLabels, siteDescription + ' (packed effects)');
   assertNoOrphanLabels(extractPackedNames(slice), packedLabels, siteDescription + ' (packed effects)');
 }
+
+test('extractKeyedStringLiteral is escape-aware (oculist-cfyh)', () => {
+  assert.strictEqual(
+    extractKeyedStringLiteral("plainKey: 'Bone Assembly'", 'plainKey').value,
+    'Bone Assembly'
+  );
+  assert.strictEqual(
+    extractKeyedStringLiteral("effectJackOLantern: 'Jack-o’-Lantern Flicker'", 'effectJackOLantern')
+      .value,
+    'Jack-o’-Lantern Flicker'
+  );
+  // The regression case: an escaped straight apostrophe used to truncate the
+  // capture at "Jack-o\" under the old `[^']*` pattern.
+  assert.strictEqual(
+    extractKeyedStringLiteral("jackKey: 'Jack-o\\'-Lantern Flicker'", 'jackKey').value,
+    "Jack-o'-Lantern Flicker"
+  );
+});
 
 test('welcome.html and docs/index.html stay in sync with effectsRegistry', () => {
   const contentJsSource = fs.readFileSync(CONTENT_JS, 'utf8');

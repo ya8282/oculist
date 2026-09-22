@@ -817,10 +817,7 @@
     effectBoneAssembly: 'Bone Assembly',
     effectFlappy: 'Flappy',
     effectCheshire: 'Cheshire',
-    // A curly apostrophe (not a straight one) so this JS string literal never needs an
-    // escaped quote -- test/effect_enumeration_sync.test.js's own literal-value regex is a
-    // naive `[^']*` scan with no escape awareness, and an escaped straight apostrophe here
-    // truncates its capture at "Jack-o\" (verified), breaking every site's label match.
+    // Curly apostrophe (U+2019): the docs sites match this exact character.
     effectJackOLantern: 'Jack-o’-Lantern Flicker',
     effectHorseman: 'Galloping Throw',
 
