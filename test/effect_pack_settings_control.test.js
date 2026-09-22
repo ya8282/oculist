@@ -91,21 +91,22 @@ function createPackedFixtureExtension() {
   assert.notStrictEqual(original.indexOf(target), -1);
   let contentJs = original.replace(target, patched);
 
-  // oculist-nq1x.5: boneassembly (the real Halloween pack's own first entry) now exists
-  // on the real tree, which would otherwise inflate knownPacks() to eleven distinct ids
-  // (this fixture's own ten plus 'halloween') and break this file's ten-row assertions.
-  // Strip its `pack` field in THIS FIXTURE COPY ONLY — extension/content.js itself is
-  // never touched — so it counts as a core (unpacked) entry here, same as it did before
-  // any real pack shipped.
-  const boneassemblyTarget = "boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' }";
+  // oculist-nq1x.5 / oculist-e2m.5: the real Halloween pack's own entries (boneassembly,
+  // flappy, and every future promotion into the same pack) now exist on the real tree,
+  // which would otherwise inflate knownPacks() to eleven-plus distinct ids (this
+  // fixture's own ten plus 'halloween') and break this file's ten-row assertions. Strip
+  // `pack: 'halloween'` off EVERY entry that carries it, in THIS FIXTURE COPY ONLY —
+  // extension/content.js itself is never touched — so each one counts as a core
+  // (unpacked) entry here, same as it did before any real pack shipped. A global regex
+  // rather than one literal target per entry, so a later promotion into this same pack
+  // (e.g. oculist-e2m.6's Cheshire) does not silently re-break this fixture's count the
+  // way this one entry's own absence just did.
+  const halloweenPackFieldCount = (contentJs.match(/,\s*pack:\s*'halloween'/g) || []).length;
   assert.ok(
-    contentJs.includes(boneassemblyTarget),
-    'fixture setup: expected effectsRegistry.boneassembly entry text not found in extension/content.js — did its shape change?'
+    halloweenPackFieldCount > 0,
+    "fixture setup: expected at least one \", pack: 'halloween'\" entry in extension/content.js — did the Halloween pack ship its first entry under a different id?"
   );
-  contentJs = contentJs.replace(
-    boneassemblyTarget,
-    "boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly }"
-  );
+  contentJs = contentJs.replace(/,\s*pack:\s*'halloween'/g, '');
 
   fs.writeFileSync(contentJsPath, contentJs, 'utf8');
 

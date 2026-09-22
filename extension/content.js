@@ -815,6 +815,7 @@
 
     // Halloween pack (oculist-nq1x)
     effectBoneAssembly: 'Bone Assembly',
+    effectFlappy: 'Flappy',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -927,7 +928,8 @@
     speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision },
-    boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' }
+    boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' },
+    flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -2927,6 +2929,357 @@
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeFig);
   }
 
+  // oculist-e2m.5: promotes fxFlappy (artifacts/prototypes/effects-playground.html,
+  // reworked as pixel art across a1011ca and its predecessors) into the shipped beacon
+  // contract, the second entry in the Halloween pack. A small bird flies a sawtooth of
+  // parabolic arcs from the cursor (or its fallback) to the match, perches on the match's
+  // top edge, then the absorption flash animateTrail already uses fires on the match rect.
+  //
+  // Physics generates the whole flight polyline once at fire time (no rAF loop) and hands
+  // it to offset-path/offset-rotate:auto, exactly animateTrail's own idiom -- see the
+  // physics/retiming comments inline below, carried over from the playground almost
+  // verbatim since they document real, previously-fixed bugs (an off-level landing, a
+  // wing that rendered invisibly inside its own body silhouette, a miscounted sprite row)
+  // that must not come back.
+  //
+  // Start point: the promotion contract's own start-point cascade (rule 9) --
+  // lastMouseX/lastMouseY if known, else the find bar's own centre, else viewport centre --
+  // replaces the playground's nearest-viewport-edge pick entirely; `mirrored` is derived
+  // from where that cascade actually lands (start right of the match), not from a fixed
+  // edge choice, so the mirrored scaleX(-1) + 180deg offset-rotate branch is reachable
+  // through a real cursor position now, not just a prototype debug flag.
+  //
+  // Palette: 'y' (the body) stays hardcoded to the reference sprite's #ffd801 rather than
+  // routed through getEffectiveColors().beacon -- a1011ca's own note ("pixel-exactness was
+  // the ask here... that tradeoff is deliberate, not an oversight") plus the promotion
+  // contract's own license for a fixed identity palette (the pumpkin's orange, here the
+  // bird's reference yellow). The absorption flash still takes the effective beacon color,
+  // the same accessibility-accent role animateTrail's own flash plays.
+  //
+  // Lite Mode: only the absorption flash's glow (box-shadow) is dropped, same degrade
+  // animateTrail uses. The bird and its flight are never dropped -- they are the effect.
+  function animateFlappy(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var mcx = rect.left + rect.width / 2 + window.scrollX;
+
+    var DUR = getBeaconDuration(900);
+    var STEP = 16; // ms, fixed integration step
+    var SAG_PX = 34; // target vertical sag of each parabolic arc
+    var beaconScale = getBeaconScale();
+
+    // Pixel-art sprite: a pixel-exact reproduction of the human's reference (17x12 grid).
+    // '.' transparent, 'k' black outline, 'y' yellow body, 'g' darker gold belly band,
+    // 'w' white (wing/eye), 'o' orange beak -- one orange only, the reference has no
+    // separate darker lower-mandible tone.
+    //
+    // The wing is split into its own grid (below) so it can be mounted in a <g> and
+    // flapped by whole cells. This base grid has the wing's own cells (its white fill and
+    // its own black outline, NOT the body outline that happens to run alongside it) filled
+    // with 'y' -- the body color that sits behind the wing -- so translating the wing
+    // overlay never tears a transparent hole in the silhouette.
+    var BIRD_ROWS = [
+      '......kkkkkk.....',
+      '....kkyyyykwk....',
+      '...kyyyyykwwwk...',
+      '.yyyyyyyykwwkwk..',
+      'kyyyyyyyykwwkwk..',
+      'kyyyyyyyyykwwwk..',
+      'kyyyyykyyyykkkkk.',
+      '.kyyykyyyykoooook',
+      '..kkkggggkokkkkk.',
+      '....kgggggkooook.',
+      '.....kkggggkkkkk.',
+      '.......kkkk......'
+    ];
+    // Wing overlay, painted on top of the base sprite. Local grid (6 cols x 4 rows)
+    // anchored at WING_COL/WING_ROW; transparent cells let the base sprite's own
+    // body/outline show through unchanged.
+    var WING_ROWS = [
+      'kkkk..',
+      'wwwwk.',
+      'wwwwwk',
+      '.www..'
+    ];
+    var WING_COL = 1, WING_ROW = 3;
+    var PALETTE = { k: '#000000', y: '#ffd801', g: '#e0a700', w: '#ffffff', o: '#fe6a00' };
+
+    // Integer cell size only -- a non-integer scale is what makes pixel art look mushy.
+    // The Beacon Size setting is applied afterward, as a uniform CSS transform on the
+    // wrap below, rather than by scaling CELL itself, so the authoring grid always
+    // rasterizes crisp regardless of beaconScale.
+    var CELL = 4;
+    var GRID_W = BIRD_ROWS[0].length, GRID_H = BIRD_ROWS.length;
+    var SPRITE_W = GRID_W * CELL, SPRITE_H = GRID_H * CELL;
+
+    // Landing point: the match's top edge, not its centre -- the bird perches above the
+    // highlighted text rather than covering it. Document coordinates throughout (rect is
+    // the live, current-scroll viewport rect handed in by animate()). offset-anchor:50%
+    // 50% (below) tracks the path from birdEl's own CENTRE, but the sprite's visible
+    // bottom edge is the wrapper's scaled half-height (SPRITE_H * beaconScale / 2), not
+    // its unscaled one, since the Beacon Size transform is centred on that same point --
+    // using the unscaled half-height here left the visible bottom edge drifting past the
+    // match's top edge at every size other than 1.0 (M), reaching y=374/392 instead of
+    // 362 on a 359-377 match at L/XL. Solving centre + SPRITE_H*beaconScale/2 = rect.top
+    // + 3 for centre keeps the same 3px overlap at every Beacon Size.
+    var endX = mcx, endY = rect.top + window.scrollY - (SPRITE_H * beaconScale) / 2 + 3;
+
+    // Start point cascade -- animateTrail's own, verbatim (see its comment above): cursor
+    // if known, else the find bar's centre, else viewport centre. Find-in-page is
+    // keyboard-driven, so the cursor is frequently null and that fallback is load-bearing.
+    var startX, startY;
+    if (lastMouseX !== null && lastMouseY !== null) {
+      startX = lastMouseX + window.scrollX;
+      startY = lastMouseY + window.scrollY;
+    } else if (wrap) {
+      var wrapRect = wrap.getBoundingClientRect();
+      startX = wrapRect.left + wrapRect.width / 2 + window.scrollX;
+      startY = wrapRect.top + wrapRect.height / 2 + window.scrollY;
+    } else {
+      startX = window.innerWidth / 2 + window.scrollX;
+      startY = window.innerHeight / 2 + window.scrollY;
+    }
+
+    var dx = endX - startX, dy = endY - startY;
+    if (Math.abs(dx) < 120) {
+      // Degenerate case: the cascade's start point is too close horizontally to the
+      // match to read as a physics-driven flight (the arcs would bunch up right next to
+      // the landing point). Launch from 200px to its left instead, independent of the
+      // viewport -- this is a distance clamp, not a viewport-fit check, so it does NOT
+      // guarantee the start point itself is on-screen when the match sits within 200px
+      // of the page's own left edge (mcx - 200 can go negative). The flight still ends
+      // visibly on the match, which is on-screen by construction (this only ever fires
+      // on the currently active match), so what a user sees in that case is the bird
+      // flying in from just off the left edge rather than a flight with no visible
+      // portion at all.
+      startX = mcx - 200;
+      dx = endX - startX; dy = endY - startY;
+    }
+    var dist = Math.hypot(dx, dy);
+    // Start is to the right of the match -- the mirrored-sprite branch (rule 9).
+    var mirrored = dx < 0;
+
+    // Flap count from distance, then solve GRAVITY and FLAP_IMPULSE from the target
+    // per-arc sag. With FLAP_IMPULSE chosen as -0.5*GRAVITY*FLAP_PERIOD, each arc is a
+    // symmetric parabola: it rises from its flap to a peak at the arc's own midpoint
+    // (vy=0 there -- the apex) and falls back to the same starting height by the arc's
+    // end. Landing exactly at an arc's end -- as a plain DUR/n period does -- therefore
+    // always lands mid-fall: a steep, nose-down tangent under offset-rotate:auto, which
+    // reads as the bird crashing into the match instead of perching on it.
+    //
+    // Fix: retime (not re-derive) the flap schedule so arrival lands on the apex of the
+    // final arc instead, where the tangent is level by construction -- solving
+    // DUR = (n - 0.5) * FLAP_PERIOD for the period (instead of DUR = n * FLAP_PERIOD).
+    var n = Math.max(2, Math.min(6, Math.round(dist / 160)));
+    var FLAP_PERIOD = DUR / (n - 0.5);
+    var GRAVITY = (8 * SAG_PX) / (FLAP_PERIOD * FLAP_PERIOD); // px/ms^2
+    var FLAP_IMPULSE = -0.5 * GRAVITY * FLAP_PERIOD; // px/ms, upward (negative)
+
+    // Integrate once, at fire time, with a fixed step. vy is reset outright (not added
+    // to) at each flap -- that reset is what makes this a sawtooth of parabolic arcs
+    // rather than a sine wave.
+    var steps = Math.max(2, Math.round(DUR / STEP));
+    var vy = FLAP_IMPULSE;
+    var y = 0;
+    var sinceFlap = 0;
+    var rawY = [0];
+    for (var i = 1; i <= steps; i++) {
+      vy += GRAVITY * STEP;
+      y += vy * STEP;
+      sinceFlap += STEP;
+      if (sinceFlap >= FLAP_PERIOD) {
+        vy = FLAP_IMPULSE;
+        sinceFlap -= FLAP_PERIOD;
+      }
+      rawY.push(y);
+    }
+
+    // Every full arc returns to its own starting height by construction (see above), so
+    // rawY oscillates but nets to ~0 over any whole number of periods -- almost all of
+    // the real start-to-end height change has to come from this correction term. x
+    // advances linearly from start to end the whole way; y gets the same correction,
+    // weighted by an ease-out curve (2*frac - frac^2) rather than a flat frac: a flat
+    // frac term has a constant per-step slope everywhere, including at frac=1, so it
+    // would still be adding a steep, uncancelled downward slope right at the landing
+    // point even after the apex-retiming above. The ease-out curve has zero derivative at
+    // frac=1, so by the landing point it contributes position (the bird still ends up
+    // exactly on target) without contributing velocity -- leaving the apex's near-zero
+    // local slope as the only thing offset-rotate:auto sees, which is what actually
+    // delivers the level landing.
+    var residual = (endY - startY) - rawY[steps];
+    var pathPts = [];
+    for (var j = 0; j <= steps; j++) {
+      var frac = j / steps;
+      var ease = 2 * frac - frac * frac; // w(0)=0, w(1)=1, w'(1)=0
+      var px = startX + dx * frac;
+      var py = startY + rawY[j] + residual * ease;
+      pathPts.push([px, py]);
+    }
+    pathPts[steps] = [endX, endY]; // exact landing, immune to float rounding
+
+    var pathStr = 'M ' + pathPts.map(function (p) { return p[0] + ' ' + p[1]; }).join(' L ');
+
+    var birdEl = document.createElement('div');
+    birdEl.className = 'oc-beacon oc-beacon-transient oc-flappy-bird';
+    birdEl.style.cssText = [
+      'position:absolute',
+      'left:0px', 'top:0px',
+      'width:' + SPRITE_W + 'px', 'height:' + SPRITE_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')",
+      'offset-anchor:50% 50%',
+      'offset-rotate:auto' + (mirrored ? ' 180deg' : ''),
+      'opacity:1'
+    ].join(';');
+    document.documentElement.appendChild(birdEl);
+
+    // Mirroring and the Beacon Size scale are both applied here, as a plain CSS
+    // transform on this wrapper, rather than by touching the authoring grid (CELL) or
+    // the motion path above -- this wrapper fills 100% of birdEl's own box and never
+    // sets its own transform-origin, so the default 50% 50% keeps the scale centred on
+    // the same point offset-anchor:50% 50% (set in birdEl's cssText above) tracks along the
+    // path, regardless of beaconScale. endY above already accounts for this scaling so
+    // the sprite's visible bottom edge lands at the same offset from the match at every
+    // Beacon Size.
+    var transformParts = [];
+    if (mirrored) transformParts.push('scaleX(-1)');
+    if (beaconScale !== 1) transformParts.push('scale(' + beaconScale + ')');
+    var wrap2 = document.createElement('div');
+    wrap2.style.cssText = 'width:100%;height:100%;' + (transformParts.length ? 'transform:' + transformParts.join(' ') + ';' : '');
+    birdEl.appendChild(wrap2);
+
+    // Pixel-art sprite: merge each grid row's horizontal runs of the same character into
+    // one <rect> (not one rect per cell), so the art stays small and editable.
+    // crispEdges keeps cell edges hard under rotation and scaling.
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(SPRITE_W));
+    svg.setAttribute('height', String(SPRITE_H));
+    svg.setAttribute('viewBox', '0 0 ' + SPRITE_W + ' ' + SPRITE_H);
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.style.cssText = 'display:block;overflow:visible;';
+
+    function paintRows(rows, offCol, offRow) {
+      // A short row paints nothing past its end rather than erroring, so a miscounted
+      // row is invisible in the source and shows up only as a hole in the outline --
+      // exactly what shipped once in the playground (row 9 was 15 chars, leaving the
+      // beak's bottom-right corner open, fixed in 67adeb2). Fail loudly instead.
+      for (var ri = 0; ri < rows.length; ri++) {
+        if (rows[ri].length !== rows[0].length) {
+          throw new Error('paintRows: row ' + ri + ' is ' + rows[ri].length + ' cells, expected ' + rows[0].length);
+        }
+      }
+      var g = document.createElementNS(NS, 'g');
+      for (var ry = 0; ry < rows.length; ry++) {
+        var row = rows[ry], cx = 0;
+        while (cx < row.length) {
+          var ch = row[cx];
+          if (ch === '.') { cx++; continue; }
+          var runStart = cx;
+          while (cx < row.length && row[cx] === ch) cx++;
+          var cellRect = document.createElementNS(NS, 'rect');
+          cellRect.setAttribute('x', String((offCol + runStart) * CELL));
+          cellRect.setAttribute('y', String((offRow + ry) * CELL));
+          cellRect.setAttribute('width', String((cx - runStart) * CELL));
+          cellRect.setAttribute('height', String(CELL));
+          cellRect.setAttribute('fill', PALETTE[ch]);
+          g.appendChild(cellRect);
+        }
+      }
+      return g;
+    }
+
+    svg.appendChild(paintRows(BIRD_ROWS, 0, 0));
+
+    // The wing is its own <g>, painted on top of the body, so it can be flapped by whole
+    // cells independently of the body's silhouette.
+    var wingG = paintRows(WING_ROWS, WING_COL, WING_ROW);
+    svg.appendChild(wingG);
+
+    wrap2.appendChild(svg);
+
+    var travelAnim = birdEl.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: DUR, easing: 'linear', fill: 'forwards' });
+
+    // Wing beat synced to the arcs by construction: same period, and the same (n - 0.5)
+    // count the vertical path runs -- n full flaps would overshoot DUR by half a period
+    // since the trajectory retiming above, and the wing would keep beating after the
+    // body has already landed. iterations accepts a fractional count, so it just stops
+    // mid upstroke at the same instant the body reaches the apex. Pixel-art idiom, not a
+    // squash -- the wing group jumps by whole cells (up, home, down, home) with steps()
+    // easing so it snaps between positions instead of gliding.
+    var wingAnim = wingG.animate([
+      { transform: 'translateY(-' + CELL + 'px)' },
+      { transform: 'translateY(0px)' },
+      { transform: 'translateY(' + CELL + 'px)' },
+      { transform: 'translateY(0px)' }
+    ], { duration: FLAP_PERIOD, iterations: n - 0.5, easing: 'steps(3, end)' });
+
+    var FADE_DUR = getBeaconDuration(220);
+    var fadeAnim = birdEl.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_DUR, delay: DUR, fill: 'forwards' });
+
+    // Rule 4: every WAAPI animation touching this beacon -- including the wing's, hung
+    // on a child <g> -- is listed here, so cancelBeacons()/destroyBeacon() reaches all
+    // three. Rule 5: removal is gated on the whole set settling (Promise.allSettled),
+    // not on any single one of them -- the travel animation finishes well before the
+    // fade is even supposed to start, so hooking removal to it alone would delete the
+    // bird mid-fade. destroyBeacon() already removes birdEl synchronously on cancel;
+    // this promise resolving afterward and calling remove() again is a harmless no-op.
+    birdEl.__waapiAnims = [travelAnim, wingAnim, fadeAnim];
+    function removeBird() { birdEl.remove(); }
+    Promise.allSettled([travelAnim.finished, wingAnim.finished, fadeAnim.finished]).then(removeBird);
+
+    // Absorption flash on arrival -- same shape as animateTrail's flash: rect inflated
+    // 6px, opacity 0->1->0, scale 1->1.15->1, delayed by DUR so it can never fire before
+    // the bird lands. Unlike the bird's own fixed identity palette, the flash takes the
+    // effective beacon color -- the same accessibility-accent role animateTrail's own
+    // flash plays.
+    var flashColor = getEffectiveColors().beacon || '#fbbf24';
+    var flashPad = 6;
+    var flash = document.createElement('div');
+    flash.className = 'oc-beacon oc-beacon-transient oc-flappy-flash';
+    var flashCss = [
+      'position:absolute',
+      'left:' + (rect.left + window.scrollX - flashPad) + 'px',
+      'top:' + (rect.top + window.scrollY - flashPad) + 'px',
+      'width:' + (rect.width + flashPad * 2) + 'px',
+      'height:' + (rect.height + flashPad * 2) + 'px',
+      'border-radius:4px',
+      'background:' + flashColor,
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ];
+    if (settings.performanceMode) {
+      // Lite Mode: the flash itself stays (it's the payoff), but the blurred glow -- the
+      // expensive part -- is dropped for a flat fill, the same degrade animateTrail uses.
+      // The bird and its flight are never dropped; they are the effect.
+    } else {
+      flashCss.push('box-shadow:0 0 ' + (18 * beaconScale) + 'px ' + flashColor + ', 0 0 ' + (6 * beaconScale) + 'px ' + flashColor);
+    }
+    flash.style.cssText = flashCss.join(';');
+    document.documentElement.appendChild(flash);
+
+    var flashDuration = getBeaconDuration(450);
+    var flashAnim = flash.animate([
+      { opacity: 0, transform: 'scale(1)' },
+      { opacity: 1, transform: 'scale(1.15)', offset: 0.35 },
+      { opacity: 0, transform: 'scale(1)' }
+    ], { duration: flashDuration, delay: DUR, easing: 'ease-out', fill: 'forwards' });
+    flash.__waapiAnims = [flashAnim];
+
+    flashAnim.finished.then(function () {
+      flash.remove();
+    }).catch(function () {
+      flash.remove();
+    });
+  }
 
   function animateLightning(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
