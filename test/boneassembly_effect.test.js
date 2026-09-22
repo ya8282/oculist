@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -389,37 +389,125 @@ describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls
     }
   });
 
-  test('the figure survives past the earliest scatter-in piece\'s own finish, stays mounted through the collapse, and is still present just before the natural end', async () => {
-    const mounted = await replay(page, () => (document.querySelectorAll('[data-ba-piece]').length === 8 ? true : null));
-    assert.ok(mounted, 'sanity check: the figure must actually mount before it can be checked mid-sequence');
+  test('the figure survives to its own natural end, removed only as a whole once its own animation clock actually reaches it', async () => {
+    // A mid-sequence sampling window (poll until effect time T, then assert presence) only
+    // ever proves "still present at T" for whatever T a poll happens to land on -- it can
+    // never rule out an EARLY but not-yet-observed removal, and a checkpoint placed close
+    // to the natural end (as this test used to place one at ~2250ms, ~120ms of margin
+    // before the ~2370ms end) still leaves a window a slow poll can land inside of. This
+    // version removes the window: it watches for the ACTUAL removal event and asserts
+    // directly on the effect-relative time it happened, which has no window to land in.
+    //
+    // content.js runs in the extension's isolated world, so a plain expando like
+    // figWrap.__waapiAnims (set from that world) is invisible from page.evaluate() /
+    // page.waitForFunction() (main world) -- element.getAnimations() is the standards-based
+    // WAAPI accessor and, unlike an expando, IS visible cross-world, because the Animation
+    // objects it returns are platform objects tied to the element, not JS properties
+    // private to the world that created them.
+    //
+    // Among the figure's ~23 animations, the LAST one to finish (by getComputedTiming().
+    // endTime) is the figWrap fade -- delay COLLAPSE_START+COLLAPSE_DUR+HEAP_HOLD, duration
+    // FADE_DUR -- so its own endTime IS the effect's natural end, and it is also the one
+    // safe "elapsed effect time" clock: an animation's own currentTime stops advancing once
+    // THAT animation individually finishes (confirmed empirically -- the skull's own
+    // scatter-in animation, delay 0, duration 640ms, freezes at currentTime 640 long before
+    // the figure is actually removed), so only the longest-running animation keeps ticking
+    // for the whole sequence.
+    //
+    // A MutationObserver on document.documentElement (figWrap's own parent) records, the
+    // moment any [data-ba-piece] count changes from the mounted 8, both which piece count
+    // that first change leaves behind (firstLeaveCount) and the clock's own currentTime at
+    // that instant (firstLeaveT) -- then again, once the count reaches 0, the clock's
+    // currentTime at THAT instant (allGoneT). A regression that removed pieces one at a
+    // time rather than the whole figure in one figWrap.remove() call would show
+    // firstLeaveCount > 0 (some pieces still present at the very first change observed);
+    // the real code removes the whole figWrap in one operation, so both numbers are
+    // expected to come from the very same mutation record.
+    const mounted = await replay(page, () => {
+      const fig = document.querySelector('.oc-beacon-transient');
+      if (!fig || document.querySelectorAll('[data-ba-piece]').length !== 8) return null;
+      const anims = fig.getAnimations({ subtree: true });
+      let clockAnim = null, endMs = -1;
+      for (const a of anims) {
+        const e = a.effect.getComputedTiming().endTime;
+        if (e > endMs) { endMs = e; clockAnim = a; }
+      }
+      if (!clockAnim) return null;
+      window.__baTestEndMs = endMs;
+      window.__baTestRemoval = null;
+      const observer = new MutationObserver(() => {
+        if (window.__baTestRemoval && window.__baTestRemoval.allGoneT != null) return;
+        const remaining = document.querySelectorAll('[data-ba-piece]').length;
+        if (remaining === 8) return; // nothing has left yet
+        const t = clockAnim.currentTime;
+        if (!window.__baTestRemoval) {
+          window.__baTestRemoval = { firstLeaveT: t, firstLeaveCount: remaining, allGoneT: null };
+        }
+        if (remaining === 0 && window.__baTestRemoval.allGoneT == null) {
+          window.__baTestRemoval.allGoneT = t;
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      window.__baTestObserver = observer;
+      return true;
+    });
+    assert.ok(mounted, 'sanity check: the figure must actually mount, with all 8 pieces, before its removal can be timed');
 
-    // At the default (normal) animation speed the earliest scatter-in piece (the skull,
-    // STAGGER.skull=0) finishes at SNAP_DONE_T=640ms — if the figure's own removal were
-    // wired to the first animation to finish rather than the last, it would already be
-    // gone here.
-    await page.waitForTimeout(800);
-    let count = await page.evaluate(() => document.querySelectorAll('[data-ba-piece]').length);
-    assert.strictEqual(
-      count,
-      8,
-      'the figure must still be mounted at ~800ms, well past the earliest piece\'s own 640ms scatter-in finish'
+    // Generous on purpose -- the natural end is only ~2370ms away, LONG_TIMEOUT (scaled) is
+    // 15s by default, so a genuine hang here means the figure never left the DOM at all,
+    // not that this particular wait was too tight.
+    let removalTimedOut = null;
+    try {
+      await page.waitForFunction(() => !!(window.__baTestRemoval && window.__baTestRemoval.allGoneT != null), null, {
+        timeout: LONG_TIMEOUT,
+      });
+    } catch (e) {
+      removalTimedOut = e;
+    }
+    assert.ok(
+      !removalTimedOut,
+      `the figure's [data-ba-piece] elements never fully left the DOM within ${LONG_TIMEOUT}ms of mounting -- ` +
+        `expected removeFig() to run once the whole beat sequence finished (${removalTimedOut && removalTimedOut.message})`
     );
 
-    // COLLAPSE_START is 1430ms — the roll/dash have already finished and the collapse is
-    // underway.
-    await page.waitForTimeout(700); // total elapsed ~1500ms
-    count = await page.evaluate(() => document.querySelectorAll('[data-ba-piece]').length);
-    assert.strictEqual(count, 8, 'the figure must still be mounted during the collapse (~1500ms)');
+    const [removal, endMs] = await Promise.all([
+      page.evaluate(() => window.__baTestRemoval),
+      page.evaluate(() => window.__baTestEndMs),
+    ]);
 
-    // The whole beat sequence ends at ~2370ms (COLLAPSE_START + COLLAPSE_DUR + HEAP_HOLD +
-    // FADE_DUR) — still present just before that.
-    await page.waitForTimeout(750); // total elapsed ~2250ms
-    count = await page.evaluate(() => document.querySelectorAll('[data-ba-piece]').length);
-    assert.strictEqual(count, 8, 'the figure must still be mounted just before the natural end (~2250ms)');
+    assert.ok(removal, 'sanity check: the removal observer must have recorded something once it reported completion');
+    assert.notStrictEqual(
+      removal.allGoneT,
+      null,
+      "the figure's own WAAPI clock read null at removal -- its animation appears to have been cancelled rather than reaching its natural end"
+    );
 
-    // Let it actually finish and clean up so it doesn't leak into the next test.
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, {
-      timeout: POLL_TIMEOUT,
+    // The whole point: the figure must have lived all the way to (within a small epsilon
+    // of) its own natural end, not merely to some fixed wall-clock offset from the
+    // keypress.
+    const EPSILON_MS = 30;
+    assert.ok(
+      removal.allGoneT >= endMs - EPSILON_MS,
+      `the figure was removed at effect time ${removal.allGoneT}ms, ` +
+        `before its natural end (${endMs}ms, allowing ${EPSILON_MS}ms epsilon) -- ` +
+        'it did not survive to complete its own beat sequence'
+    );
+
+    // All 8 pieces must leave together, in one figWrap.remove() call -- if some future
+    // change removed pieces individually, the very first observed change would already
+    // show fewer than 8 pieces gone (firstLeaveCount > 0).
+    assert.strictEqual(
+      removal.firstLeaveCount,
+      0,
+      `pieces left the DOM one at a time instead of all together (the first observed removal left ${removal.firstLeaveCount} ` +
+        'of 8 pieces still present) -- expected the whole figure to be removed in a single operation'
+    );
+
+    await page.evaluate(() => {
+      delete window.__baTestEndMs;
+      delete window.__baTestRemoval;
+      delete window.__baTestObserver;
     });
   });
 
