@@ -813,6 +813,9 @@
     effectChronoTunnel: 'Chrono Tunnel',
     effectCyberVision: 'Cyber-Vision',
 
+    // Halloween pack (oculist-nq1x)
+    effectBoneAssembly: 'Bone Assembly',
+
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
     saveListPlaceholder: 'Save current as…',
@@ -908,9 +911,9 @@
   // ── Plugins & Effects Registry ────────────────────────────────────────────────
 
   // oculist-tdj: an entry may carry an optional `pack` field (a string pack id). Absent
-  // means core — always available. None of the twelve below carry one yet; this is the
-  // mechanism only, nothing is gated on it until a future bead promotes a packed effect
-  // in. See availableEffects() just below for the one place `pack` is actually read.
+  // means core — always available. See availableEffects() just below for the one place
+  // `pack` is actually read. oculist-nq1x.5 is the mechanism's first real user: the twelve
+  // originals below stay core (unpacked), and boneassembly is the first packed entry.
   var effectsRegistry = {
     hud: { label: i18n.effectAnimeLaser, run: animateAnimeLaser },
     iris: { label: i18n.effectSpotlight, run: animateIris },
@@ -923,7 +926,8 @@
     trail: { label: i18n.effectTrail, run: animateTrail },
     speedlines: { label: i18n.effectSpeedLines, run: animateSpeedLines },
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
-    cybervision: { label: i18n.effectCyberVision, run: animateCyberVision }
+    cybervision: { label: i18n.effectCyberVision, run: animateCyberVision },
+    boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -2218,6 +2222,708 @@
       flash.remove();
     });
   }
+
+  // oculist-nq1x.5: promotes fxBoneAssembly (artifacts/prototypes/effects-playground.html,
+  // the nq1x.4 redraw) into the shipped beacon contract. A scatter of loose bones flies in
+  // beside the match, snaps into a small standing skeleton, the skull detaches and rolls
+  // ahead while the headless body dashes to catch up, then the whole figure collapses into
+  // a heap and fades. The jaw-clack beat and the pointing-arm pose were cut in the
+  // playground (oculist-1ta.25/.29's own close reasons record why) and stay cut here.
+  function animateBoneAssembly(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var vw = window.innerWidth;
+
+    // Ivory/dark bone is this figure's own fixed identity palette, the same license the
+    // promotion contract names for the pumpkin's orange -- no neighbouring shipped
+    // character effect exists yet to set an accessibility-accent precedent for it.
+    // beaconScale still drives the whole figure's on-screen size (figHeight below), and
+    // durFactor scales every phase boundary, so Settings > Beacon Size / Animation Speed
+    // both apply end to end.
+    //
+    // Lite Mode: this effect has no glow, box-shadow, or multi-state flicker to begin with
+    // -- the collapse itself is the payoff, not decoration -- so settings.performanceMode
+    // changes nothing here. Full mode and Lite Mode render and time identically.
+    var IVORY = '#f1ead2', DARK = '#2b2116';
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    var OUTLINE_PX = 1.8;
+    var STROKE_NS = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+    var OUTLINE_LOCAL_ADD = 4.2;
+    function darkW(coreW) { return coreW + OUTLINE_LOCAL_ADD; }
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function drawBone(p0, p1, coreW, parent, name) {
+      svgEl('line', {
+        x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1],
+        stroke: DARK, 'stroke-width': darkW(coreW), style: 'stroke-linecap:round;'
+      }, parent);
+      var ivoryAttrs = {
+        x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1],
+        stroke: IVORY, 'stroke-width': coreW, style: 'stroke-linecap:round;'
+      };
+      if (name) ivoryAttrs['data-ba-part'] = name;
+      svgEl('line', ivoryAttrs, parent);
+    }
+    // A bent limb is two drawBone() segments meeting at a knobbed joint -- an ellipse in
+    // the ellipses' own non-scaling-stroke technique, not a third technique of its own.
+    function drawBentBone(p0, knee, p1, coreW, knobR, jointName, parent) {
+      drawBone(p0, knee, coreW, parent);
+      drawBone(knee, p1, coreW, parent);
+      svgEl('ellipse', { 'data-ba-part': jointName, cx: knee[0], cy: knee[1], rx: knobR, ry: knobR, fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS }, parent);
+    }
+
+    // Authoring grid: canonical drawing reaches toward local -x (toward the match when
+    // landing on its right); mirrored via a figWrap-level scaleX(-1) for a left landing.
+    var VB_W = 50, VB_H = 80;
+    var ANCHOR_X = VB_W / 2;
+
+    var SKULL = { cx: 25, cy: 12 };
+    // The one licensed exception to the ivory/dark two-tone palette: a soft highlight,
+    // not a stroke or a filtered glow.
+    var GLOSS_COLOR = '#ffffff';
+    // A single closed path (start point, then quadratic-Bezier control/end pairs) that
+    // narrows to a real waist, with the jaw ellipse overlapping and poking out wider on
+    // both sides -- the combined silhouette has a real concave notch where they meet.
+    var CRANIUM_PTS = [
+      [25, 1], [17.57, 1], [14.48, 6.6], [12, 12.2], [14.48, 17], [16.95, 19.4], [19.43, 19.4],
+      [25, 21], [30.57, 19.4], [33.05, 19.4], [35.52, 17], [38, 12.2], [35.52, 6.6], [32.43, 1], [25, 1]
+    ];
+    function craniumPathD() {
+      var d = 'M ' + CRANIUM_PTS[0][0] + ' ' + CRANIUM_PTS[0][1];
+      for (var i = 1; i < CRANIUM_PTS.length; i += 2) {
+        var c = CRANIUM_PTS[i], e = CRANIUM_PTS[i + 1] || CRANIUM_PTS[0];
+        d += ' Q ' + c[0] + ' ' + c[1] + ' ' + e[0] + ' ' + e[1];
+      }
+      return d + ' Z';
+    }
+    var JAW_CLOSED = { cx: 25, cy: 22.6, rx: 7.5, ry: 4.4 };
+    var EYE_L = { cx: 19, cy: 11.4, rx: 4.3, ry: 4.0 };
+    var EYE_R = { cx: 31, cy: 11.4, rx: 4.3, ry: 4.0 };
+    // Jaw-clack (oculist-1ta.25) and the raised/pointing-arm pose (oculist-nq1x.4 review,
+    // it made the effect read as the removed Foot Tap and Point) were both cut in the
+    // playground and stay cut here -- see TIP_REST below, the near arm's only pose.
+
+    var SPINE = { p0: [25, 27], p1: [25, 39], w: 4.0 };
+    var SPINE_BEAD_Y = [28.8, 33.0, 37.2];
+    var SPINE_BEAD_W = 6.5, SPINE_BEAD_H = 3.2;
+    var SPINE_OUTLINE_PX = 2.0;
+
+    // cy is the mean of RIB_TICK_Y, keeping the egg/barrel taper symmetric between the
+    // outer and inner rib pairs.
+    var RIBCAGE = { cx: 25, cy: 48.75 };
+    var RIB_TICK_Y = [39.45, 45.65, 51.85, 58.05];
+    var RIB_HALF_SPAN = 10.5;
+    var RIB_DIP = 1.0;
+    var RIB_CORE_W = 1.8, RIB_OUTLINE_ADD = 1.9;
+    function ribDarkW() { return RIB_CORE_W + RIB_OUTLINE_ADD; }
+    function ribInset(ty) { return Math.abs(ty - RIBCAGE.cy) * 0.3; }
+    function ribEndpoints(ty) {
+      var half = RIB_HALF_SPAN - ribInset(ty);
+      return [RIBCAGE.cx - half, RIBCAGE.cx + half];
+    }
+    var STERNUM_X = 23.4, STERNUM_W = 3.2, STERNUM_Y = 39, STERNUM_H = 18, STERNUM_RX = 1.6;
+    // Lumbar spine between ribcage and pelvis, drawn and reach-bounded like a limb segment.
+    // Mounted inside gRibcage so it stays one of the figure's 8 named pieces.
+    var LUMBAR = { p0: [25, 57], p1: [25, 63], w: 3.6 };
+    // Self-reach for the ribcage GROUP: each rib pair's own farthest points are its two
+    // endpoints plus its dip control point (a quadratic Bezier never leaves the convex
+    // hull of its own start/control/end points), each padded by the rib stroke's own half
+    // dark-width for the round cap's bulge.
+    function ribcageSelfReach() {
+      var capR = ribDarkW() / 2, R = 0;
+      RIB_TICK_Y.forEach(function (ty) {
+        var ends = ribEndpoints(ty);
+        [[ends[0], ty], [ends[1], ty], [RIBCAGE.cx, ty + RIB_DIP]].forEach(function (p) {
+          var d = Math.hypot(p[0] - RIBCAGE.cx, p[1] - RIBCAGE.cy) + capR;
+          if (d > R) R = d;
+        });
+      });
+      [STERNUM_X, STERNUM_X + STERNUM_W].forEach(function (x) {
+        [STERNUM_Y, STERNUM_Y + STERNUM_H].forEach(function (y) {
+          var d = Math.hypot(x - RIBCAGE.cx, y - RIBCAGE.cy);
+          if (d > R) R = d;
+        });
+      });
+      var lumbarCapR = darkW(LUMBAR.w) / 2;
+      [LUMBAR.p0, LUMBAR.p1].forEach(function (p) {
+        var d = Math.hypot(p[0] - RIBCAGE.cx, p[1] - RIBCAGE.cy) + lumbarCapR;
+        if (d > R) R = d;
+      });
+      return R;
+    }
+    var R_RIBCAGE_SELF = ribcageSelfReach();
+
+    var PELVIS = { cx: 25, cy: 66 };
+    // A true butterfly/two-lobe silhouette: one closed path (start point, then
+    // control/end pairs, last pair closing back to the start).
+    var PELVIS_PTS = [
+      [25, 62.85], [20.1, 59], [15.5, 60.4], [11.4, 62.15], [11.4, 66.7], [11.4, 71.6],
+      [17.6, 72.65], [22.1, 73.35], [25, 70.55], [27.9, 73.35], [32.4, 72.65],
+      [38.6, 71.6], [38.6, 66.7], [38.6, 62.15], [34.5, 60.4], [29.9, 59]
+    ];
+    var PELVIS_HOLE_L = { cx: 21, cy: 69.5, rx: 2.2, ry: 1.4 };
+    var PELVIS_HOLE_R = { cx: 29, cy: 69.5, rx: 2.2, ry: 1.4 };
+    function ellipseHoleSubpath(h) {
+      return ' M ' + (h.cx - h.rx) + ' ' + h.cy +
+        ' A ' + h.rx + ' ' + h.ry + ' 0 1 0 ' + (h.cx + h.rx) + ' ' + h.cy +
+        ' A ' + h.rx + ' ' + h.ry + ' 0 1 0 ' + (h.cx - h.rx) + ' ' + h.cy + ' Z';
+    }
+    function pelvisPathD() {
+      var d = 'M ' + PELVIS_PTS[0][0] + ' ' + PELVIS_PTS[0][1];
+      for (var i = 1; i < PELVIS_PTS.length; i += 2) {
+        var c = PELVIS_PTS[i], e = PELVIS_PTS[i + 1] || PELVIS_PTS[0];
+        d += ' Q ' + c[0] + ' ' + c[1] + ' ' + e[0] + ' ' + e[1];
+      }
+      d += ' Z';
+      // evenodd (set where this path is drawn below) makes each of these two extra closed
+      // loops a literal hole in the shell's fill, not a second filled shape.
+      d += ellipseHoleSubpath(PELVIS_HOLE_L) + ellipseHoleSubpath(PELVIS_HOLE_R);
+      return d;
+    }
+    // A quadratic Bezier never leaves the convex hull of its own start/control/end points,
+    // so the true farthest painted point on the closed path is at most the farthest of
+    // PELVIS_PTS from the piece's own rotation center.
+    function pelvisSelfReach() {
+      var R = 0;
+      PELVIS_PTS.forEach(function (p) {
+        var d = Math.hypot(p[0] - PELVIS.cx, p[1] - PELVIS.cy);
+        if (d > R) R = d;
+      });
+      return R;
+    }
+    var R_PELVIS_SELF = pelvisSelfReach();
+
+    var NEAR_HIP = [16, 64], FAR_HIP = [34, 64];
+    var NEAR_LEG = { p0: NEAR_HIP, p1: [12, 80], w: 3.4 };
+    var FAR_LEG = { p0: FAR_HIP, p1: [38, 80], w: 3.4 };
+    // Knee bend points: hip->knee 8 units, knee->foot 8 units.
+    var NEAR_KNEE = [12.5, 72], FAR_KNEE = [37.5, 72];
+    var KNEE_KNOB_R = 2.6;
+    var FOOT_PAD = { rx: 3.0, ry: 1.5 };
+
+    var NEAR_SHOULDER = [13, 41], FAR_SHOULDER = [37, 41];
+    var TIP_REST = [7, 60];
+    var ARM_W = 4.4;
+    var FAR_ARM = { p0: FAR_SHOULDER, p1: [43, 60], w: 4.4 };
+    var NEAR_ELBOW = [9, 50], FAR_ELBOW = [41, 50];
+    var ELBOW_KNOB_R = 1.9;
+
+    // The run cycle's second leg pose is a hard-cut rotation about the leg's own hip
+    // point, not a second drawn shape -- touches only `transform`, so it never adds a new
+    // opacity animation (G4 stays structurally 0). KICK_ROT_DEG is a look decision; the
+    // reach bound below covers any rotation angle, not just this one.
+    var KICK_ROT_DEG = 45;
+    // A triangle-inequality chain (distance to the last rigid anchor plus that anchor's
+    // own onward segment length plus that segment's half stroke width/knob radius/pad
+    // radius) at every joint -- always conservative regardless of the actual angle.
+    function legBendPivotReach(hip, knee, foot, coreW, knobR, padRx, padRy) {
+      var capR = darkW(coreW) / 2;
+      function d(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+      var hipToKnee = d(hip, knee), kneeToFoot = d(knee, foot);
+      return Math.max(
+        hipToKnee + capR,
+        hipToKnee + knobR,
+        hipToKnee + kneeToFoot + capR,
+        hipToKnee + kneeToFoot + Math.max(padRx, padRy)
+      );
+    }
+    var R_NEAR_LEG_PIVOT = legBendPivotReach(NEAR_HIP, NEAR_KNEE, NEAR_LEG.p1, NEAR_LEG.w, KNEE_KNOB_R, FOOT_PAD.rx, FOOT_PAD.ry);
+    var R_FAR_LEG_PIVOT = legBendPivotReach(FAR_HIP, FAR_KNEE, FAR_LEG.p1, FAR_LEG.w, KNEE_KNOB_R, FOOT_PAD.rx, FOOT_PAD.ry);
+
+    // Clearance derivation, DERIVED from the geometry above (rest pose, every scatter-in
+    // start point, and the collapse heap), not hand-picked. ellipseReach()/boneReach()-
+    // style helpers each return the EXACT local x-extent of a shape under ANY rotation
+    // about its own center; sampling just the two endpoints of each piece's own straight
+    // WAAPI translate (rest<->scatter-start, rest<->heap) bounds the whole segment.
+    var minX = Infinity, maxX = -Infinity;
+    function boneReach(p0, p1, coreW) {
+      var midX = (p0[0] + p1[0]) / 2;
+      var halfLen = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) / 2;
+      var R = halfLen + darkW(coreW) / 2;
+      if (midX - R < minX) minX = midX - R;
+      if (midX + R > maxX) maxX = midX + R;
+    }
+    function selfReachXY(cx, R) {
+      if (cx - R < minX) minX = cx - R;
+      if (cx + R > maxX) maxX = cx + R;
+    }
+
+    // gSkull is a RIGID GROUP (cranium plus both eye sockets and the jaw) that all rotate
+    // together about (SKULL.cx, SKULL.cy). For any point P on any sub-shape, the triangle
+    // inequality gives |P - rotCenter| <= |subShapeCenter - rotCenter| + subShapeOwnReach,
+    // a safe bound on the true swept-circle radius under any rotation angle -- needed for
+    // the roll's ~150deg travel, not just the small scatter wobble elsewhere.
+    function skullSelfReach() {
+      var R = 0;
+      CRANIUM_PTS.forEach(function (p) {
+        var d = Math.hypot(p[0] - SKULL.cx, p[1] - SKULL.cy);
+        if (d > R) R = d;
+      });
+      [EYE_L, EYE_R, JAW_CLOSED].forEach(function (s) {
+        var d = Math.hypot(s.cx - SKULL.cx, s.cy - SKULL.cy);
+        var reach = d + Math.max(s.rx, s.ry);
+        if (reach > R) R = reach;
+      });
+      return R;
+    }
+    var R_SKULL_SELF = skullSelfReach();
+
+    selfReachXY(SKULL.cx, R_SKULL_SELF);
+    selfReachXY(RIBCAGE.cx, R_RIBCAGE_SELF);
+    selfReachXY(PELVIS.cx, R_PELVIS_SELF);
+    boneReach(SPINE.p0, SPINE.p1, SPINE.w);
+    boneReach(NEAR_LEG.p0, NEAR_LEG.p1, NEAR_LEG.w);
+    boneReach(FAR_LEG.p0, FAR_LEG.p1, FAR_LEG.w);
+    boneReach(NEAR_SHOULDER, TIP_REST, ARM_W);
+    boneReach(FAR_ARM.p0, FAR_ARM.p1, FAR_ARM.w);
+
+    // Scatter-in: hand-picked (start dx, dy, deg) per moving piece -- no Math.random
+    // anywhere, deliberately irregular so the eye reads a gathering rather than a
+    // mechanical stagger.
+    var SCATTER = {
+      skull: { dx: 0, dy: -50, deg: -35 },
+      ribcage: { dx: -20, dy: -34, deg: -65 },
+      pelvis: { dx: 4, dy: 36, deg: 45 },
+      spine: { dx: 22, dy: -24, deg: 60 },
+      nearLeg: { dx: -14, dy: 30, deg: -55 },
+      farLeg: { dx: 20, dy: 26, deg: 70 },
+      nearArm: { dx: -26, dy: -10, deg: -80 },
+      farArm: { dx: 22, dy: -16, deg: 75 }
+    };
+    // Collapse heap: each piece's local-unit drop is sized off its OWN rest y so it lands
+    // clustered near the feet baseline.
+    var HEAP = {
+      ribcage: { dx: 2, dy: 24, deg: -70 },
+      pelvis: { dx: 0, dy: 5, deg: 20 },
+      spine: { dx: -2, dy: 36, deg: -55 },
+      nearLeg: { dx: 5, dy: 6, deg: 65 },
+      farLeg: { dx: -5, dy: 6, deg: -60 },
+      nearArm: { dx: 6, dy: 22, deg: 70 },
+      farArm: { dx: -6, dy: 22, deg: -65 }
+    };
+    // The skull's roll, hand-authored (no Math.random). It detaches after the snap and
+    // rolls along the baseline toward the match (local -x). Rotation is DERIVED from
+    // distance covered: ROLL_DEG_PER_UNIT is the exact rolling-without-slipping rate for a
+    // wheel of radius ROLL_R_LOCAL, so deg = dx * ROLL_DEG_PER_UNIT keeps rotation and
+    // translation in agreement at every instant -- this is what makes it read as rolling
+    // rather than skating.
+    function craniumBoundingSemiAxes() {
+      var minCX = Infinity, maxCX = -Infinity, minCY = Infinity, maxCY = -Infinity;
+      CRANIUM_PTS.forEach(function (p) {
+        if (p[0] < minCX) minCX = p[0]; if (p[0] > maxCX) maxCX = p[0];
+        if (p[1] < minCY) minCY = p[1]; if (p[1] > maxCY) maxCY = p[1];
+      });
+      return [(maxCX - minCX) / 2, Math.max(SKULL.cy - minCY, maxCY - SKULL.cy)];
+    }
+    var CRANIUM_SEMI_AXES = craniumBoundingSemiAxes();
+    var ROLL_R_LOCAL = (CRANIUM_SEMI_AXES[0] + CRANIUM_SEMI_AXES[1]) / 2;
+    var ROLL_DEG_PER_UNIT = (180 / Math.PI) / ROLL_R_LOCAL;
+    // The settle keyframe (a multiple of 360, see ROLL_SETTLE_DEG below) lands the skull
+    // back upright at the same ground line the feet already rest on: the leg's own dark
+    // under-stroke round cap, the true lowest painted point (not the smaller foot-pad
+    // ellipse).
+    var SKULL_LOWEST_Y = JAW_CLOSED.cy + JAW_CLOSED.ry;
+    var FEET_LOWEST_Y = NEAR_LEG.p1[1] + darkW(NEAR_LEG.w) / 2;
+    var ROLL_DX_TD = -6;
+    var ROLL_DY_TD = FEET_LOWEST_Y - SKULL_LOWEST_Y;
+    var ROLL_DEG_TD = ROLL_DX_TD * ROLL_DEG_PER_UNIT;
+    var ROLL_DX_TOTAL = -38, ROLL_DY_TOTAL = ROLL_DY_TD;
+    var ROLL_DEG_TOTAL = ROLL_DX_TOTAL * ROLL_DEG_PER_UNIT;
+    // oculist-1ta.33: the physically-exact end of the roll (-150.15deg) is upside down; at
+    // 1x the eye-sockets-above-jaw arrangement is the only thing carrying the skull read.
+    // The settle segment below continues the roll's own CCW direction to -360deg (visually
+    // identical to 0deg, any multiple of 360 is) rather than reversing back to the nearest
+    // multiple -- reversing read as a backward flick, fixed under review round 2.
+    var ROLL_SETTLE_DEG = -360;
+
+    var REST_CX = {
+      skull: SKULL.cx, ribcage: RIBCAGE.cx, pelvis: PELVIS.cx,
+      spine: (SPINE.p0[0] + SPINE.p1[0]) / 2,
+      nearLeg: (NEAR_LEG.p0[0] + NEAR_LEG.p1[0]) / 2,
+      farLeg: (FAR_LEG.p0[0] + FAR_LEG.p1[0]) / 2,
+      nearArm: (NEAR_SHOULDER[0] + TIP_REST[0]) / 2,
+      farArm: (FAR_ARM.p0[0] + FAR_ARM.p1[0]) / 2
+    };
+    var REST_R = {
+      skull: R_SKULL_SELF, ribcage: R_RIBCAGE_SELF, pelvis: R_PELVIS_SELF,
+      spine: Math.hypot(SPINE.p1[0] - SPINE.p0[0], SPINE.p1[1] - SPINE.p0[1]) / 2 + darkW(SPINE.w) / 2,
+      nearLeg: Math.hypot(NEAR_LEG.p1[0] - NEAR_LEG.p0[0], NEAR_LEG.p1[1] - NEAR_LEG.p0[1]) / 2 + darkW(NEAR_LEG.w) / 2,
+      farLeg: Math.hypot(FAR_LEG.p1[0] - FAR_LEG.p0[0], FAR_LEG.p1[1] - FAR_LEG.p0[1]) / 2 + darkW(FAR_LEG.w) / 2,
+      nearArm: Math.hypot(TIP_REST[0] - NEAR_SHOULDER[0], TIP_REST[1] - NEAR_SHOULDER[1]) / 2 + darkW(ARM_W) / 2,
+      farArm: Math.hypot(FAR_ARM.p1[0] - FAR_ARM.p0[0], FAR_ARM.p1[1] - FAR_ARM.p0[1]) / 2 + darkW(FAR_ARM.w) / 2
+    };
+    Object.keys(REST_CX).forEach(function (k) {
+      var cx = REST_CX[k], R = REST_R[k], sc = SCATTER[k], hp = HEAP[k] || { dx: 0 };
+      if (cx - R < minX) minX = cx - R;
+      if (cx + R > maxX) maxX = cx + R;
+      if (cx + sc.dx - R < minX) minX = cx + sc.dx - R;
+      if (cx + sc.dx + R > maxX) maxX = cx + sc.dx + R;
+      if (cx + hp.dx - R < minX) minX = cx + hp.dx - R;
+      if (cx + hp.dx + R > maxX) maxX = cx + hp.dx + R;
+    });
+
+    // dx runs 0 -> ROLL_DX_TD -> ROLL_DX_TOTAL monotonically toward the match, so the two
+    // roll keyframes below are the path's actual extremes; both are sampled explicitly.
+    [ROLL_DX_TD, ROLL_DX_TOTAL].forEach(function (dx) {
+      var cx = SKULL.cx + dx;
+      if (cx - R_SKULL_SELF < minX) minX = cx - R_SKULL_SELF;
+      if (cx + R_SKULL_SELF > maxX) maxX = cx + R_SKULL_SELF;
+    });
+
+    // Every OTHER piece is inside gBody, which itself translates DASH_DX_TOTAL local units
+    // toward the match while the skull rolls (concurrent, not after) -- every REST_CX/
+    // REST_R/HEAP contribution needs the same dash shift folded in. SCATTER positions are
+    // the one exception: they finish strictly before gBody starts moving.
+    var DASH_DX_TOTAL = -20;
+    Object.keys(REST_CX).forEach(function (k) {
+      var cx = REST_CX[k], R = REST_R[k], hp = HEAP[k] || { dx: 0 };
+      if (cx + DASH_DX_TOTAL - R < minX) minX = cx + DASH_DX_TOTAL - R;
+      if (cx + DASH_DX_TOTAL + R > maxX) maxX = cx + DASH_DX_TOTAL + R;
+      if (cx + hp.dx + DASH_DX_TOTAL - R < minX) minX = cx + hp.dx + DASH_DX_TOTAL - R;
+      if (cx + hp.dx + DASH_DX_TOTAL + R > maxX) maxX = cx + hp.dx + DASH_DX_TOTAL + R;
+    });
+    // The run cycle's own hip-pivot rotation only ever turns while gBody is dashing, so
+    // its reach needs the same shift; R_*_LEG_PIVOT already bounds any rotation angle
+    // about the hip, so only the shifted (more negative) end needs adding here.
+    [[NEAR_HIP, R_NEAR_LEG_PIVOT], [FAR_HIP, R_FAR_LEG_PIVOT]].forEach(function (pair) {
+      var cx = pair[0][0] + DASH_DX_TOTAL, R = pair[1];
+      if (cx - R < minX) minX = cx - R;
+      if (cx + R > maxX) maxX = cx + R;
+    });
+
+    var REACH_INWARD_LOCAL = ANCHOR_X - minX;
+    var REACH_OUTWARD_LOCAL = maxX - ANCHOR_X;
+
+    // beaconScale multiplies the match-relative clamp so Settings > Beacon Size still
+    // governs this figure's on-screen size, exactly like every other beacon effect's own
+    // scale knob.
+    var figHeight = Math.max(100, Math.min(110, 2.6 * rect.height)) * beaconScale;
+    var figScale = figHeight / VB_H;
+    var figWidth = VB_W * figScale;
+
+    // GAP is the bare clearance floor; SCREEN_STROKE_MARGIN folds in half the ellipses'
+    // own non-scaling OUTLINE_PX plus a small antialiasing/subpixel slack.
+    var GAP = 10;
+    var SCREEN_STROKE_MARGIN = OUTLINE_PX / 2 + 1.0;
+    var REACH_INWARD = REACH_INWARD_LOCAL * figScale + SCREEN_STROKE_MARGIN;
+    var REACH_OUTWARD = REACH_OUTWARD_LOCAL * figScale + SCREEN_STROKE_MARGIN;
+
+    // Side selection: right by default, mirror left only if the right doesn't fit. Fit
+    // decisions are made from the PRE-SCROLL viewport rect -- room on screen is a viewport
+    // question even though the figure itself mounts in document coordinates below.
+    var sideRight = { x: rect.right + GAP + REACH_INWARD, side: 'right' };
+    sideRight.fits = sideRight.x + REACH_OUTWARD <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - REACH_INWARD, side: 'left' };
+    sideLeft.fits = sideLeft.x - REACH_OUTWARD >= 4;
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+    var mirrored = landing.side !== 'right';
+    var pivotX = landing.x;
+    var feetBaselineY = rect.bottom;
+
+    var figLeft = pivotX - figWidth / 2;
+    var figTop = feetBaselineY - figHeight;
+
+    // Defensive backstop, independent of the arithmetic above: read the box this effect is
+    // about to draw and suppress the WHOLE figure -- never just one piece -- if it would
+    // still overlap the match (oculist-1ta.24's own lesson: a partial figure can read as
+    // the wrong thing entirely). Still viewport space, matching the fit decision above.
+    function localXToScreen(lx) {
+      return figLeft + (mirrored ? (figWidth - lx * figScale) : (lx * figScale));
+    }
+    var boxA = localXToScreen(minX), boxB = localXToScreen(maxX);
+    var boxLeft = Math.min(boxA, boxB), boxRight = Math.max(boxA, boxB);
+    if (boxLeft < rect.right && boxRight > rect.left) return;
+
+    // Document coordinates from here on: figLeft/figTop above are viewport-space
+    // placement math, converted to document space only at the point of mounting.
+    var docLeft = figLeft + window.scrollX;
+    var docTop = figTop + window.scrollY;
+
+    var figWrap = document.createElement('div');
+    figWrap.className = 'oc-beacon oc-beacon-transient';
+    figWrap.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+      'pointer-events:none',
+      'z-index:2147483642'
+    ].join(';') + (mirrored ? ';transform:scaleX(-1)' : '');
+    document.documentElement.appendChild(figWrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(figWidth));
+    svg.setAttribute('height', String(figHeight));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:visible;';
+    figWrap.appendChild(svg);
+
+    // clickG carries only the snap "click" scale-pulse, kept separate from figWrap's own
+    // static mirror transform so animating clickG's transform never has to re-specify it.
+    var clickG = document.createElementNS(NS, 'g');
+    clickG.style.cssText = 'transform-origin:' + ANCHOR_X + 'px 50px;';
+    svg.appendChild(clickG);
+
+    var mirrorG = document.createElementNS(NS, 'g');
+    clickG.appendChild(mirrorG);
+
+    function pieceG(parent, name) {
+      var g = document.createElementNS(NS, 'g');
+      if (name) g.setAttribute('data-ba-piece', name);
+      parent.appendChild(g);
+      return g;
+    }
+
+    // Static art, drawn once at each piece's own assembled/rest local coordinates -- every
+    // beat is a CSS transform layered on top via WAAPI, never a redraw.
+    var gSkull = pieceG(mirrorG, 'skull');
+    gSkull.style.cssText = 'transform-origin:' + SKULL.cx + 'px ' + SKULL.cy + 'px;';
+    // Jaw painted before cranium so the cranium's own silhouette covers the part of the
+    // jaw that overlaps it, leaving only the jaw's own bulge visible beyond the waist.
+    svgEl('ellipse', { 'data-ba-part': 'jaw', cx: JAW_CLOSED.cx, cy: JAW_CLOSED.cy, rx: JAW_CLOSED.rx, ry: JAW_CLOSED.ry, fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS }, gSkull);
+    svgEl('path', { 'data-ba-part': 'cranium', d: craniumPathD(), fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS }, gSkull);
+    svgEl('ellipse', { 'data-ba-part': 'gloss', cx: '19', cy: '6.2', rx: '3.6', ry: '1.5', fill: GLOSS_COLOR, transform: 'rotate(-20 19 6.2)' }, gSkull);
+    svgEl('ellipse', { 'data-ba-part': 'eye-left', cx: EYE_L.cx, cy: EYE_L.cy, rx: EYE_L.rx, ry: EYE_L.ry, fill: DARK }, gSkull);
+    svgEl('ellipse', { 'data-ba-part': 'eye-right', cx: EYE_R.cx, cy: EYE_R.cy, rx: EYE_R.rx, ry: EYE_R.ry, fill: DARK }, gSkull);
+    svgEl('path', { 'data-ba-part': 'nose', d: 'M 25 13.4 L 22.3 16.6 Q 25 17.8 27.7 16.6 Z', fill: DARK }, gSkull);
+    svgEl('path', { 'data-ba-part': 'teeth', d: 'M 20 20.6 Q 25 22.6 30 20.6 M 22.5 21.6 L 22.5 22.8 M 25 21.9 L 25 23.2 M 27.5 21.6 L 27.5 22.8', fill: 'none', stroke: DARK, 'stroke-width': '1.1', style: STROKE_NS }, gSkull);
+
+    // Every piece EXCEPT the skull mounts inside gBody, so one translateX on gBody moves
+    // the whole body while each piece still plays its own scatter/collapse transform.
+    var gBody = pieceG(mirrorG);
+
+    var gRibcage = pieceG(gBody, 'ribcage');
+    gRibcage.style.cssText = 'transform-origin:' + RIBCAGE.cx + 'px ' + RIBCAGE.cy + 'px;';
+    // An OPEN cage of four rib pairs (the dark-under/ivory-over two-stroke idiom, via
+    // <path> so it can curve) plus a vertical sternum -- real voids between rows show
+    // whatever is behind the figure.
+    RIB_TICK_Y.forEach(function (ty) {
+      var ends = ribEndpoints(ty);
+      var d = 'M ' + ends[0] + ' ' + ty + ' Q ' + RIBCAGE.cx + ' ' + (ty + RIB_DIP) + ' ' + ends[1] + ' ' + ty;
+      svgEl('path', { d: d, fill: 'none', stroke: DARK, 'stroke-width': String(ribDarkW()), style: 'stroke-linecap:round;' }, gRibcage);
+      svgEl('path', { 'data-ba-part': 'rib-' + ty, d: d, fill: 'none', stroke: IVORY, 'stroke-width': String(RIB_CORE_W), style: 'stroke-linecap:round;' }, gRibcage);
+    });
+    svgEl('rect', { 'data-ba-part': 'sternum', x: STERNUM_X, y: STERNUM_Y, width: STERNUM_W, height: STERNUM_H, rx: STERNUM_RX, fill: IVORY, stroke: DARK, 'stroke-width': '1.2', style: STROKE_NS }, gRibcage);
+    drawBone(LUMBAR.p0, LUMBAR.p1, LUMBAR.w, gRibcage, 'lumbar');
+
+    var gPelvis = pieceG(gBody, 'pelvis');
+    gPelvis.style.cssText = 'transform-origin:' + PELVIS.cx + 'px ' + PELVIS.cy + 'px;';
+    // The two voids are cut directly into the shell path's own fill (fill-rule:evenodd),
+    // a real hole rather than an opaque dark ellipse laid on top -- the outline traces
+    // both the outer silhouette and each hole's own inner boundary.
+    svgEl('path', { 'data-ba-part': 'pelvis-shell', d: pelvisPathD(), fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS + 'fill-rule:evenodd;' }, gPelvis);
+    // Position/size record only (fill:none, not painted) -- the actual void is the
+    // evenodd cutout above, built from these same two objects so the two can never drift
+    // apart.
+    svgEl('ellipse', { 'data-ba-part': 'pelvis-hole-left', cx: String(PELVIS_HOLE_L.cx), cy: String(PELVIS_HOLE_L.cy), rx: String(PELVIS_HOLE_L.rx), ry: String(PELVIS_HOLE_L.ry), fill: 'none' }, gPelvis);
+    svgEl('ellipse', { 'data-ba-part': 'pelvis-hole-right', cx: String(PELVIS_HOLE_R.cx), cy: String(PELVIS_HOLE_R.cy), rx: String(PELVIS_HOLE_R.rx), ry: String(PELVIS_HOLE_R.ry), fill: 'none' }, gPelvis);
+
+    var gSpine = pieceG(gBody, 'spine');
+    gSpine.style.cssText = 'transform-origin:' + REST_CX.spine + 'px ' + ((SPINE.p0[1] + SPINE.p1[1]) / 2) + 'px;';
+    SPINE_BEAD_Y.forEach(function (by, i) {
+      svgEl('rect', {
+        'data-ba-part': 'vertebra-' + i, x: SPINE.p0[0] - SPINE_BEAD_W / 2, y: by - SPINE_BEAD_H / 2,
+        width: SPINE_BEAD_W, height: SPINE_BEAD_H, rx: SPINE_BEAD_H / 2,
+        fill: IVORY, stroke: DARK, 'stroke-width': String(SPINE_OUTLINE_PX), style: STROKE_NS
+      }, gSpine);
+    });
+
+    // Legs: the wrapper keeps the scatter/collapse transform; the run cycle rotates an
+    // inner pivot group (transform-origin the leg's own hip point) between 0deg and
+    // KICK_ROT_DEG by hard cut. Nested inside the wrapper so the two compose.
+    var gNearLeg = pieceG(gBody, 'near-leg');
+    gNearLeg.style.cssText = 'transform-origin:' + REST_CX.nearLeg + 'px ' + ((NEAR_LEG.p0[1] + NEAR_LEG.p1[1]) / 2) + 'px;';
+    var gNearLegPivot = pieceG(gNearLeg);
+    gNearLegPivot.style.cssText = 'transform-origin:' + NEAR_HIP[0] + 'px ' + NEAR_HIP[1] + 'px;';
+    drawBentBone(NEAR_LEG.p0, NEAR_KNEE, NEAR_LEG.p1, NEAR_LEG.w, KNEE_KNOB_R, 'near-knee', gNearLegPivot);
+    svgEl('ellipse', { 'data-ba-part': 'near-foot-pad', cx: NEAR_LEG.p1[0], cy: NEAR_LEG.p1[1], rx: FOOT_PAD.rx, ry: FOOT_PAD.ry, fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS }, gNearLegPivot);
+
+    var gFarLeg = pieceG(gBody, 'far-leg');
+    gFarLeg.style.cssText = 'transform-origin:' + REST_CX.farLeg + 'px ' + ((FAR_LEG.p0[1] + FAR_LEG.p1[1]) / 2) + 'px;';
+    var gFarLegPivot = pieceG(gFarLeg);
+    gFarLegPivot.style.cssText = 'transform-origin:' + FAR_HIP[0] + 'px ' + FAR_HIP[1] + 'px;';
+    drawBentBone(FAR_LEG.p0, FAR_KNEE, FAR_LEG.p1, FAR_LEG.w, KNEE_KNOB_R, 'far-knee', gFarLegPivot);
+    svgEl('ellipse', { 'data-ba-part': 'far-foot-pad', cx: FAR_LEG.p1[0], cy: FAR_LEG.p1[1], rx: FOOT_PAD.rx, ry: FOOT_PAD.ry, fill: IVORY, stroke: DARK, 'stroke-width': OUTLINE_PX, style: STROKE_NS }, gFarLegPivot);
+
+    var gFarArm = pieceG(gBody, 'far-arm');
+    gFarArm.style.cssText = 'transform-origin:' + REST_CX.farArm + 'px ' + ((FAR_ARM.p0[1] + FAR_ARM.p1[1]) / 2) + 'px;';
+    drawBentBone(FAR_ARM.p0, FAR_ELBOW, FAR_ARM.p1, FAR_ARM.w, ELBOW_KNOB_R, 'far-elbow', gFarArm);
+
+    // Near arm: single rest pose only now that the point beat is cut.
+    var gNearArm = pieceG(gBody, 'near-arm');
+    gNearArm.style.cssText = 'transform-origin:' + REST_CX.nearArm + 'px ' + ((NEAR_SHOULDER[1] + TIP_REST[1]) / 2) + 'px;';
+    drawBentBone(NEAR_SHOULDER, NEAR_ELBOW, TIP_REST, ARM_W, ELBOW_KNOB_R, 'near-elbow', gNearArm);
+
+    // oculist-1ta.33: re-append gSkull last so it paints above the whole figure during the
+    // roll (SVG paints in document order) -- appendChild() on an attached node re-parents
+    // rather than duplicating it.
+    mirrorG.appendChild(gSkull);
+
+    var PIECES = {
+      skull: gSkull, ribcage: gRibcage, pelvis: gPelvis, spine: gSpine,
+      nearLeg: gNearLeg, farLeg: gFarLeg, nearArm: gNearArm, farArm: gFarArm
+    };
+    // The seven pieces that collapse into the heap -- the skull left earlier, on its own,
+    // via the roll, and gets its own dedicated .animate() call instead.
+    var COLLAPSE_PIECES = {
+      ribcage: gRibcage, pelvis: gPelvis, spine: gSpine,
+      nearLeg: gNearLeg, farLeg: gFarLeg, nearArm: gNearArm, farArm: gFarArm
+    };
+
+    // Timeline (ms): every literal value below is the playground's own millisecond
+    // constant times durFactor, so Settings > Animation Speed scales the whole beat
+    // sequence -- including every derived sum -- exactly like animateTrail's own duration.
+    var STAGGER = {
+      skull: 0, spine: 35 * durFactor, ribcage: 65 * durFactor, farArm: 85 * durFactor,
+      farLeg: 100 * durFactor, pelvis: 120 * durFactor, nearLeg: 145 * durFactor, nearArm: 170 * durFactor
+    };
+    var SNAP_DONE_T = 640 * durFactor;
+    var CLICK_DUR = 90 * durFactor;
+    // The roll starts the instant the click pulse ends -- no dead air between the snap
+    // and the roll.
+    var ROLL_START = SNAP_DONE_T + CLICK_DUR;
+    var ROLL_TD_MS = 100 * durFactor;
+    var ROLL_TRAVEL_MS = 300 * durFactor;
+    var ROLL_SETTLE_MS = 300 * durFactor;
+    var ROLL_DUR = ROLL_TD_MS + ROLL_TRAVEL_MS + ROLL_SETTLE_MS;
+    var ROLL_TD_OFFSET = ROLL_TD_MS / ROLL_DUR;
+    var ROLL_SETTLE_OFFSET = (ROLL_TD_MS + ROLL_TRAVEL_MS) / ROLL_DUR;
+    var COLLAPSE_START = ROLL_START + ROLL_DUR;
+    // The body starts halfway through the skull's actual travel, after its detach/drop
+    // and once it has a visible lead -- concurrent with the roll without painting the
+    // skull over the legs for the whole run. Still ends at COLLAPSE_START.
+    var DASH_START = ROLL_START + ROLL_TD_MS + ROLL_TRAVEL_MS / 2;
+    var DASH_DUR = COLLAPSE_START - DASH_START;
+    var RUN_PERIOD = 150 * durFactor;
+    var COLLAPSE_DUR = 440 * durFactor;
+    var HEAP_HOLD = 300 * durFactor;
+    var FADE_DUR = 200 * durFactor;
+
+    // Small overshoot alternates sign per piece for an organic settle wobble --
+    // rotational only, translation goes straight start->rest.
+    var OVERSHOOT_DEG = { skull: -10, spine: 9, ribcage: 11, farArm: -8, farLeg: 10, pelvis: -9, nearLeg: 8, nearArm: -11 };
+    // Collapse stagger: each piece's own fall duration is COLLAPSE_DUR minus its own
+    // stagger, so all seven independently start falling at different moments but land in
+    // the heap at the same absolute instant.
+    var COLLAPSE_STAGGER = {
+      ribcage: 40 * durFactor, spine: 70 * durFactor, farArm: 95 * durFactor, farLeg: 115 * durFactor,
+      pelvis: 140 * durFactor, nearLeg: 160 * durFactor, nearArm: 185 * durFactor
+    };
+
+    // Every Animation this beacon creates is collected here and hung off figWrap (the
+    // single .oc-beacon-transient element cancelBeacons() selects). Unlike a single-
+    // element effect (animateTrail's line/arrow/flash, each its own top-level node with
+    // its own independent .finished), this is ONE figure built from many staggered
+    // per-piece animations that settle at different times -- the earliest scatter-in
+    // piece finishes around 640ms, long before the roll/dash/collapse even start.
+    // Attaching .finished.then(remove) to EACH animation individually (as animateTrail's
+    // own idiom does) would tear the figure down the instant the FIRST one finishes,
+    // hiding the snap/roll/dash/collapse entirely -- measured: present at 500ms, gone by
+    // 700ms. track() only collects anims here; the single removal below waits for the
+    // LAST one (chronologically the figWrap fade, see its own .animate() call).
+    var anims = [];
+    function removeFig() { figWrap.remove(); }
+    function track(anim) {
+      anims.push(anim);
+      return anim;
+    }
+
+    Object.keys(PIECES).forEach(function (k) {
+      var g = PIECES[k], sc = SCATTER[k], stag = STAGGER[k], ov = OVERSHOOT_DEG[k];
+      var dur = SNAP_DONE_T - stag;
+      track(g.animate([
+        { transform: 'translate(' + sc.dx + 'px,' + sc.dy + 'px) rotate(' + sc.deg + 'deg)', offset: 0 },
+        { transform: 'translate(0px,0px) rotate(' + ov + 'deg)', offset: 0.85 },
+        { transform: 'translate(0px,0px) rotate(0deg)', offset: 1 }
+      ], { duration: dur, delay: stag, easing: 'ease-out', fill: 'forwards' }));
+    });
+
+    // Click pulse: the whole assembled figure gives a brief scale punch the instant every
+    // piece has independently settled.
+    track(clickG.animate([
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(1.12)', offset: 0.5 },
+      { transform: 'scale(1)', offset: 1 }
+    ], { duration: CLICK_DUR, delay: SNAP_DONE_T, easing: 'ease-out' }));
+
+    // Skull roll: offset 0->ROLL_TD_OFFSET is the detach-and-drop onto the baseline
+    // (mostly vertical, easing in for a falling accelerate); offset ROLL_TD_OFFSET-
+    // >ROLL_SETTLE_OFFSET is the actual roll at constant height (translate and rotate
+    // change linearly together, the physically exact rolling-without-slipping
+    // relationship); offset ROLL_SETTLE_OFFSET->1 holds translate fixed and only eases
+    // rotation the rest of the way to ROLL_SETTLE_DEG.
+    track(gSkull.animate([
+      { transform: 'translate(0px,0px) rotate(0deg)', offset: 0, easing: 'ease-in' },
+      { transform: 'translate(' + ROLL_DX_TD + 'px,' + ROLL_DY_TD + 'px) rotate(' + ROLL_DEG_TD + 'deg)', offset: ROLL_TD_OFFSET, easing: 'linear' },
+      { transform: 'translate(' + ROLL_DX_TOTAL + 'px,' + ROLL_DY_TOTAL + 'px) rotate(' + ROLL_DEG_TOTAL + 'deg)', offset: ROLL_SETTLE_OFFSET, easing: 'ease-out' },
+      { transform: 'translate(' + ROLL_DX_TOTAL + 'px,' + ROLL_DY_TOTAL + 'px) rotate(' + ROLL_SETTLE_DEG + 'deg)', offset: 1 }
+    ], { duration: ROLL_DUR, delay: ROLL_START, fill: 'forwards' }));
+
+    // Body dash: gBody -- every piece except the skull -- translates DASH_DX_TOTAL local
+    // units toward the match, concurrently with the latter half of the roll above.
+    track(gBody.animate([
+      { transform: 'translate(0px,0px)', offset: 0 },
+      { transform: 'translate(' + DASH_DX_TOTAL + 'px,0px)', offset: 1 }
+    ], { duration: DASH_DUR, delay: DASH_START, easing: 'ease-in-out', fill: 'forwards' }));
+
+    // Run cycle: two discrete whole-frame leg poses swapped by hard cut. nearLeg and
+    // farLeg run OUT OF PHASE, a scissor rather than one leg twitching alone.
+    var runKickFirst = [
+      { transform: 'rotate(' + KICK_ROT_DEG + 'deg)', offset: 0 }, { transform: 'rotate(' + KICK_ROT_DEG + 'deg)', offset: 0.49 },
+      { transform: 'rotate(0deg)', offset: 0.5 }, { transform: 'rotate(0deg)', offset: 1 }
+    ];
+    var runRestFirst = [
+      { transform: 'rotate(0deg)', offset: 0 }, { transform: 'rotate(0deg)', offset: 0.49 },
+      { transform: 'rotate(' + KICK_ROT_DEG + 'deg)', offset: 0.5 }, { transform: 'rotate(' + KICK_ROT_DEG + 'deg)', offset: 1 }
+    ];
+    var runIter = DASH_DUR / RUN_PERIOD;
+    track(gNearLegPivot.animate(runKickFirst, { duration: RUN_PERIOD, delay: DASH_START, iterations: runIter, fill: 'forwards' }));
+    track(gFarLegPivot.animate(runRestFirst, { duration: RUN_PERIOD, delay: DASH_START, iterations: runIter, fill: 'forwards' }));
+    // Force both pivots back to rotate(0deg) exactly at COLLAPSE_START: the alternation
+    // above leaves farLeg at KICK_ROT_DEG, the opposite of what COLLAPSE_PIECES assumes.
+    // A duration:1 cut only reaches its end value one ms after its delay, so starting it
+    // 1ms early lands it fully switched by COLLAPSE_START, not one frame late.
+    track(gNearLegPivot.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(0deg)' }], { duration: 1, delay: COLLAPSE_START - 1, fill: 'forwards' }));
+    track(gFarLegPivot.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(0deg)' }], { duration: 1, delay: COLLAPSE_START - 1, fill: 'forwards' }));
+
+    // Collapse: a second .animate() call per piece, explicitly starting from the same
+    // translate(0,0) rotate(0deg) the scatter/snap call above settles at. Only the seven
+    // COLLAPSE_PIECES -- the skull already left via the roll above.
+    Object.keys(COLLAPSE_PIECES).forEach(function (k) {
+      var g = COLLAPSE_PIECES[k], hp = HEAP[k], stag = COLLAPSE_STAGGER[k];
+      var dur = COLLAPSE_DUR - stag;
+      track(g.animate([
+        { transform: 'translate(0px,0px) rotate(0deg)', offset: 0 },
+        { transform: 'translate(' + hp.dx + 'px,' + hp.dy + 'px) rotate(' + hp.deg + 'deg)', offset: 1 }
+      ], { duration: dur, delay: COLLAPSE_START + stag, easing: 'ease-in', fill: 'forwards' }));
+    });
+
+    // Heap holds briefly, then fades -- nothing persists.
+    track(figWrap.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: FADE_DUR, delay: COLLAPSE_START + COLLAPSE_DUR + HEAP_HOLD, fill: 'forwards' }));
+
+    figWrap.__waapiAnims = anims;
+
+    // Natural completion removes the figure only once EVERY animation has settled --
+    // Promise.allSettled resolves once the last of them does, which is the fade above
+    // (its own delay+duration sum to the effect's true end). Rule 5's "a cancel still
+    // cleans up" is already satisfied a different way here: destroyBeacon() (content.js)
+    // removes figWrap synchronously, the instant cancelBeacons() reaches it, regardless of
+    // this promise -- .cancel()ing every entry in __waapiAnims (which destroyBeacon()
+    // also does) rejects each one's own .finished, so this still resolves shortly after
+    // too, but that second removeFig() call is a harmless no-op (Element.remove() on an
+    // already-detached node), not a competing or required cleanup path.
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeFig);
+  }
+
 
   function animateLightning(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
