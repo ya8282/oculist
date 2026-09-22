@@ -817,6 +817,11 @@
     effectBoneAssembly: 'Bone Assembly',
     effectFlappy: 'Flappy',
     effectCheshire: 'Cheshire',
+    // A curly apostrophe (not a straight one) so this JS string literal never needs an
+    // escaped quote -- test/effect_enumeration_sync.test.js's own literal-value regex is a
+    // naive `[^']*` scan with no escape awareness, and an escaped straight apostrophe here
+    // truncates its capture at "Jack-o\" (verified), breaking every site's label match.
+    effectJackOLantern: 'Jack-o’-Lantern Flicker',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -931,7 +936,8 @@
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision },
     boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' },
     flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' },
-    cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' }
+    cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' },
+    jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -3514,6 +3520,266 @@
     // every entry in __waapiAnims regardless of this promise.
     function removeSvg() { svg.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeSvg);
+  }
+
+  // oculist-4rso: promotes fxJackOLantern (artifacts/prototypes/effects-playground.html,
+  // the accepted geometry and placement contract from oculist-xl8f/oculist-9r5k, with the
+  // conservative 122-unit bottom extent and the 6px/8px clearance contracts its own close
+  // reason records) into the shipped beacon contract, the fourth entry in the Halloween
+  // pack. A hand-drawn jack-o'-lantern fades in centred on the match's own mouth cavity
+  // when the match is small enough to frame readably (mouth mode), or above the match with
+  // an 8px gap when it is not (below-pumpkin mode); if neither fits the physical viewport,
+  // the effect is suppressed rather than covering text. Its face-light flickers through
+  // three deterministic states (dim, warm, bright) while the shell itself never moves.
+  //
+  // MOUTH MODE'S DELIBERATE GLYPH TINT: the translucent #E86F1C mouth panel below sits at
+  // z-index 2147483642, above the match's own layer, and its 0.18 fill-opacity visibly
+  // warms the matched glyphs underneath it for the whole hold -- a human decision recorded
+  // on oculist-xl8f's own close comment (2026-09-21) and operationalized by
+  // oculist-nq1x.15's close reason (a per-pixel tint ceiling of 64, principled bound
+  // 0.18*255=46). This is the ONE place this effect's own "zero glyph pixel change" rule
+  // does not hold -- above and suppressed modes keep it exactly, mouth mode does not.
+  function animateJackOLantern(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+
+    // Fixed identity palette, the same license the promotion contract names for the
+    // pumpkin's orange -- no neighbouring shipped character effect (Bone Assembly, Flappy,
+    // Cheshire) has set an accessibility-accent precedent that applies here: unlike
+    // animateTrail's/animateFlappy's own absorption flash, this effect has no separate
+    // flash element to carry getEffectiveColors().beacon as an accent -- same reasoning
+    // animateCheshire's own header comment gives for itself.
+    var SHELL_FILL = '#E86F1C';
+    var SHELL_OUTLINE = '#2A160C';
+    var LOBE_DARK = '#A83D14';
+    var LOBE_LIGHT = '#FFA23A';
+    var LOBE_DARKEST = '#6E2810';
+    var STEM_FILL = '#465A28', STEM_OUTLINE = '#18200F';
+    var STEM_HIGHLIGHT = '#758344', STEM_SHADOW = '#273619';
+    var FACE_DARK = '#2B1108';
+    var VECTOR_STROKE = 'stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var VB_W = 180, VB_H = 126;
+    // CAV: the mouth cavity's own box, in viewBox units, the match is centred inside for
+    // mouth mode. PAINT: the conservative painted-bounds rectangle (oculist-xl8f's own
+    // accepted 122-unit bottom extent, not the raw 121.333, modeled conservatively) used
+    // only for the onScreen() fit check below -- never for placement math itself.
+    var CAV = { x: 32, y: 73, w: 116, h: 28 };
+    var PAINT = { left: 8, top: 2, right: 172, bottom: 122 };
+    var CLEAR = 6, ABOVE_GAP = 8, EDGE = 4, STROKE_MARGIN = 2;
+    var ENTER_SCALE = 0.96;
+    var MIN_SCALE = 72 / VB_H, MAX_FRAME_SCALE = 196 / VB_H;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Viewport-fit decisions are made from the PRE-SCROLL viewport rect animate() hands in
+    // (rule 2 of the promotion contract, oculist-nq1x) -- cx/cy, onScreen(), and vw/vh all
+    // stay in viewport space below, until the docLeft/docTop conversion right before mount.
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+
+    function bounds(left, top, scale) {
+      return {
+        left: left + PAINT.left * scale - STROKE_MARGIN,
+        top: top + PAINT.top * scale - STROKE_MARGIN,
+        right: left + PAINT.right * scale + STROKE_MARGIN,
+        bottom: top + PAINT.bottom * scale + STROKE_MARGIN
+      };
+    }
+    function onScreen(b) {
+      return b.left >= EDGE && b.top >= EDGE && b.right <= vw - EDGE && b.bottom <= vh - EDGE;
+    }
+
+    // MOUTH-FRAMING SCALE lives in a different space than below-pumpkin's: it is dictated
+    // ENTIRELY by the real match rect (CSS px, from the live DOM) plus the fixed CLEAR
+    // margin, because containing the actual glyphs is a hard geometric requirement, not a
+    // stylistic one. getBeaconScale() therefore does NOT multiply frameScale -- doing so
+    // would either violate the clearance guarantee at Beacon Size S (0.7x shrinks the
+    // cavity below rect.width+2*CLEAR, letting effect paint reach the protected mouth
+    // rectangle) or waste the "match centred exactly in the cavity" contract at L/XL
+    // (growing the cavity past what the match itself needs). Scaled against the smallest
+    // entrance cavity (dividing by ENTER_SCALE), not the settled one, so the initial 0.96
+    // entrance keyframe retains the full CLEAR margin at every instant, not just once
+    // settled.
+    var frameScale = Math.max(
+      MIN_SCALE,
+      (rect.width + CLEAR * 2) / (CAV.w * ENTER_SCALE),
+      (rect.height + CLEAR * 2) / (CAV.h * ENTER_SCALE)
+    );
+    var frameLeft = cx - (CAV.x + CAV.w / 2) * frameScale;
+    var frameTop = cy - (CAV.y + CAV.h / 2) * frameScale;
+    var frameFits = frameScale <= MAX_FRAME_SCALE && onScreen(bounds(frameLeft, frameTop, frameScale));
+
+    var scale, left, top, mode;
+    if (frameFits) {
+      scale = frameScale;
+      left = frameLeft;
+      top = frameTop;
+      mode = 'mouth';
+    } else {
+      // BELOW-PUMPKIN SCALE has no glyph-containment constraint -- the pumpkin merely sits
+      // near the match, the same freedom animateCheshire's own cat sizing has -- so
+      // getBeaconScale() multiplies the match-relative clamp directly, same pattern as
+      // Cheshire's own catHeight. The multiply happens here, before left/top/bounds are
+      // computed from it, so the onScreen() fit check below sees the real final rendered
+      // size rather than an unscaled one a later CSS transform would have grown past it.
+      scale = Math.max(MIN_SCALE, Math.min(1, (rect.height * 2.8) / VB_H)) * beaconScale;
+      left = cx - VB_W * scale / 2;
+      top = rect.top - ABOVE_GAP - PAINT.bottom * scale - STROKE_MARGIN;
+      if (!onScreen(bounds(left, top, scale))) return; // suppress: neither mode fits
+      mode = 'above';
+    }
+
+    var docLeft = left + window.scrollX, docTop = top + window.scrollY;
+
+    var pumpkinEl = document.createElement('div');
+    pumpkinEl.className = 'oc-beacon oc-beacon-transient oc-jackolantern';
+    pumpkinEl.setAttribute('data-jol-mode', mode);
+    pumpkinEl.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + (VB_W * scale) + 'px', 'height:' + (VB_H * scale) + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      // The shrink point is the cavity's own centre, in this element's own local px box --
+      // (CAV.y + CAV.h/2) is a viewBox-unit coordinate, and scale is the single factor
+      // this whole function derives everything from, so multiplying it in ONCE here
+      // converts it to a local px offset with no double-scaling (the bug class Cheshire's
+      // own drift value hit: an SVG-user-unit value re-multiplied by beaconScale when the
+      // viewBox mapping had already applied it once).
+      'transform-origin:50% ' + ((CAV.y + CAV.h / 2) * scale) + 'px',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(pumpkinEl);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(VB_W * scale));
+    svg.setAttribute('height', String(VB_H * scale));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:visible;';
+    pumpkinEl.appendChild(svg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var shellG = addShape('g', { 'data-jol-part': 'shell' }, svg);
+    // The base hole leaves the match untouched; the translucent panel below fills it
+    // visually without cloning or mutating the page text (see this function's own header
+    // comment for the deliberate mouth-mode tint this panel produces).
+    addShape('path', {
+      d: 'M 90 16 C 125 10 156 22 168 48 C 176 67 171 94 156 108 C 139 122 112 121 90 116 C 68 121 41 122 24 108 C 9 94 8 67 12 49 C 20 22 53 10 90 16 Z M 26 67 H 154 V 107 H 26 Z',
+      fill: SHELL_FILL, 'fill-rule': 'evenodd'
+    }, shellG);
+    addShape('rect', { x: '26', y: '67', width: '128', height: '40', fill: SHELL_FILL, 'fill-opacity': '0.18', 'data-jol-part': 'mouth-panel' }, shellG);
+    addShape('path', { d: 'M 90 16 C 125 10 156 22 168 48 C 176 67 171 94 156 108 C 139 122 112 121 90 116 C 68 121 41 122 24 108 C 9 94 8 67 12 49 C 20 22 53 10 90 16 Z', fill: 'none', stroke: SHELL_OUTLINE, 'stroke-width': '3', style: VECTOR_STROKE }, shellG);
+
+    // Five broad lobes, interrupted around the transparent mouth instead of drawing seams
+    // through it.
+    addShape('path', { d: 'M 31 34 C 18 46 17 58 25 66 L 31 65 C 26 53 27 43 31 34 Z M 24 67 C 16 82 17 99 25 107 L 18 103 C 11 88 12 72 24 67 Z M 31 110 C 44 119 57 121 68 118 L 63 110 Z', fill: LOBE_DARK }, shellG);
+    addShape('path', { d: 'M 62 22 C 45 37 43 55 47 65 L 65 65 C 58 48 61 31 74 19 Z M 47 109 C 54 117 68 120 80 117 L 76 109 Z', fill: LOBE_LIGHT }, shellG);
+    addShape('path', { d: 'M 111 18 C 126 34 130 52 125 65 L 145 65 C 143 43 132 26 111 18 Z M 104 109 L 100 117 C 115 121 132 116 139 109 Z', fill: LOBE_DARK }, shellG);
+    addShape('path', { d: 'M 151 31 C 163 47 166 59 155 66 L 149 65 C 154 52 154 41 151 31 Z M 156 67 C 168 80 166 99 155 107 L 162 103 C 170 88 169 73 156 67 Z M 145 109 L 139 117 C 151 117 160 112 165 104 Z', fill: LOBE_DARKEST }, shellG);
+    addShape('path', { d: 'M 78 19 C 70 31 68 49 73 65 H 107 C 112 47 108 28 99 18 Z M 75 109 C 80 118 99 121 106 109 Z', fill: LOBE_LIGHT }, shellG);
+    addShape('ellipse', { cx: '48', cy: '40', rx: '13', ry: '7', fill: LOBE_LIGHT, transform: 'rotate(-35 48 40)' }, shellG);
+    addShape('ellipse', { cx: '83', cy: '31', rx: '10', ry: '5', fill: LOBE_LIGHT, transform: 'rotate(-45 83 31)' }, shellG);
+
+    // Right-leaning stem and left leaf, both broad enough for the 72px readability floor.
+    addShape('path', { d: 'M 87 22 C 88 10 96 3 108 2 L 119 10 C 106 17 103 25 102 31 Z', fill: STEM_FILL, stroke: STEM_OUTLINE, 'stroke-width': '2.5', style: VECTOR_STROKE }, shellG);
+    addShape('path', { d: 'M 95 21 C 98 12 104 7 111 5 L 115 9 C 105 15 102 21 101 27 Z', fill: STEM_HIGHLIGHT }, shellG);
+    addShape('path', { d: 'M 91 22 C 94 13 100 7 108 3 L 101 18 L 98 28 Z', fill: STEM_SHADOW }, shellG);
+    addShape('path', { d: 'M 91 25 C 78 26 65 21 61 11 C 74 7 88 11 95 20 Z', fill: STEM_FILL, stroke: STEM_OUTLINE, 'stroke-width': '2.5', style: VECTOR_STROKE }, shellG);
+    addShape('path', { d: 'M 65 13 C 76 13 84 17 91 22 C 79 21 71 19 65 13 Z', fill: STEM_HIGHLIGHT }, shellG);
+    addShape('path', { d: 'M 66 20 C 77 24 85 24 91 22 C 82 28 72 27 66 20 Z', fill: STEM_SHADOW }, shellG);
+
+    var FACE_GEOMETRY = [
+      { role: 'eye-left-dark', d: 'M 47 64 Q 58 42 72 64 Q 59 57 47 64 Z', tone: 'dark' },
+      { role: 'eye-right-dark', d: 'M 108 64 Q 122 42 133 64 Q 121 57 108 64 Z', tone: 'dark' },
+      { role: 'eye-left-light', d: 'M 52 63 Q 59 51 67 63 Q 59 60 52 63 Z', tone: 'light' },
+      { role: 'eye-right-light', d: 'M 113 63 Q 121 51 128 63 Q 121 60 113 63 Z', tone: 'light' },
+      { role: 'mouth-top', d: 'M 24 57 Q 45 66 90 65 Q 135 66 156 57 L 154 64 Q 135 67 90 66 Q 45 67 26 64 Z', tone: 'dark' },
+      { role: 'nose-dark', d: 'M 84 65 L 90 53 L 96 65 Z', tone: 'dark' },
+      { role: 'mouth-left', d: 'M 18 57 Q 19 89 25 107 L 25 67 Z', tone: 'dark' },
+      { role: 'mouth-right', d: 'M 162 57 Q 161 89 155 107 L 155 67 Z', tone: 'dark' },
+      { role: 'mouth-bottom', d: 'M 26 107 Q 54 120 90 115 Q 126 120 154 107 L 147 116 Q 126 124 90 120 Q 54 124 33 116 Z', tone: 'dark' },
+      { role: 'mouth-light', d: 'M 31 109 Q 58 118 90 114 Q 122 118 149 109 L 145 113 Q 122 120 90 117 Q 58 120 35 113 Z', tone: 'light' },
+      { role: 'light-core', d: 'M 54 62 Q 59 55 65 62 Z M 115 62 Q 121 55 126 62 Z M 39 111 Q 63 118 90 115 Q 117 118 141 111 Q 116 122 90 119 Q 64 122 39 111 Z', tone: 'core' }
+    ];
+    var STATE_COLORS = {
+      dim: { light: '#A84A16', core: '#A84A16' },
+      warm: { light: '#F6A62A', core: '#FFD45A' },
+      bright: { light: '#FFD45A', core: '#FFF1A6' }
+    };
+    function buildFaceGroup(stateName, initialOpacity) {
+      var group = addShape('g', { 'data-jol-state': stateName, opacity: String(initialOpacity) }, svg);
+      var stateColor = STATE_COLORS[stateName];
+      FACE_GEOMETRY.forEach(function (shape) {
+        addShape('path', {
+          'data-jol-face-part': shape.role,
+          d: shape.d,
+          fill: shape.tone === 'dark' ? FACE_DARK : stateColor[shape.tone]
+        }, group);
+      });
+      return group;
+    }
+
+    var ENTER_DUR = 240, FLICKER_DUR = 2450, FADE_DUR = 300;
+    var DUR = FLICKER_DUR + FADE_DUR; // entrance is nested inside the flicker window
+
+    // Every WAAPI animation this beacon creates is collected here and hung off pumpkinEl
+    // (the element cancelBeacons() actually selects), matching animateCheshire's own
+    // track()/Promise.allSettled idiom for a figure whose animations settle at different
+    // times (rule 4/5 of the promotion contract).
+    var anims = [];
+    function track(a) { anims.push(a); return a; }
+
+    // Whole-figure entrance/hold/exit -- shared verbatim by both Lite and full mode, so
+    // Lite Mode's own "monotonic entrance/exit" requirement is met by construction rather
+    // than by a second, parallel implementation.
+    track(pumpkinEl.animate([
+      { transform: 'scale(' + ENTER_SCALE + ')', opacity: 0, offset: 0 },
+      { transform: 'scale(1)', opacity: 1, offset: ENTER_DUR / DUR },
+      { transform: 'scale(1)', opacity: 1, offset: FLICKER_DUR / DUR },
+      { transform: 'scale(1)', opacity: 0, offset: 1 }
+    ], { duration: DUR * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    if (settings.performanceMode) {
+      // Lite Mode (rule 7 of the promotion contract): keep the recognizable shell (built
+      // above, unconditionally) and a single warm face -- no dim/bright groups, no
+      // flicker. The whole-figure animation above already supplies the monotonic
+      // entrance/exit; a static warm face at full opacity needs no animation of its own.
+      buildFaceGroup('warm', 1);
+    } else {
+      var dimGroup = buildFaceGroup('dim', 1);
+      var warmGroup = buildFaceGroup('warm', 0);
+      var brightGroup = buildFaceGroup('bright', 0);
+
+      // Deterministic irregular flicker (rule 11: no Math.random) -- absolute ms
+      // boundaries converted to offsets against the UNSCALED FLICKER_DUR, so durFactor
+      // scales every phase boundary proportionally (rule 6) without needing each boundary
+      // scaled individually: offset = time/FLICKER_DUR is invariant under a uniform
+      // multiply of both time and FLICKER_DUR by durFactor.
+      function stateFrames(values) {
+        var times = [0, 350, 500, 900, 1000, 1450, 1550, 2050, 2150, FLICKER_DUR];
+        return times.map(function (time, i) { return { opacity: values[i], offset: time / FLICKER_DUR }; });
+      }
+      track(dimGroup.animate(stateFrames([1, 1, 0, 0, 0, 0, 0, 0, 0, 0]), { duration: FLICKER_DUR * durFactor, fill: 'forwards' }));
+      track(warmGroup.animate(stateFrames([0, 0, 1, 1, 0, 0, 1, 1, 0, 0]), { duration: FLICKER_DUR * durFactor, fill: 'forwards' }));
+      track(brightGroup.animate(stateFrames([0, 0, 0, 0, 1, 1, 0, 0, 1, 1]), { duration: FLICKER_DUR * durFactor, fill: 'forwards' }));
+    }
+
+    pumpkinEl.__waapiAnims = anims;
+
+    // Natural completion removes pumpkinEl only once EVERY animation has settled (rule 5).
+    // destroyBeacon() still removes pumpkinEl synchronously on cancel, cancelling every
+    // entry in __waapiAnims regardless of this promise.
+    function removePumpkin() { pumpkinEl.remove(); }
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removePumpkin);
   }
 
   function animateLightning(rect) {
