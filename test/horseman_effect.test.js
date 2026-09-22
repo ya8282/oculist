@@ -636,6 +636,107 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
     }
   });
 
+  test('Beacon Size M/XL: the pumpkin\'s landing offset is pinned so its box intrusion into the match rect at the contact frame stays constant, and the painted intrusion stays near the M figure (oculist-4afn)', async () => {
+    await page.evaluate(() => window.scrollTo(0, 0));
+
+    // Contact frame = burstStart (LAUNCH_T + PUMPKIN_FLIGHT_DUR = 1140 + 420 = 1560 in
+    // animateHorseman's own timeline): the exact instant the flight's offsetDistance
+    // keyframes reach 100% and the burst fade begins, i.e. the moment the projectile
+    // actually lands.
+    const CONTACT_T = 1560;
+
+    // Geometric assertion #1: the pumpkin's own rendered box bottom edge vs the match's own
+    // rendered top edge, read straight off getBoundingClientRect() -- not recomputed from
+    // animateHorseman's own pumpTargetY/PUMPKIN_SIZE formula, so a bug in that formula
+    // cannot cancel out against an identical recomputation here.
+    async function boxIntrusionPx() {
+      await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
+      return page.evaluate((t) => {
+        const pumpkin = document.querySelectorAll('.oc-beacon-transient')[1];
+        pumpkin.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = t; });
+        const pumpRect = pumpkin.getBoundingClientRect();
+        const targetRect = document.getElementById('target').getBoundingClientRect();
+        return Math.max(0, pumpRect.bottom - targetRect.top);
+      }, CONTACT_T);
+    }
+
+    // Assertion #2 (painted-pixel diff): screenshots the match's own clip rect with the
+    // effect canceled (baseline) and again at the contact frame, and counts pixels that
+    // actually changed color -- the real "how much of the match got painted over" metric a
+    // bounding-box comparison alone can't see (the pumpkin art is a jack-o'-lantern SVG, not
+    // a solid rectangle). Uses a throwaway decode page (like a screenshot-diff harness would)
+    // so the extension's own overlay never interferes with the pixel decode.
+    async function paintedIntrusionPx(decodePage) {
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+      const r = await page.evaluate(() => {
+        const b = document.getElementById('target').getBoundingClientRect();
+        return { x: b.x, y: b.y, width: b.width, height: b.height };
+      });
+      const clip = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+      const decode = (buf) => decodePage.evaluate(async (b64) => {
+        const img = new Image();
+        img.src = 'data:image/png;base64,' + b64;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        const g = c.getContext('2d');
+        g.drawImage(img, 0, 0);
+        return Array.from(g.getImageData(0, 0, c.width, c.height).data);
+      }, buf.toString('base64'));
+
+      const base = await decode(await page.screenshot({ clip }));
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('.oc-beacon-transient[data-horseman-direction]'), null, { timeout: POLL_TIMEOUT });
+      await page.evaluate((t) => {
+        document.querySelectorAll('.oc-beacon-transient').forEach((el) => {
+          el.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = t; });
+        });
+      }, CONTACT_T);
+      const shot = await decode(await page.screenshot({ clip }));
+
+      let painted = 0;
+      for (let i = 0; i < base.length; i += 4) {
+        const d = Math.max(Math.abs(base[i] - shot[i]), Math.abs(base[i + 1] - shot[i + 1]), Math.abs(base[i + 2] - shot[i + 2]));
+        if (d > 0) painted++;
+      }
+      return painted;
+    }
+
+    let decodePage;
+    try {
+      decodePage = await ctx.newPage();
+
+      const mBoxPx = await boxIntrusionPx();
+      const mPaintedPx = await paintedIntrusionPx(decodePage);
+
+      await setVisionSettings({ beaconSize: 'xl' });
+      const xlBoxPx = await boxIntrusionPx();
+      const xlPaintedPx = await paintedIntrusionPx(decodePage);
+
+      // The landing offset is pinned (pumpTargetY = rect.top + 5 - 13*beaconScale) so the
+      // pumpkin's own bottom edge always lands the SAME constant 5px into the match rect,
+      // regardless of Beacon Size -- this must hold near-exactly, not just "near".
+      assert.ok(mBoxPx > 0, `sanity check: the M-size pumpkin must actually intrude into the match rect at contact, got ${mBoxPx}px`);
+      assert.ok(
+        Math.abs(xlBoxPx - mBoxPx) <= 1,
+        `Beacon Size XL: box intrusion (${xlBoxPx}px) must stay within 1px of the M figure (${mBoxPx}px) -- the landing offset must pin a constant box depth, not merely scale`
+      );
+
+      // The painted intrusion still grows a little with size (a bigger pumpkin's rounded
+      // underside is wider at the same 5px depth), but must stay near the M figure, not
+      // balloon with beaconScale the way an unpinned depth does.
+      assert.ok(
+        xlPaintedPx <= mPaintedPx * 2,
+        `Beacon Size XL: painted intrusion (${xlPaintedPx}px) must stay near the M figure (${mPaintedPx}px), i.e. <= 2x it`
+      );
+    } finally {
+      if (decodePage) await decodePage.close();
+      await setVisionSettings({ beaconSize: 'm' });
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+    }
+  });
+
   test('Lite Mode, set for real through chrome.storage.sync: a no-op -- same rendered geometry and the same animation count in both modes', async () => {
     async function snapshot() {
       const mounted = await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
