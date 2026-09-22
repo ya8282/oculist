@@ -2369,8 +2369,11 @@
       [17.6, 72.65], [22.1, 73.35], [25, 70.55], [27.9, 73.35], [32.4, 72.65],
       [38.6, 71.6], [38.6, 66.7], [38.6, 62.15], [34.5, 60.4], [29.9, 59]
     ];
-    var PELVIS_HOLE_L = { cx: 21, cy: 69.5, rx: 2.2, ry: 1.4 };
-    var PELVIS_HOLE_R = { cx: 29, cy: 69.5, rx: 2.2, ry: 1.4 };
+    // Bead oculist-nq1x.16 item 2: ry grew 1.4 -> 2.1 (rx unchanged) to
+    // clear the prototype checker's tightened pelvis-void background check
+    // (see PELVIS_HOLE_L's own comment in effects-playground.html).
+    var PELVIS_HOLE_L = { cx: 21, cy: 69.5, rx: 2.2, ry: 2.1 };
+    var PELVIS_HOLE_R = { cx: 29, cy: 69.5, rx: 2.2, ry: 2.1 };
     function ellipseHoleSubpath(h) {
       return ' M ' + (h.cx - h.rx) + ' ' + h.cy +
         ' A ' + h.rx + ' ' + h.ry + ' 0 1 0 ' + (h.cx + h.rx) + ' ' + h.cy +
