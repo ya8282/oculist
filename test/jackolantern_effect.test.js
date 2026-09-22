@@ -67,6 +67,12 @@ const JOL_EFFECT_ROW = '#oc-wrap >> [data-oc-key="effect:jackolantern"]';
 // out of sync with the shipped formula. Mirrors test/cheshire_effect.test.js's own
 // expectedCatHeight() idiom, one level more complete since this effect has two placement
 // modes plus a suppression branch.
+//
+// Because this reproduces the shipped formula verbatim, a bug IN that formula cannot fail
+// a test that only compares against expectedPlacement()'s own output (both sides would be
+// wrong the same way) -- the rendered-geometry assertions below (mouthCavRect()'s CAV
+// clearance, aboveModeContract()'s edge/clearance check), read straight off the mounted DOM
+// with no recomputation, are what actually catch that class of bug.
 function expectedPlacement(target, vw, vh, beaconScale) {
   const VB_W = 180, VB_H = 126;
   const CAV = { x: 32, y: 73, w: 116, h: 28 };
@@ -300,6 +306,107 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
     };
   }
 
+  // CAV box (extension/content.js's own constant: x:32 y:73 w:116 h:28 in viewBox units)
+  // mapped through the RENDERED svg's own getScreenCTM() -- not recomputed from
+  // expectedPlacement()'s own geometry, so a formula bug there cannot cancel out against an
+  // identical recomputation here. Self-contained (only browser globals) so it can be handed
+  // directly to page.evaluate()/page.waitForFunction(), same idiom as pumpkinSnapshot()
+  // above.
+  function mouthCavRect(targetId) {
+    const el = document.querySelector('.oc-jackolantern[data-jol-mode="mouth"]');
+    if (!el) return null;
+    const svg = el.querySelector('svg');
+    const CAV = { x: 32, y: 73, w: 116, h: 28 };
+    const ctm = svg.getScreenCTM();
+    const p1 = svg.createSVGPoint();
+    p1.x = CAV.x; p1.y = CAV.y;
+    const p2 = svg.createSVGPoint();
+    p2.x = CAV.x + CAV.w; p2.y = CAV.y + CAV.h;
+    const c1 = p1.matrixTransform(ctm), c2 = p2.matrixTransform(ctm);
+    const target = document.getElementById(targetId).getBoundingClientRect();
+    return {
+      cav: { left: c1.x, top: c1.y, right: c2.x, bottom: c2.y },
+      target: { left: target.left, top: target.top, right: target.right, bottom: target.bottom },
+    };
+  }
+
+  // Real 6px CAV clearance contract, +-0.05px subpixel tolerance for CTM float rounding.
+  function assertCavClearance(cav, target, label) {
+    const CLEAR = 6, TOL = 0.05;
+    assert.ok(
+      target.left - cav.left >= CLEAR - TOL,
+      `${label}: CAV left clearance must be >= ${CLEAR}px, got ${(target.left - cav.left).toFixed(2)}`
+    );
+    assert.ok(
+      target.top - cav.top >= CLEAR - TOL,
+      `${label}: CAV top clearance must be >= ${CLEAR}px, got ${(target.top - cav.top).toFixed(2)}`
+    );
+    assert.ok(
+      cav.right - target.right >= CLEAR - TOL,
+      `${label}: CAV right clearance must be >= ${CLEAR}px, got ${(cav.right - target.right).toFixed(2)}`
+    );
+    assert.ok(
+      cav.bottom - target.bottom >= CLEAR - TOL,
+      `${label}: CAV bottom clearance must be >= ${CLEAR}px, got ${(cav.bottom - target.bottom).toFixed(2)}`
+    );
+  }
+
+  // Formula-independent above-mode contract, read from the rendered DOM: the painted box
+  // must sit fully above the match and stay inside the viewport's own 4px EDGE margin.
+  // Self-contained, same idiom as pumpkinSnapshot()/mouthCavRect() above.
+  function aboveModeContract(targetId) {
+    const el = document.querySelector('.oc-jackolantern[data-jol-mode="above"]');
+    if (!el) return null;
+    const svg = el.querySelector('svg');
+    // PAINT (extension/content.js's own conservative painted-bounds rectangle) mapped
+    // through the rendered svg's own getScreenCTM(), then padded by the fixed 2px
+    // STROKE_MARGIN in screen space (a flat px value, not scaled, same as content.js's own
+    // bounds()) -- the actual protected paint region, not the element's own unpadded full
+    // viewBox box (which is larger than what is actually painted).
+    const PAINT = { left: 8, top: 2, right: 172, bottom: 122 };
+    const STROKE_MARGIN = 2;
+    const ctm = svg.getScreenCTM();
+    const p1 = svg.createSVGPoint();
+    p1.x = PAINT.left; p1.y = PAINT.top;
+    const p2 = svg.createSVGPoint();
+    p2.x = PAINT.right; p2.y = PAINT.bottom;
+    const c1 = p1.matrixTransform(ctm), c2 = p2.matrixTransform(ctm);
+    const target = document.getElementById(targetId).getBoundingClientRect();
+    return {
+      left: c1.x - STROKE_MARGIN, top: c1.y - STROKE_MARGIN,
+      right: c2.x + STROKE_MARGIN, bottom: c2.y + STROKE_MARGIN,
+      targetTop: target.top, vw: window.innerWidth, vh: window.innerHeight,
+    };
+  }
+
+  function assertAboveModeContract(g, label) {
+    const EDGE = 4, TOL = 1;
+    assert.ok(
+      g.bottom <= g.targetTop + TOL,
+      `${label}: pumpkin's rendered bottom edge (${g.bottom}) must clear the match's own top edge (${g.targetTop})`
+    );
+    assert.ok(g.left >= EDGE - TOL, `${label}: pumpkin's rendered left (${g.left}) must stay within the ${EDGE}px viewport edge margin`);
+    assert.ok(g.top >= EDGE - TOL, `${label}: pumpkin's rendered top (${g.top}) must stay within the ${EDGE}px viewport edge margin`);
+    assert.ok(
+      g.right <= g.vw - EDGE + TOL,
+      `${label}: pumpkin's rendered right (${g.right}) must stay within the ${EDGE}px viewport edge margin (vw=${g.vw})`
+    );
+    assert.ok(
+      g.bottom <= g.vh - EDGE + TOL,
+      `${label}: pumpkin's rendered bottom (${g.bottom}) must stay within the ${EDGE}px viewport edge margin (vh=${g.vh})`
+    );
+  }
+
+  // Waits for the whole-figure entrance WAAPI animation (scale+opacity, content.js) to
+  // settle -- CAV/above-mode rects read via CTM/getBoundingClientRect would otherwise catch
+  // a still-scaling entrance frame instead of the settled geometry these contracts describe.
+  async function waitForEntranceSettled() {
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.oc-jackolantern');
+      return el && parseFloat(getComputedStyle(el).opacity) > 0.98 ? true : null;
+    }, null, { timeout: POLL_TIMEOUT });
+  }
+
   async function measureTarget(targetId) {
     return page.evaluate((id) => {
       const r = document.getElementById(id).getBoundingClientRect();
@@ -333,6 +440,14 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
     assert.ok(Math.abs(geom.top - predicted.top) <= 2, `top: expected ~${predicted.top}, got ${geom.top}`);
     assert.ok(Math.abs(geom.width - 180 * predicted.scale) <= 2, `width: expected ~${180 * predicted.scale}, got ${geom.width}`);
     assert.ok(Math.abs(geom.height - 126 * predicted.scale) <= 2, `height: expected ~${126 * predicted.scale}, got ${geom.height}`);
+
+    // Formula-independent contract: the rendered CAV box, read via the svg's own CTM, must
+    // still clear the match with the real 6px margin -- see expectedPlacement()'s own
+    // comment for why this catches a placement-formula bug that the checks above cannot.
+    await waitForEntranceSettled();
+    const cavGeom = await page.evaluate(mouthCavRect, 'target');
+    assert.ok(cavGeom, 'expected a mounted mouth-mode pumpkin for the CAV clearance check');
+    assertCavClearance(cavGeom.cav, cavGeom.target, 'mouth UNSCROLLED');
   });
 
   test('mouth-framing mode, SCROLLED: document coordinates carry a real "+ window.scrollY" term', async () => {
@@ -358,6 +473,13 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
         `top: expected ~${expectedDocTop} -- a missing "+ window.scrollY" term here is exactly what a scrolled-page ` +
           `assertion catches that an unscrolled one cannot -- got ${geom.styleTop}`
       );
+
+      // Formula-independent contract, same as the UNSCROLLED case above: the rendered CAV
+      // box must still clear the match with the real 6px margin.
+      await waitForEntranceSettled();
+      const cavGeom = await page.evaluate(mouthCavRect, 'target');
+      assert.ok(cavGeom, 'expected a mounted mouth-mode pumpkin for the CAV clearance check');
+      assertCavClearance(cavGeom.cav, cavGeom.target, 'mouth SCROLLED');
     } finally {
       await page.evaluate(() => window.scrollTo(0, 0));
     }
@@ -371,19 +493,9 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
       const el = document.querySelector('.oc-jackolantern');
       if (!el || el.getAttribute('data-jol-mode') !== 'mouth') return null;
       const panel = el.querySelector('[data-jol-part="mouth-panel"]');
-      const panelRect = panel.getBoundingClientRect();
-      const targetRect = document.getElementById('target').getBoundingClientRect();
       return {
         panelFill: panel.getAttribute('fill'),
         panelFillOpacity: panel.getAttribute('fill-opacity'),
-        panelLeft: panelRect.left,
-        panelTop: panelRect.top,
-        panelRight: panelRect.right,
-        panelBottom: panelRect.bottom,
-        targetLeft: targetRect.left,
-        targetTop: targetRect.top,
-        targetRight: targetRect.right,
-        targetBottom: targetRect.bottom,
       };
     });
     assert.ok(geom, 'expected a mounted pumpkin in mouth mode');
@@ -395,13 +507,12 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
     assert.strictEqual(geom.panelFill, '#E86F1C', `mouth panel fill: expected the shell's own identity orange, got ${geom.panelFill}`);
     assert.strictEqual(geom.panelFillOpacity, '0.18', `mouth panel fill-opacity: expected the accepted 0.18 tint, got ${geom.panelFillOpacity}`);
 
-    // Containment: the panel (which spans the whole cavity) must contain the match rect
-    // with slack on every side -- the real 6px clearance contract, read from the RENDERED
-    // element, not recomputed geometry.
-    assert.ok(geom.panelLeft <= geom.targetLeft, `cavity left (${geom.panelLeft}) must sit at or left of the match's own left edge (${geom.targetLeft})`);
-    assert.ok(geom.panelTop <= geom.targetTop, `cavity top (${geom.panelTop}) must sit at or above the match's own top edge (${geom.targetTop})`);
-    assert.ok(geom.panelRight >= geom.targetRight, `cavity right (${geom.panelRight}) must sit at or right of the match's own right edge (${geom.targetRight})`);
-    assert.ok(geom.panelBottom >= geom.targetBottom, `cavity bottom (${geom.panelBottom}) must sit at or below the match's own bottom edge (${geom.targetBottom})`);
+    // Containment: the real 6px CAV-box clearance -- not the larger mouth PANEL rect, which
+    // is looser than the actual contract -- read from the RENDERED svg via its own CTM.
+    await waitForEntranceSettled();
+    const cavGeom = await page.evaluate(mouthCavRect, 'target');
+    assert.ok(cavGeom, 'expected a mounted mouth-mode pumpkin for the CAV clearance check');
+    assertCavClearance(cavGeom.cav, cavGeom.target, 'mouth mode');
 
     const after = await page.evaluate(() => document.getElementById('target').outerHTML);
     assert.strictEqual(after, before, 'the match DOM (#target outerHTML) must never be mutated by this effect, in any mode');
@@ -431,20 +542,14 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
       assert.ok(Math.abs(geom.styleLeft - expectedDocLeft) <= 2, `left: expected ~${expectedDocLeft}, got ${geom.styleLeft}`);
       assert.ok(Math.abs(geom.styleTop - expectedDocTop) <= 2, `top: expected ~${expectedDocTop}, got ${geom.styleTop}`);
 
-      // Real rendered clearance gap: the pumpkin's own rendered box must never reach the
-      // match's own top edge -- read from getBoundingClientRect() of the mounted element,
-      // not recomputed geometry.
-      const rendered = await page.evaluate(() => {
-        const el = document.querySelector('.oc-jackolantern');
-        const rect = el.getBoundingClientRect();
-        const target = document.getElementById('wideTarget').getBoundingClientRect();
-        return { bottom: rect.bottom, targetTop: target.top };
-      });
-      assert.ok(
-        rendered.bottom <= rendered.targetTop + 1,
-        `the pumpkin's rendered bottom edge (${rendered.bottom}) must clear the match's own top edge ` +
-          `(${rendered.targetTop}) -- it must never paint over the match's own glyphs`
-      );
+      // Formula-independent above-mode contract, read from the rendered DOM: the painted box
+      // must never reach the match's own top edge, and must stay inside the viewport's own
+      // 4px EDGE margin -- see expectedPlacement()'s own comment for why this check, not a
+      // formula recomputation, is what actually catches a placement-formula bug.
+      await waitForEntranceSettled();
+      const rendered = await page.evaluate(aboveModeContract, 'wideTarget');
+      assert.ok(rendered, 'expected a mounted above-mode pumpkin for the rendered-geometry check');
+      assertAboveModeContract(rendered, 'below-pumpkin UNSCROLLED');
 
       const after = await page.evaluate(() => document.getElementById('wideTarget').outerHTML);
       assert.strictEqual(after, before, 'the match DOM (#wideTarget outerHTML) must never be mutated by this effect');
@@ -481,6 +586,12 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
         `top: expected ~${expectedDocTop} -- a missing "+ window.scrollY" term here is exactly what a scrolled-page ` +
           `assertion catches that an unscrolled one cannot -- got ${geom.styleTop}`
       );
+
+      // Formula-independent contract, same as the UNSCROLLED case above.
+      await waitForEntranceSettled();
+      const rendered = await page.evaluate(aboveModeContract, 'wideTarget');
+      assert.ok(rendered, 'expected a mounted above-mode pumpkin for the rendered-geometry check');
+      assertAboveModeContract(rendered, 'below-pumpkin SCROLLED');
     } finally {
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.locator(INPUT).fill('');
@@ -567,28 +678,26 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
     }
   });
 
-  test('Beacon Size M/L/XL, set for real through chrome.storage.sync: mouth mode never rescales (a hard containment requirement, not a stylistic one), and the cavity keeps clearing the match at every size', async () => {
+  test('Beacon Size S/L/XL, set for real through chrome.storage.sync: mouth mode never rescales (a hard containment requirement, not a stylistic one), and the CAV box keeps clearing the match at every size', async () => {
     await page.evaluate(() => window.scrollTo(0, 0));
 
     async function mouthRenderedBox() {
       await replay(() => (document.querySelector('.oc-jackolantern[data-jol-mode="mouth"]') ? true : null));
-      await page.waitForFunction(() => {
-        const el = document.querySelector('.oc-jackolantern');
-        return el && parseFloat(getComputedStyle(el).opacity) > 0.98 ? true : null;
-      }, null, { timeout: POLL_TIMEOUT });
+      await waitForEntranceSettled();
       return page.evaluate(() => {
         const el = document.querySelector('.oc-jackolantern');
-        const panel = el.querySelector('[data-jol-part="mouth-panel"]');
         const rect = el.getBoundingClientRect();
-        const panelRect = panel.getBoundingClientRect();
-        const target = document.getElementById('target').getBoundingClientRect();
-        return { width: rect.width, height: rect.height, panelRect, target };
+        return { width: rect.width, height: rect.height };
       });
     }
 
     try {
       const base = await mouthRenderedBox();
-      const SIZES = ['l', 'xl'];
+      // 's' exercises the cavity-shrink hazard animateJackOLantern's own comment names
+      // directly: it is the Beacon Size that would shrink the cavity below containment if
+      // getBeaconScale() ever leaked into frameScale, so mouth mode's size-invariance and
+      // the 6px CAV clearance both need coverage at S, not just L/XL.
+      const SIZES = ['s', 'l', 'xl'];
       for (const size of SIZES) {
         await setVisionSettings({ beaconSize: size });
         const geom = await mouthRenderedBox();
@@ -605,11 +714,11 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
           `Beacon Size ${size}: mouth mode's rendered height must NOT change (base ${base.height}), got ${geom.height}`
         );
 
-        // The 6px clearance contract still holds at every size.
-        assert.ok(geom.panelRect.left <= geom.target.left, `Beacon Size ${size}: cavity left must still clear the match's left edge`);
-        assert.ok(geom.panelRect.top <= geom.target.top, `Beacon Size ${size}: cavity top must still clear the match's top edge`);
-        assert.ok(geom.panelRect.right >= geom.target.right, `Beacon Size ${size}: cavity right must still clear the match's right edge`);
-        assert.ok(geom.panelRect.bottom >= geom.target.bottom, `Beacon Size ${size}: cavity bottom must still clear the match's bottom edge`);
+        // The real 6px CAV-box clearance -- not the larger mouth PANEL rect, which is looser
+        // than the actual contract -- still holds at every size.
+        const cavGeom = await page.evaluate(mouthCavRect, 'target');
+        assert.ok(cavGeom, `Beacon Size ${size}: expected a mounted mouth-mode pumpkin for the CAV clearance check`);
+        assertCavClearance(cavGeom.cav, cavGeom.target, `Beacon Size ${size}`);
       }
     } finally {
       await setVisionSettings({ beaconSize: 'm' });

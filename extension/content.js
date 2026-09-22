@@ -3688,7 +3688,10 @@
     addShape('ellipse', { cx: '48', cy: '40', rx: '13', ry: '7', fill: LOBE_LIGHT, transform: 'rotate(-35 48 40)' }, shellG);
     addShape('ellipse', { cx: '83', cy: '31', rx: '10', ry: '5', fill: LOBE_LIGHT, transform: 'rotate(-45 83 31)' }, shellG);
 
-    // Right-leaning stem and left leaf, both broad enough for the 72px readability floor.
+    // Right-leaning stem and left leaf, both broad enough for the 72px readability floor at
+    // Beacon Size M -- MIN_SCALE (72/VB_H) is applied before the below-pumpkin `* beaconScale`
+    // multiply above, so the floor itself scales with Beacon Size (e.g. ~50px at S), the same
+    // idiom as animateCheshire's own `Math.max(48, ...) * beaconScale`.
     addShape('path', { d: 'M 87 22 C 88 10 96 3 108 2 L 119 10 C 106 17 103 25 102 31 Z', fill: STEM_FILL, stroke: STEM_OUTLINE, 'stroke-width': '2.5', style: VECTOR_STROKE }, shellG);
     addShape('path', { d: 'M 95 21 C 98 12 104 7 111 5 L 115 9 C 105 15 102 21 101 27 Z', fill: STEM_HIGHLIGHT }, shellG);
     addShape('path', { d: 'M 91 22 C 94 13 100 7 108 3 L 101 18 L 98 28 Z', fill: STEM_SHADOW }, shellG);
