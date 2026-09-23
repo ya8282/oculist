@@ -415,6 +415,161 @@ describe('Cheshire: a hand-drawn cat fades in above (or below) the match, dissol
     }
   });
 
+  test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
+    async function renderedTimings() {
+      await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+      return page.evaluate(() => {
+        const svg = document.querySelector('svg.oc-beacon-transient');
+        const anims = svg.getAnimations({ subtree: true });
+        return anims
+          .map((a) => {
+            const t = a.effect.getComputedTiming();
+            return { delay: t.delay, duration: t.duration };
+          })
+          .sort((x, y) => x.delay - y.delay || x.duration - y.duration);
+      });
+    }
+
+    try {
+      // getBeaconDuration (content.js): 'fast' -> baseDuration*0.5, 'slow' ->
+      // baseDuration*1.75, anything else (including the default 'normal') -> baseDuration
+      // unscaled. Baseline measured from the RENDERED timings at the default speed
+      // first, then compared against each scaled speed's own rendered timings --
+      // measured, not recomputed from animateCheshire's own 180/360/600/720/900ms
+      // literals, so a bug that skips durFactor entirely (or applies it to only some
+      // phases) cannot cancel out against an identical recomputation here. Both
+      // duration AND delay are checked (oculist-s0vr, reviewer-caught survivor):
+      // every one of animateCheshire's .animate() calls multiplies BOTH its own
+      // duration and delay by durFactor (only the svg's own 0-180ms fade/scale-in has
+      // no delay at all, i.e. delay 0 -- 0*factor stays 0, so it needs no special
+      // case), and a mutant that scales only duration (e.g. hardcoding one call's own
+      // `delay: 180` instead of `delay: 180 * durFactor`) reads as fully green if only
+      // duration is ever asserted. Sorted by [delay, duration] rather than compared by
+      // array index, since getAnimations() does not promise the same per-element
+      // ordering across two independently-mounted svg instances, and durFactor scales
+      // every timing by the same factor regardless of order; ties (the six fragment
+      // dissolves share one identical [delay, duration] pair) sort arbitrarily among
+      // themselves but compare correctly since their values are interchangeable.
+      const base = await renderedTimings();
+      assert.strictEqual(base.length, 10, `expected 10 live WAAPI animations, got ${base.length}`);
+
+      const SPEEDS = [['fast', 0.5], ['slow', 1.75]];
+      for (const [speed, factor] of SPEEDS) {
+        await setVisionSettings({ animationSpeed: speed });
+        const timings = await renderedTimings();
+        assert.strictEqual(timings.length, base.length, `Animation Speed ${speed}: expected the same 10 animations`);
+        timings.forEach((t, i) => {
+          const expectedDuration = base[i].duration * factor;
+          const expectedDelay = base[i].delay * factor;
+          assert.ok(
+            Math.abs(t.duration - expectedDuration) <= 1,
+            `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base[i].duration}ms x ${factor}), got ${t.duration}ms`
+          );
+          assert.ok(
+            Math.abs(t.delay - expectedDelay) <= 1,
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor}), got ${t.delay}ms`
+          );
+        });
+      }
+    } finally {
+      // The loop above always ends on 'slow', a genuine change from the default
+      // 'normal' either way this exits (success or a thrown assertion), so this final
+      // write is never a same-value write -- chrome.storage only fires onChanged when
+      // the stored value actually differs (the pack-enumeration test's own comment,
+      // further down, documents the same gotcha).
+      await setVisionSettings({ animationSpeed: 'normal' });
+    }
+  });
+
+  test('below-match settle direction: the grin drifts the opposite way it does above the match', async () => {
+    // Independent of the previous test's own cleanup: a read, not a write, so there is
+    // no same-value-write hang to risk -- this test's own currentTime=180/780 seeks
+    // (below) assume durFactor=1 (the default speed), and would silently measure a
+    // scaled drift window if Animation Speed were left at 'fast'/'slow'.
+    const currentSpeed = await evalInContentScript(
+      "new Promise(function (resolve) {" +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var vs = (data && data['oc-settings'] && data['oc-settings'].visionSettings) || {};" +
+        "resolve(vs.animationSpeed || 'normal');" +
+        '});' +
+        '})'
+    );
+    assert.strictEqual(
+      currentSpeed,
+      'normal',
+      "sanity check: Animation Speed must already be 'normal' entering this test, independent of the previous test's own cleanup"
+    );
+
+    const targetDocY = await page.evaluate(() => {
+      const r = document.getElementById('target').getBoundingClientRect();
+      return r.top + window.scrollY;
+    });
+
+    // grinG's own settle animation (animateCheshire, content.js): delay 180*durFactor,
+    // duration 720*durFactor, drift keyframe at offset 0.833 -- at the real default
+    // speed (durFactor=1) currentTime=180 samples the pre-drift translate(0,0) frame,
+    // currentTime=780 samples the settled translate(0,drift) frame. The delta between
+    // the grin's own getBoundingClientRect().top at those two frames is the drift's
+    // real, rendered direction and rough magnitude -- not a re-read of the `drift`
+    // variable itself, which is exactly what a re-signing bug in that variable could
+    // not expose.
+    async function grinDriftTop() {
+      await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+      return page.evaluate(() => {
+        const svg = document.querySelector('svg.oc-beacon-transient');
+        const anims = svg.getAnimations({ subtree: true });
+        const grin = svg.querySelector('[data-cheshire-part="grin"]');
+        function seek(t) {
+          anims.forEach((a) => {
+            a.pause();
+            a.currentTime = t;
+          });
+          return grin.getBoundingClientRect().top;
+        }
+        const before = seek(180);
+        const after = seek(780);
+        return after - before;
+      });
+    }
+
+    try {
+      // Above branch: ~400px of headroom, the same scroll the "document-space
+      // correctness" test above uses to force animateCheshire's own `above` branch.
+      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 400)), targetDocY);
+      const aboveDelta = await grinDriftTop();
+
+      // Below branch: only 20px of headroom, the same scroll the "placement fallback"
+      // test above uses to force animateCheshire's own below-match branch.
+      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 20)), targetDocY);
+      const belowDelta = await grinDriftTop();
+
+      assert.ok(
+        Math.abs(aboveDelta) > 1,
+        `sanity check: the above branch's own drift must be visibly non-zero, got a top-delta of ${aboveDelta}`
+      );
+      assert.ok(
+        aboveDelta > 0,
+        `above the match, the grin must drift DOWN (toward the match below it), got a top-delta of ${aboveDelta}`
+      );
+      assert.ok(
+        belowDelta < 0,
+        `below the match, the grin must drift UP (toward the match above it) -- the opposite sign of the above ` +
+          `branch's own ${aboveDelta} -- got a top-delta of ${belowDelta}`
+      );
+
+      // Rough magnitude, not the exact -0.06*VB_H constant (oculist-s0vr): the two
+      // branches' own drift magnitudes should be in the same ballpark, since only
+      // their sign is meant to differ.
+      const ratio = Math.abs(belowDelta) / Math.abs(aboveDelta);
+      assert.ok(
+        ratio > 0.5 && ratio < 2,
+        `above/below drift magnitudes should be comparable, got above=${aboveDelta} below=${belowDelta} (ratio ${ratio})`
+      );
+    } finally {
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
+  });
+
   test('the grin outlasts the body: once every dissolve fragment has faded, the grin is still visible', async () => {
     await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
 
