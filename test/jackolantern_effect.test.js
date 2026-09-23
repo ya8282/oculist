@@ -29,6 +29,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -775,6 +776,59 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
       await page.locator(INPUT).fill('');
       await page.locator(INPUT).type('quarklet', { delay: 30 });
       await waitForMatchCount(page);
+    }
+  });
+
+  test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
+    // Full mode (performanceMode:false, the suite default) mounts 4 live animations off the
+    // single pumpkinEl root: the whole-figure entrance/hold/exit, plus one per face state
+    // (dim/warm/bright) -- see animateJackOLantern's own track() calls in content.js. Same
+    // test/helpers/waapi_timings.js collection cheshire_effect.test.js's own equivalent
+    // test uses.
+    async function renderedTimings() {
+      await replay();
+      return page.evaluate(collectAnimationTimings);
+    }
+
+    // Tracks the last animationSpeed actually written, so the finally below can skip its
+    // own reset when we're already back at 'normal' -- chrome.storage.sync only fires
+    // onChanged on a genuine value change, so an unconditional reset risks masking a real
+    // assertion failure under a "never echoed" timeout thrown while unwinding
+    // (flappy_effect.test.js's own Beacon Size test, oculist-vqq1, fixed the identical
+    // hazard the same way).
+    let currentSpeed = 'normal';
+
+    try {
+      const base = await renderedTimings();
+      assert.ok(base.length > 0, 'sanity check: expected at least one live WAAPI animation');
+
+      const SPEEDS = [['fast', 0.5], ['slow', 1.75]];
+      for (const [speed, factor] of SPEEDS) {
+        currentSpeed = speed;
+        await setVisionSettings({ animationSpeed: speed });
+        const timings = await renderedTimings();
+        assert.strictEqual(
+          timings.length,
+          base.length,
+          `Animation Speed ${speed}: expected the same ${base.length} animations`
+        );
+        timings.forEach((t, i) => {
+          const expectedDuration = base[i].duration * factor;
+          const expectedDelay = base[i].delay * factor;
+          assert.ok(
+            Math.abs(t.duration - expectedDuration) <= 1,
+            `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base[i].duration}ms x ${factor}), got ${t.duration}ms`
+          );
+          assert.ok(
+            Math.abs(t.delay - expectedDelay) <= 1,
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor}), got ${t.delay}ms`
+          );
+        });
+      }
+    } finally {
+      if (currentSpeed !== 'normal') {
+        await setVisionSettings({ animationSpeed: 'normal' });
+      }
     }
   });
 

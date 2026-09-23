@@ -20,6 +20,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -416,18 +417,13 @@ describe('Cheshire: a hand-drawn cat fades in above (or below) the match, dissol
   });
 
   test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
+    // oculist-mcpd: collection itself now lives in test/helpers/waapi_timings.js (shared
+    // with boneassembly/flappy/horseman/jackolantern/trail's own Animation Speed tests) --
+    // it reads every top-level .oc-beacon-transient element, not just cheshire's single
+    // svg root, but cheshire only ever mounts that one element, so the result is identical.
     async function renderedTimings() {
       await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
-      return page.evaluate(() => {
-        const svg = document.querySelector('svg.oc-beacon-transient');
-        const anims = svg.getAnimations({ subtree: true });
-        return anims
-          .map((a) => {
-            const t = a.effect.getComputedTiming();
-            return { delay: t.delay, duration: t.duration };
-          })
-          .sort((x, y) => x.delay - y.delay || x.duration - y.duration);
-      });
+      return page.evaluate(collectAnimationTimings);
     }
 
     try {
