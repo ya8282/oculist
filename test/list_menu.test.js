@@ -16,8 +16,14 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, TIMEOUT_SCALE, POLL_TIMEOUT } = require('./helpers/wait');
 const { waitForSessionAccess } = require('./helpers/session_access');
+const { waitForWorkListLoad, installDelayOnNextGet } = require('./helpers/worklist');
+
+// See chip_row.test.js's own LATE_LOAD_DELAY_MS/LATE_LOAD_SETTLE_MARGIN for the rationale
+// (fixed delay, scaled settle margin — mirrors stale_mount_guard.test.js).
+const LATE_LOAD_DELAY_MS = 3000;
+const LATE_LOAD_SETTLE_MARGIN = 1500 * TIMEOUT_SCALE;
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -181,8 +187,10 @@ describe('List menu popover (saved lists UI)', () => {
     await clearWorkList();
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
-    // resolves asynchronously after open — poll for the chip row to actually reflect the
-    // now-empty list, rather than guessing how long that round trip takes.
+    // resolves asynchronously after open — waitForChipCount(0) alone can pass vacuously
+    // (0 chips is also buildUI()'s pre-restore starting state), so wait for the mount's own
+    // loadWorkList() round trip to actually land first (oculist-v1jg).
+    await waitForWorkListLoad(evalInContentScript);
     await waitForChipCount(0);
   });
 
@@ -821,5 +829,59 @@ describe('List menu popover (saved lists UI)', () => {
     await page.keyboard.press('Escape');
     await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     assert.strictEqual(await page.locator('#oc-wrap').count(), 0, 'the second Escape should close the whole overlay as before');
+  });
+
+  // Reviewer repro (d): loadSavedList() already fully replaces AND persists the working
+  // list, with no confirmation step — a late mount-restore landing after that must be
+  // dropped outright, not merged. Merging would prepend a stale carried-over list ahead
+  // of the list the user just explicitly chose, and would re-run a scan/save loadSavedList
+  // already did its own (deliberately scan-free) way (oculist-v1jg).
+  test('loading a saved list before a late mount-restore lands drops the stale restore entirely (oculist-v1jg)', async () => {
+    await addTerm('zzzsaved');
+    await openListsMenu();
+    await saveCurrentAs('Chosen');
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    // Seed a "carried over from a previous mount" list, distinct from the saved list above.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['zzzstale'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    // New mount: its own loadWorkList() call is now in flight, delayed.
+    await openFinder();
+    await openListsMenu();
+    await page.locator(LIST_ITEM_NAME).click();
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap');
+      const chips = root ? Array.from(root.shadowRoot.querySelectorAll('.oc-chip-term')).map((el) => el.textContent) : [];
+      return JSON.stringify(chips) === JSON.stringify(['zzzsaved']);
+    }, null, { timeout: POLL_TIMEOUT });
+
+    // Wait past the delayed restore landing.
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(
+      await chipTerms(),
+      ['zzzsaved'],
+      'the stale restore must not merge in behind the list the user just explicitly loaded'
+    );
+
+    const activeChip = await page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const el = root.querySelector('.oc-chip-term.active');
+      return el ? el.textContent : null;
+    });
+    assert.strictEqual(activeChip, null, 'loadSavedList()\'s own contract: no chip is active until the user clicks one');
+    assert.strictEqual(await page.locator(COUNT).textContent(), '', 'loadSavedList() never runs a scan, and neither may the dropped stale restore');
+
+    const stored = await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.get('oc-worklist', (r) => resolve(r['oc-worklist'])))"
+    );
+    assert.deepStrictEqual(stored, { terms: ['zzzsaved'], activeIndex: -1 });
   });
 });

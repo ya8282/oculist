@@ -12,8 +12,17 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT } = require('./helpers/wait');
 const { waitForSessionAccess } = require('./helpers/session_access');
+const { waitForWorkListLoad, installDelayOnNextGet } = require('./helpers/worklist');
+
+// Fixed, not scaled: stands in for a genuinely slow chrome.storage.session IPC round trip
+// (e.g. the pre-grant retry through ensureSessionAccess), not for contention on the test
+// machine — scaling it up would just make the test slower without exercising the merge
+// path any harder. The wait past it below is what needs the contention headroom, and that
+// one is scaled (mirrors stale_mount_guard.test.js).
+const LATE_LOAD_DELAY_MS = 3000;
+const LATE_LOAD_SETTLE_MARGIN = 1500 * TIMEOUT_SCALE;
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -195,8 +204,10 @@ describe('Chip row and working-list state', () => {
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
-    // resolves asynchronously after open — poll for the chip row to actually reflect the
-    // now-empty list, rather than guessing how long that round trip takes.
+    // resolves asynchronously after open — waitForChipCount(0) alone can pass vacuously
+    // (0 chips is also buildUI()'s pre-restore starting state), so wait for the mount's own
+    // loadWorkList() round trip to actually land first (oculist-v1jg).
+    await waitForWorkListLoad(evalInContentScript);
     await waitForChipCount(0);
   });
 
@@ -822,5 +833,167 @@ describe('Chip row and working-list state', () => {
       // persisted 'oc-settings' would otherwise leak this value into subsequent tests).
       await setVisionSettings({ beaconSize: 'm' });
     }
+  });
+
+  // oculist-v1jg: buildUI()'s mount-time loadWorkList() callback used to unconditionally
+  // overwrite workListTerms/activeTermIndex/termRanges/termStarved whenever it landed,
+  // with no regard for whether the user had already committed a chip in this mount while
+  // the callback was still in flight (e.g. the pre-grant ensureSessionAccess retry, or
+  // plain storage slowness). Deterministically forces that race — rather than relying on
+  // CPU load — by delaying exactly the mount's own chrome.storage.session.get() call,
+  // adding a chip while it is still pending, then letting it resolve with a seeded
+  // "previous mount" list.
+  test('a late mount-restore merges with a chip already added this mount instead of wiping it (oculist-v1jg)', async () => {
+    // beforeEach leaves the overlay open — close it first so the next Ctrl+F below is a
+    // real remount (loadWorkList() only ever runs from buildUI() on mount).
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    // Seed a "carried over from a previous mount" list directly in storage.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['zenithquokka'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    // New mount: its own loadWorkList() call is now in flight, delayed. The chip row
+    // starts empty (workListTerms is still its pre-restore []).
+    await openFinder();
+    await waitForChipCount(0);
+
+    // The user commits a chip of their own before the delayed restore lands.
+    await addTerm('quarklet');
+    assert.deepStrictEqual(await chipTerms(), ['quarklet']);
+
+    // Wait past the delayed callback landing.
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(
+      await chipTerms(),
+      ['zenithquokka', 'quarklet'],
+      'the late restore must merge — restored terms first, then the chip added this mount — not wipe the added chip'
+    );
+    assert.strictEqual(
+      await activeChipTerm(),
+      'quarklet',
+      'the chip active in memory when the restore landed must stay active'
+    );
+
+    const stored = await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.get('oc-worklist', (r) => resolve(r['oc-worklist'])))"
+    );
+    assert.deepStrictEqual(
+      stored,
+      { terms: ['zenithquokka', 'quarklet'], activeIndex: 1 },
+      'the merged list (not just the in-memory chip row) must be persisted'
+    );
+  });
+
+  // Companion to the merge test above: when nothing was added this mount, a late restore
+  // must behave byte-for-byte like the existing (undelayed) restore-on-mount test — a
+  // plain overwrite that never triggers a search — even though the callback here is
+  // deliberately forced to land late.
+  test('a late mount-restore with no chip added this mount still just restores, and triggers no search (oculist-v1jg)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['gamma', 'delta'], activeIndex: 1 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    // No user action this mount — just wait out the delayed restore.
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(await chipTerms(), ['gamma', 'delta']);
+    assert.strictEqual(await activeChipTerm(), 'delta');
+
+    // No scan: count/nav/highlights stay exactly as a plain restore leaves them (mirrors
+    // the existing undelayed restore-on-mount test above).
+    assert.strictEqual(await page.locator(COUNT).textContent(), '');
+    assert.strictEqual(await page.locator(PREV_BTN).isDisabled(), true);
+    assert.strictEqual(await page.locator(NEXT_BTN).isDisabled(), true);
+    assert.strictEqual(await highlightCount('oculist-match'), 0, 'a plain restore must never run a scan');
+  });
+
+  // Reviewer repro (c): the touched-but-now-empty branch must key off the user having
+  // acted this mount, not off workListTerms.length alone. Add a chip (touches the flag),
+  // then remove it via the X button before the delayed restore lands — the user's own
+  // deliberate "empty" state must win, not the old carried-over list.
+  test('add then remove before a late restore lands keeps the list empty, not the old restored list (oculist-v1jg)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['zenithquokka'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    await addTerm('quarklet');
+    assert.deepStrictEqual(await chipTerms(), ['quarklet']);
+    await page.locator(CHIP_REMOVE).first().click();
+    await waitForChipCount(0);
+
+    // Wait past the delayed callback landing.
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(
+      await chipTerms(),
+      [],
+      'add-then-remove before the late restore lands must not resurrect the old restored list'
+    );
+
+    const stored = await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.get('oc-worklist', (r) => resolve(r['oc-worklist'])))"
+    );
+    assert.deepStrictEqual(
+      stored,
+      { terms: [], activeIndex: -1 },
+      'the persisted list must stay the user\'s own empty state, not the stale restore'
+    );
+  });
+
+  // Reviewer repro (cap): a full 10-term restored list plus one chip the user already
+  // added this mount must never drop the user's own chip to stay under the 10-term cap —
+  // it is a restored term (one the user has never even seen yet) that must give way.
+  test('a late restore of a full 10-term list keeps the chip added this mount, active (oculist-v1jg)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    const restored = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'];
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: " + JSON.stringify(restored) + ", activeIndex: 2 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    await addTerm('quarklet');
+    assert.deepStrictEqual(await chipTerms(), ['quarklet']);
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    const terms = await chipTerms();
+    assert.strictEqual(terms.length, 10, 'the merged list must still respect the 10-term cap');
+    assert.ok(terms.includes('quarklet'), 'the chip added this mount must never be dropped to make room for a restored term');
+    assert.strictEqual(
+      await activeChipTerm(),
+      'quarklet',
+      'the chip active in memory when the restore landed must stay active, even under the cap'
+    );
   });
 });

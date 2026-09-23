@@ -1057,6 +1057,20 @@
   var activeTermIndex  = -1;
   var termRanges       = [];
   var termStarved      = [];
+  // Set by every writer that commits a real user action against the working list this
+  // mount (add/reactivate a chip, remove a chip, load a saved list) — never inferred from
+  // workListTerms.length, because a user who adds then removes a chip before the mount's
+  // loadWorkList() callback lands ends up back at length 0, and that emptiness must NOT
+  // read as "untouched" (which would let the callback resurrect the old persisted list —
+  // oculist-v1jg/oculist-avaa). Reset to false on every fresh mount.
+  var workListTouchedThisMount = false;
+  // Narrower than workListTouchedThisMount: set ONLY by loadSavedList(), which already
+  // fully replaces AND persists the working list outright (with no confirmation step —
+  // see its own comment). A late mount-restore landing after that must be dropped
+  // wholesale, not merged: merging would prepend a stale carried-over list ahead of a
+  // list the user just explicitly chose, which is not "terms added this mount" at all.
+  // Reset to false on every fresh mount.
+  var workListReplacedThisMount = false;
   var chipRow          = null;
   // Bumped once per buildUI() call (oculist-3z6): loadWorkList()'s async callback there
   // closes over the mount id it was issued for, so a callback that is still in flight when
@@ -1315,6 +1329,8 @@
     listsBtn = listsPanel = null;
     lastTerm = ''; activeIndex = -1; searchRanges = []; firstEnter = false; dismissedNotices.clear();
     chipRow = null; workListTerms = []; activeTermIndex = -1; termRanges = []; termStarved = [];
+    workListTouchedThisMount = false;
+    workListReplacedThisMount = false;
   };
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
@@ -7210,6 +7226,7 @@
   function activateChip(i) {
     if (i < 0 || i >= workListTerms.length) return;
     activeTermIndex = i;
+    workListTouchedThisMount = true;
     persistWorkList();
     performListSearch();
   }
@@ -7220,6 +7237,7 @@
   // below, which forces -1 regardless of what this clamp computes.
   function removeChipAt(index) {
     if (index < 0 || index >= workListTerms.length) return;
+    workListTouchedThisMount = true;
     workListTerms.splice(index, 1);
     // Keep termRanges parallel to workListTerms so a stale/misaligned count is never
     // shown for a term that shifted index — termRanges itself is only fully refreshed
@@ -7334,6 +7352,7 @@
 
     workListTerms.push(trimmed);
     activeTermIndex = workListTerms.length - 1;
+    workListTouchedThisMount = true;
     persistWorkList();
     performListSearch();
   }
@@ -8552,6 +8571,8 @@
 
     workListTerms = terms;
     activeTermIndex = -1;
+    workListTouchedThisMount = true;
+    workListReplacedThisMount = true;
     termRanges = [];
     termStarved = [];
     searchRanges = [];
@@ -8916,6 +8937,8 @@
   function buildUI() {
     mountGeneration += 1;
     var ownMountGeneration = mountGeneration;
+    workListTouchedThisMount = false;
+    workListReplacedThisMount = false;
 
     wrap = document.createElement('div');
     wrap.id = 'oc-wrap';
@@ -9030,14 +9053,69 @@
       // then, but they belong to a newer mount whose own loadWorkList() call already
       // restored the real list — this stale one must not clobber it.
       if (!wrapRoot || !chipRow || ownMountGeneration !== mountGeneration) return;
-      workListTerms = list.terms;
-      activeTermIndex = list.activeIndex;
-      // No scan has run against this term set yet, so termRanges must not carry over any
-      // stale entries from before this mount — see the "every writer of activeTermIndex"
-      // note in performListSearch() for the invariant this upholds without scanning.
-      termRanges = [];
-      termStarved = [];
-      renderChipRow();
+
+      if (workListReplacedThisMount) {
+        // loadSavedList() already replaced AND persisted the working list this mount —
+        // this stale restore is not "terms added this mount" to merge with, it is exactly
+        // the carried-over list loadSavedList's own no-confirmation replace was meant to
+        // discard. Drop it outright: no merge, no second search, no second save.
+        return;
+      }
+
+      if (!workListTouchedThisMount) {
+        // Untouched: nobody has committed a chip action against this mount yet, so this is
+        // a plain restore, byte-for-byte as before — must never trigger a search.
+        workListTerms = list.terms;
+        activeTermIndex = list.activeIndex;
+        // No scan has run against this term set yet, so termRanges must not carry over any
+        // stale entries from before this mount — see the "every writer of activeTermIndex"
+        // note in performListSearch() for the invariant this upholds without scanning.
+        termRanges = [];
+        termStarved = [];
+        renderChipRow();
+        return;
+      }
+
+      if (workListTerms.length === 0) {
+        // Touched, but the user's own actions (e.g. add then remove) already emptied the
+        // list — that emptiness IS the user's current deliberate state (already persisted
+        // by whichever writer got it there), so this stale load must be dropped rather than
+        // resurrecting whatever was on disk before this mount started.
+        return;
+      }
+
+      // Touched and non-empty: the user already committed at least one chip action (and
+      // its own performListSearch() scan) before this late load landed. Merge rather than
+      // overwrite — restored terms first (oldest committed order), then whatever the user
+      // added this mount that isn't already in the restored list, deduped exactly like
+      // addChipTerm()'s workListTerms.indexOf() check. The chip active in memory stays
+      // active. A real scan has already run this mount, so re-running performListSearch()
+      // here (unlike the untouched branch above) is fine — it also brings the restored
+      // terms' counts up to date in the same synchronous pass, so nothing renders blank in
+      // between.
+      var activeTermValue = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
+        ? workListTerms[activeTermIndex]
+        : null;
+      var restoredTerms = list.terms.slice();
+      var addedSinceMount = workListTerms.filter(function (t) {
+        return restoredTerms.indexOf(t) === -1;
+      });
+      // The 10-term cap trims the RESTORED side, never the user's own terms — the user
+      // already sees and is acting on their own chips this mount; a restored term they've
+      // never seen yet is the one that should give way when both sides can't fit.
+      var keepRestored = Math.max(0, MAX_LIST_TERMS - addedSinceMount.length);
+      var mergedTerms = restoredTerms.slice(0, keepRestored).concat(addedSinceMount);
+
+      workListTerms = mergedTerms;
+      if (activeTermValue !== null && mergedTerms.indexOf(activeTermValue) !== -1) {
+        activeTermIndex = mergedTerms.indexOf(activeTermValue);
+      } else {
+        activeTermIndex = (list.activeIndex >= 0 && list.activeIndex < mergedTerms.length)
+          ? list.activeIndex
+          : -1;
+      }
+      performListSearch();
+      persistWorkList();
     });
   }
 
