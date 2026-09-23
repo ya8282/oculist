@@ -15,10 +15,16 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName } = require('./helpers/accessible_name');
 const { waitForSessionAccess } = require('./helpers/session_access');
+const { waitForWorkListLoad, installDelayOnNextGet } = require('./helpers/worklist');
+
+// See chip_row.test.js's own LATE_LOAD_DELAY_MS/LATE_LOAD_SETTLE_MARGIN for the rationale
+// (fixed delay, scaled settle margin — mirrors stale_mount_guard.test.js).
+const LATE_LOAD_DELAY_MS = 3000;
+const LATE_LOAD_SETTLE_MARGIN = 1500 * TIMEOUT_SCALE;
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -151,8 +157,10 @@ describe('performListSearch() and per-term chip counts', () => {
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinderRetry();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
-    // resolves asynchronously after open — poll for the chip row to actually reflect the
-    // now-empty list, rather than guessing how long that round trip takes.
+    // resolves asynchronously after open — waitForChipCount(0) alone can pass vacuously
+    // (0 chips is also buildUI()'s pre-restore starting state), so wait for the mount's own
+    // loadWorkList() round trip to actually land first (oculist-v1jg).
+    await waitForWorkListLoad(evalInContentScript);
     await waitForChipCount(0);
   });
 
@@ -313,6 +321,56 @@ describe('performListSearch() and per-term chip counts', () => {
     await clickChip(2); // 'dog'
     assert.deepStrictEqual(await chipCounts(), ['7', '3', '1', '0']);
     assert.strictEqual((await page.locator(COUNT).textContent()).trim(), '0 of 1');
+  });
+
+  // oculist-avaa (companion to oculist-v1jg in chip_row.test.js): buildUI()'s mount-time
+  // loadWorkList() callback used to unconditionally reset termRanges/termStarved to []
+  // whenever it landed, even after the user had already added a chip (and scanned it) this
+  // mount — every chip's count went blank, not just the restored one's. Deterministically
+  // forces the callback to land late (rather than relying on CPU load) via
+  // installDelayOnNextGet, adds a chip while it is pending, then lets it resolve with a
+  // seeded "previous mount" list.
+  test('a late mount-restore brings every chip\'s count up to date instead of blanking them (oculist-v1jg/oculist-avaa)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    // Seed a "carried over from a previous mount" list — 'dog' has a known, non-zero count.
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['dog'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinderRetry();
+    await waitForChipCount(0);
+
+    // The user commits their own chip before the delayed restore lands.
+    await addTerm('cat');
+    assert.deepStrictEqual(await chipTerms(), ['cat']);
+    assert.deepStrictEqual(await chipCounts(), ['7'], 'sanity check: the chip added this mount must already be scanned');
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(
+      await chipTerms(),
+      ['dog', 'cat'],
+      'restored terms must come first, followed by the chip added this mount'
+    );
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['1', '7'],
+      'every chip (restored and user-added alike) must show a real, non-blank count after the merge'
+    );
+
+    // Read the active chip through the shadow root directly (this file has no
+    // activeChipTerm() helper of its own).
+    const activeChip = await page.evaluate(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const el = root.querySelector('.oc-chip-term.active');
+      return el ? el.textContent : null;
+    });
+    assert.strictEqual(activeChip, 'cat', 'the chip active in memory when the restore landed must stay active');
   });
 
   // Regression guard for oculist-l6m.14: traverse()'s Oculist-node exclusion must route

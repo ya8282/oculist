@@ -26,6 +26,7 @@ const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { waitForSessionAccess } = require('./helpers/session_access');
+const { waitForWorkListLoad } = require('./helpers/worklist');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -151,8 +152,10 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
     await openFinder();
     // The worklist was just cleared above, but loadWorkList() (chrome.storage.session.get)
-    // resolves asynchronously after open — poll for the chip row to actually reflect the
-    // now-empty list, rather than guessing how long that round trip takes.
+    // resolves asynchronously after open — waitForChipCount(0) alone can pass vacuously
+    // (0 chips is also buildUI()'s pre-restore starting state), so wait for the mount's own
+    // loadWorkList() round trip to actually land first (oculist-v1jg).
+    await waitForWorkListLoad(evalInContentScript);
     await waitForChipCount(0);
   });
 
