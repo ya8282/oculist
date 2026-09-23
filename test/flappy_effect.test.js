@@ -19,6 +19,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -511,6 +512,108 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       // "placement fallback" test immediately after this one while this line was
       // still here.
       await evalInContentScript('window.__ocTest.cancelBeacons()');
+    }
+  });
+
+  test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
+    // animateFlappy's own flap count (n = round(dist/160), content.js ~3097) depends on
+    // the distance from the tracked cursor (or its fallback) to the match -- unlike every
+    // other effect this bead covers, its FLAP_PERIOD (and so every rendered timing) is NOT
+    // a pure function of animationSpeed alone. oculist-mcpd (reviewer-caught): an unpinned
+    // mouse/scroll let that distance drift BETWEEN renders -- measured scrollY moving
+    // 3190->3338px across two consecutive Enter presses on a page this test had never
+    // scrolled itself, changing the flap count with it and reading as a bogus "duration
+    // failed to scale" failure. Pinning the cursor and pre-scrolling the match fully into
+    // view (so every Enter press below takes animate()'s own fixed-50ms "already in
+    // viewport" branch instead of a native scrollIntoView that this test can't safely wait
+    // out) makes the distance, and so the flap count, identical across all three renders.
+    const targetDocY = await page.evaluate(() => {
+      const r = document.getElementById('target').getBoundingClientRect();
+      return r.top + window.scrollY + r.height / 2;
+    });
+    await page.mouse.move(200, 120);
+    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+
+    // Collects across BOTH top-level .oc-beacon-transient elements animateFlappy mounts --
+    // the bird and the absorption flash, created synchronously in the same animateFlappy()
+    // call (this file's own cancellation test documents that) -- not just the bird, so a
+    // durFactor bug confined to the flash's own delay/duration (DUR = getBeaconDuration(900),
+    // flashDuration = getBeaconDuration(450), content.js ~2990/3292) cannot hide behind a
+    // bird-only read. Same test/helpers/waapi_timings.js collection
+    // cheshire_effect.test.js's own equivalent test uses, generalized across multiple
+    // roots. wingIterations is read alongside it, straight off the wing animation's own
+    // getTiming() (n - 0.5, content.js ~3098) -- never multiplied by durFactor anywhere --
+    // so it stays constant across every speed as long as the flight geometry above is
+    // truly pinned; comparing it gives a mismatch a name ("the geometry changed") instead
+    // of it reading as an ordinary duration/delay assertion failure.
+    async function renderedTimings() {
+      await replay(() => (document.querySelector('.oc-beacon-transient') ? true : null));
+      const [timings, wingIterations] = await Promise.all([
+        page.evaluate(collectAnimationTimings),
+        page.evaluate(() => {
+          const wing = document.querySelector('.oc-flappy-bird').getAnimations({ subtree: true })
+            .find((a) => a.effect.getTiming().iterations !== 1);
+          return wing ? wing.effect.getTiming().iterations : null;
+        }),
+      ]);
+      return { timings, wingIterations };
+    }
+
+    // Tracks the last animationSpeed actually written, so the finally below can skip its
+    // own reset when we're already back at 'normal' -- chrome.storage.sync only fires
+    // onChanged on a genuine value change (this file's own "pack enumeration" test
+    // documents the same gotcha), so an unconditional reset risks masking a real assertion
+    // failure under a "never echoed" timeout thrown while unwinding (flappy_effect.test.js's
+    // own Beacon Size test, oculist-vqq1, fixed the identical hazard the same way). Set
+    // before the write itself, not after, so a write that lands but whose echo wait then
+    // times out still leaves finally able to attempt the reset.
+    let currentSpeed = 'normal';
+
+    try {
+      const base = await renderedTimings();
+      assert.ok(base.timings.length > 0, 'sanity check: expected at least one live WAAPI animation');
+      assert.ok(base.wingIterations !== null, 'sanity check: expected the wing animation with its own flap-count iterations');
+
+      const SPEEDS = [['fast', 0.5], ['slow', 1.75]];
+      for (const [speed, factor] of SPEEDS) {
+        currentSpeed = speed;
+        await setVisionSettings({ animationSpeed: speed });
+        const r = await renderedTimings();
+        assert.strictEqual(
+          r.wingIterations,
+          base.wingIterations,
+          `Animation Speed ${speed}: the wing's own flap-count iterations changed from ${base.wingIterations} to ${r.wingIterations} -- the flight GEOMETRY differed between renders, not a duration/delay that failed to scale`
+        );
+        assert.strictEqual(
+          r.timings.length,
+          base.timings.length,
+          `Animation Speed ${speed}: expected the same ${base.timings.length} animations`
+        );
+        r.timings.forEach((t, i) => {
+          const expectedDuration = base.timings[i].duration * factor;
+          const expectedDelay = base.timings[i].delay * factor;
+          assert.ok(
+            Math.abs(t.duration - expectedDuration) <= 1,
+            `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base.timings[i].duration}ms x ${factor}), got ${t.duration}ms`
+          );
+          assert.ok(
+            Math.abs(t.delay - expectedDelay) <= 1,
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base.timings[i].delay}ms x ${factor}), got ${t.delay}ms`
+          );
+        });
+      }
+    } finally {
+      if (currentSpeed !== 'normal') {
+        await setVisionSettings({ animationSpeed: 'normal' });
+      }
+      // No explicit scrollTo(0, 0) here -- the Beacon Size test right above this one
+      // documents (and this bead re-discovered under --test-concurrency=2) that forcing
+      // scrollY back to 0 pushes #target back behind this fixture's own 4000px spacer,
+      // and "placement fallback" two tests later reads a match-relative mouse coordinate
+      // straight off getBoundingClientRect() with no re-scroll of its own -- an off-
+      // screen Y there makes page.mouse.move() silently fail to dispatch a real
+      // mousemove at all.
+      await page.mouse.move(200, 120);
     }
   });
 

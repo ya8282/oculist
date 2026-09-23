@@ -18,6 +18,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -178,6 +179,25 @@ describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls
         "chrome.storage.sync.get('oc-settings', function (data) {" +
         "var current = (data && data['oc-settings']) || {};" +
         'var next = Object.assign({}, current, ' + JSON.stringify(patch) + ');' +
+        "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
+        '});' +
+        '})'
+    );
+    await waitForSettingsEcho(echoBefore);
+  }
+
+  // Merges `patch` into the nested visionSettings object (e.g. animationSpeed) via
+  // chrome.storage.sync.set, same idiom as flappy_effect.test.js's own setVisionSettings —
+  // setSettings() above only shallow-merges the top level, which would otherwise drop
+  // every other key already inside visionSettings.
+  async function setVisionSettings(patch) {
+    const echoBefore = await armSettingsEcho();
+    await evalInContentScript(
+      'new Promise(function (resolve) {' +
+        "chrome.storage.sync.get('oc-settings', function (data) {" +
+        "var current = (data && data['oc-settings']) || {};" +
+        'var vs = Object.assign({}, current.visionSettings || {}, ' + JSON.stringify(patch) + ');' +
+        'var next = Object.assign({}, current, { visionSettings: vs });' +
         "chrome.storage.sync.set({ 'oc-settings': next }, resolve);" +
         '});' +
         '})'
@@ -564,6 +584,60 @@ describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls
       });
     } finally {
       await setSettings({ performanceMode: false });
+    }
+  });
+
+  test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
+    // The whole figure hangs every one of its ~23 WAAPI animations off the single figWrap
+    // root (the 8-piece scatter/snap, the click pulse, the skull roll, the body dash, the
+    // two-leg run cycle plus its two hard-cut resets, the 7-piece collapse, and the final
+    // fade -- see animateBoneAssembly's own track()/anims comment in content.js). Same
+    // test/helpers/waapi_timings.js collection cheshire_effect.test.js's own equivalent
+    // test uses.
+    async function renderedTimings() {
+      await replay(page, () => (document.querySelector('.oc-beacon-transient') ? true : null));
+      return page.evaluate(collectAnimationTimings);
+    }
+
+    // Tracks the last animationSpeed actually written, so the finally below can skip its
+    // own reset when we're already back at 'normal' -- chrome.storage.sync only fires
+    // onChanged on a genuine value change, so an unconditional reset risks masking a real
+    // assertion failure under a "never echoed" timeout thrown while unwinding
+    // (flappy_effect.test.js's own Beacon Size test, oculist-vqq1, fixed the identical
+    // hazard the same way).
+    let currentSpeed = 'normal';
+
+    try {
+      const base = await renderedTimings();
+      assert.ok(base.length > 0, 'sanity check: expected at least one live WAAPI animation');
+
+      const SPEEDS = [['fast', 0.5], ['slow', 1.75]];
+      for (const [speed, factor] of SPEEDS) {
+        currentSpeed = speed;
+        await setVisionSettings({ animationSpeed: speed });
+        const timings = await renderedTimings();
+        assert.strictEqual(
+          timings.length,
+          base.length,
+          `Animation Speed ${speed}: expected the same ${base.length} animations`
+        );
+        timings.forEach((t, i) => {
+          const expectedDuration = base[i].duration * factor;
+          const expectedDelay = base[i].delay * factor;
+          assert.ok(
+            Math.abs(t.duration - expectedDuration) <= 1,
+            `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base[i].duration}ms x ${factor}), got ${t.duration}ms`
+          );
+          assert.ok(
+            Math.abs(t.delay - expectedDelay) <= 1,
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor}), got ${t.delay}ms`
+          );
+        });
+      }
+    } finally {
+      if (currentSpeed !== 'normal') {
+        await setVisionSettings({ animationSpeed: 'normal' });
+      }
     }
   });
 
