@@ -822,6 +822,7 @@
     effectHorseman: 'Galloping Throw',
     effectTentacleRise: 'Tentacle Rise',
     effectReanimate: 'Reanimation Jolt',
+    effectBatFlight: 'Bat Flight',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -940,7 +941,8 @@
     jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
     horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
     tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
-    reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' }
+    reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
+    batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -5122,6 +5124,491 @@
     // animateTentacleRise's own removeRiseWrap() uses.
     function removeReanimateWrap() { reanimateWrap.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeReanimateWrap);
+  }
+
+  // oculist-nq1x.9: promotes fxBatFlight (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the eighth entry in the Halloween pack. A bat flies in along
+  // an erratic weave, vanishes into a rising mist column, and a cloaked head-and-shoulders
+  // figure fades in beside the match (or, when neither side fits, above it, or -- last
+  // resort -- below it, never over it). Never a whole body: a full human figure is the
+  // tallest thing in this epic, and oculist-1ta.1's own close reason records the same "head
+  // with no body" cut the Cheshire cat took for the same reason.
+  //
+  // RULE 9 EXCEPTION (oculist-i8zu, decided 2026-09-23): the shipped lastMouseX/find-bar/
+  // viewport start-point cascade animateTrail uses is deliberately NOT used here. The bat's
+  // start point stays pinned to the chosen landing side -- on-screen, 4-40px inside that
+  // side's own viewport edge for a left/right landing, or endX with endY +/- 220 for an
+  // above/below landing (effects-playground.html:4134-4137, :4150-4152) -- because the
+  // flight's whole x-range has to stay on the landing side for the WHOLE flight, not just at
+  // arrival (effects-playground.html:3880-3881, :4129-4132): a cursor or find-bar start could
+  // put the launch point on the wrong side of the match, or directly above/below it, and walk
+  // the flight path across the match mid-transit, which rule 10 forbids. Rule 9's other half
+  // -- the mirrored branch must work for real, not just compile -- still applies and is
+  // tested below (the left-fallback test).
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): BAT_* and the
+  // figure's CAPE/SKIN/HAIR/IRIS tones are fixed, like Bone Assembly's ivory or Galloping
+  // Throw's amber -- there is no separate flash/UI-accent element here for
+  // getEffectiveColors().beacon to drive (same reasoning animateHorseman's own header gives
+  // for itself).
+  //
+  // Lite Mode (rule 7): a no-op. There is no filter, no box-shadow and no decorative glow
+  // layer anywhere in this effect to cut -- the cel-shaded tones ARE the character art
+  // (oculist-1ta.10's own redesign; dropping them would reintroduce the "reads as a cut-out"
+  // regression it fixed), the mist column IS the transformation (oculist-1ta.1's own
+  // "payoff, not decoration"), and the wing flap is the one flicker this effect has, which
+  // rule 7 explicitly keeps as "the effect's defining beat". Same reasoning
+  // animateHorseman's/animateBoneAssembly's own header comments give for themselves.
+  // settings.performanceMode is deliberately never read below.
+  //
+  // oculist-1ta.8's mist fade-anchor fix (transform-origin flips to 50% 0% ONLY for the
+  // 'below' landing, so the fade-out's scaleY(1.25) overshoot grows away from the match
+  // instead of tinting it) and oculist-1ta.14's mouth/hair-outline fixes are ported
+  // byte-for-byte, not redrawn.
+  function animateBatFlight(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = rect.left + rect.width / 2, mcy = rect.top + rect.height / 2; // viewport space (rule 2)
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Fixed screen-px clearance margins, unaffected by beaconScale -- same discipline
+    // animateReanimate's own GAP comment describes for itself.
+    var INSET = 40;
+    var GAP = 10;
+
+    var BAT_OUTLINE = '#0a0612';
+    var BAT_BASE = '#3a2b52';
+    var BAT_SHADOW = '#20172f';
+    var BAT_HIGHLIGHT = '#6b5786';
+    var BAT_STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var BAT_VB_W = 120, BAT_VB_H = 70;
+    var BAT_ASPECT = BAT_VB_W / BAT_VB_H;
+    var BAT_W = 90 * beaconScale, BAT_H = BAT_W / BAT_ASPECT;
+    var BODY_CX = 60, BODY_CY = 40, BODY_RX = 12, BODY_RY = 10;
+
+    // Wing membrane outlines -- angular, swept-back silhouette (oculist-1ta.10's own retry,
+    // ported verbatim: a soft symmetric fan read as a bowtie/moth at production size).
+    var WING_OUT_L = 'M 48 34 L 6 20 L 18 30 L 10 38 L 20 42 L 16 48 L 48 46 Z';
+    var WING_OUT_R = 'M 72 34 L 114 20 L 102 30 L 110 38 L 100 42 L 104 48 L 72 46 Z';
+    var WING_TUCKED_L = 'M 48 36 L 38 30 L 40 36 L 34 40 L 40 44 L 48 44 Z';
+    var WING_TUCKED_R = 'M 72 36 L 82 30 L 80 36 L 86 40 L 80 44 L 72 44 Z';
+
+    var EAR_L = '42,32 38,16 50,30', EAR_L_D = 'M 42 32 L 38 16 L 50 30 Z';
+    var EAR_R = '78,32 82,16 70,30', EAR_R_D = 'M 78 32 L 82 16 L 70 30 Z';
+
+    var OUT_PATCH = {
+      lHi: { cx: 21, cy: 30, rx: 8, ry: 7 }, lSh: { cx: 33, cy: 38, rx: 8, ry: 6 },
+      rHi: { cx: 87, cy: 30, rx: 8, ry: 7 }, rSh: { cx: 99, cy: 38, rx: 8, ry: 6 }
+    };
+    var TUCKED_PATCH = {
+      lHi: { cx: 39, cy: 34, rx: 4, ry: 4 }, lSh: { cx: 43, cy: 40, rx: 4, ry: 4 },
+      rHi: { cx: 77, cy: 34, rx: 4, ry: 4 }, rSh: { cx: 81, cy: 40, rx: 4, ry: 4 }
+    };
+
+    // Fixed id prefix, not per-invocation unique -- animate() always cancels and removes the
+    // previous beacon before mounting a new one, so two live copies of this effect's own ids
+    // never coexist (same reasoning the prototype's own uid comment gives).
+    var uid = 'bf_';
+
+    var batDefs = document.createElementNS(NS, 'defs');
+    var bodyClipId = uid + 'body';
+    var bodyClip = document.createElementNS(NS, 'clipPath');
+    bodyClip.setAttribute('id', bodyClipId);
+    var bodyClipShape = document.createElementNS(NS, 'ellipse');
+    bodyClipShape.setAttribute('cx', String(BODY_CX));
+    bodyClipShape.setAttribute('cy', String(BODY_CY));
+    bodyClipShape.setAttribute('rx', String(BODY_RX));
+    bodyClipShape.setAttribute('ry', String(BODY_RY));
+    bodyClip.appendChild(bodyClipShape);
+    batDefs.appendChild(bodyClip);
+
+    // Builds one cel-shaded frame: each wing/ear gets a base tone plus its own highlight AND
+    // shadow patch (three discrete tones), then the body. Every shape carries a BAT_OUTLINE
+    // stroke darker than its fill (rule: a defining outline on every solid form).
+    function buildBatFrame(leftWingD, rightWingD, patch, idSuffix) {
+      var g = document.createElementNS(NS, 'g');
+
+      function shape(tag, attrs, parent) {
+        var el = document.createElementNS(NS, tag);
+        for (var k in attrs) el.setAttribute(k, attrs[k]);
+        (parent || g).appendChild(el);
+        return el;
+      }
+
+      function clipFor(id, d) {
+        var clip = document.createElementNS(NS, 'clipPath');
+        clip.setAttribute('id', id);
+        shape('path', { d: d }, clip);
+        batDefs.appendChild(clip);
+        return id;
+      }
+
+      var leftClipId = clipFor(uid + 'wl' + idSuffix, leftWingD);
+      var rightClipId = clipFor(uid + 'wr' + idSuffix, rightWingD);
+      var earLClipId = clipFor(uid + 'el' + idSuffix, EAR_L_D);
+      var earRClipId = clipFor(uid + 'er' + idSuffix, EAR_R_D);
+
+      shape('path', { d: leftWingD, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('path', { d: rightWingD, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('ellipse', { cx: patch.lHi.cx, cy: patch.lHi.cy, rx: patch.lHi.rx, ry: patch.lHi.ry, fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + leftClipId + ')' });
+      shape('ellipse', { cx: patch.lSh.cx, cy: patch.lSh.cy, rx: patch.lSh.rx, ry: patch.lSh.ry, fill: BAT_SHADOW, 'clip-path': 'url(#' + leftClipId + ')' });
+      shape('ellipse', { cx: patch.rHi.cx, cy: patch.rHi.cy, rx: patch.rHi.rx, ry: patch.rHi.ry, fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + rightClipId + ')' });
+      shape('ellipse', { cx: patch.rSh.cx, cy: patch.rSh.cy, rx: patch.rSh.rx, ry: patch.rSh.ry, fill: BAT_SHADOW, 'clip-path': 'url(#' + rightClipId + ')' });
+
+      shape('polygon', { points: EAR_L, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2', style: BAT_STROKE });
+      shape('polygon', { points: EAR_R, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2', style: BAT_STROKE });
+      shape('ellipse', { cx: '42', cy: '22', rx: '4', ry: '5', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + earLClipId + ')' });
+      shape('ellipse', { cx: '46', cy: '26', rx: '4', ry: '5', fill: BAT_SHADOW, 'clip-path': 'url(#' + earLClipId + ')' });
+      shape('ellipse', { cx: '74', cy: '22', rx: '4', ry: '5', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + earRClipId + ')' });
+      shape('ellipse', { cx: '78', cy: '26', rx: '4', ry: '5', fill: BAT_SHADOW, 'clip-path': 'url(#' + earRClipId + ')' });
+
+      shape('ellipse', { cx: String(BODY_CX), cy: String(BODY_CY), rx: String(BODY_RX), ry: String(BODY_RY), fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('ellipse', { cx: '56', cy: '37', rx: '5', ry: '4', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + bodyClipId + ')' });
+      shape('ellipse', { cx: '64', cy: '43', rx: '6', ry: '4', fill: BAT_SHADOW, 'clip-path': 'url(#' + bodyClipId + ')' });
+
+      shape('circle', { cx: '54', cy: '37', r: '2.2', fill: '#0d0d0f' });
+      shape('circle', { cx: '66', cy: '37', r: '2.2', fill: '#0d0d0f' });
+      shape('circle', { cx: '53.3', cy: '36.3', r: '1.4', fill: '#ffffff' });
+      shape('circle', { cx: '65.3', cy: '36.3', r: '1.4', fill: '#ffffff' });
+
+      return g;
+    }
+
+    var FIG_VB_W = 90, FIG_VB_H = 110;
+    var FIG_ASPECT = FIG_VB_W / FIG_VB_H;
+    var CAPE = '#3b0764', CAPE_OUTLINE = '#150826';
+    var CAPE_HI = '#7c3aed', CAPE_SHADE = '#26043f';
+    var SKIN = '#e9ded2', SKIN_OUTLINE = '#2b1a12';
+    var SKIN_HI = '#fff8ee', SKIN_SHADE = '#a3856a';
+    var HAIR = '#0d0d0f';
+    var IRIS = '#7c3aed'; // ties the eye color to the cape's own highlight tone
+    var NOSE = '#f472b6';
+
+    var figHeight = Math.max(56, Math.min(100, 3.0 * rect.height)) * beaconScale;
+    var figWidth = figHeight * FIG_ASPECT;
+
+    // Landing position: beside the match (right, then left), falling back to above it, then
+    // (last resort) below -- never over it. Every candidate side is tried UNCLAMPED and only
+    // used if its full box (padded by GAP) already fits on screen without touching the match
+    // -- a post-hoc clamp is what oculist-1ta.1 fixed (clamping a beside-position back inside
+    // the viewport could drag it onto the match itself near an edge).
+    var MIST_PAD = 10;
+    var CLEAR_HALF_X = Math.max(figWidth / 2 + MIST_PAD, BAT_W / 2);
+    var CLEAR_HALF_Y = figHeight / 2 + MIST_PAD;
+
+    var sideRight = { x: rect.right + GAP + CLEAR_HALF_X, y: mcy, side: 'right' };
+    sideRight.fits = sideRight.x + CLEAR_HALF_X <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - CLEAR_HALF_X, y: mcy, side: 'left' };
+    sideLeft.fits = sideLeft.x - CLEAR_HALF_X >= 4;
+
+    var vCenterX = Math.max(CLEAR_HALF_X + 4, Math.min(vw - CLEAR_HALF_X - 4, mcx));
+    var above = { x: vCenterX, y: rect.top - GAP - CLEAR_HALF_Y, side: 'above' };
+    above.fits = above.y - CLEAR_HALF_Y >= 4;
+    var below = { x: vCenterX, y: rect.bottom + GAP + CLEAR_HALF_Y, side: 'below' };
+    below.fits = below.y + CLEAR_HALF_Y <= vh - 4;
+
+    var useRight = mcx >= vw / 2;
+    var preferredSide = useRight ? sideRight : sideLeft;
+    var secondarySide = useRight ? sideLeft : sideRight;
+    // above.fits is checked before below.fits: beside-or-above, never over the match; below
+    // is a last resort kept only so a landing position always exists.
+    var landing = preferredSide.fits ? preferredSide
+      : secondarySide.fits ? secondarySide
+      : above.fits ? above
+      : below;
+
+    var endX = landing.x, endY = landing.y; // viewport space
+    var startX, startY, dx, dy; // viewport space
+
+    if (landing.side === 'right' || landing.side === 'left') {
+      // Approach from the same side as the landing side, so the bat's x stays on that side
+      // of the match for the WHOLE flight (linear interpolation of two same-side values
+      // never crosses to the other side) -- not just at the final rest position.
+      var onRight = landing.side === 'right';
+      startX = onRight
+        ? Math.min(vw - 4, Math.max(vw - INSET, rect.right + GAP + BAT_W / 2))
+        : Math.max(4, Math.min(INSET, rect.left - GAP - BAT_W / 2));
+      startY = Math.max(INSET, mcy - 130);
+      dx = endX - startX;
+      if (Math.abs(dx) < 80) {
+        // Degenerate case: the chosen edge is too close to read as a flight. Push the
+        // launch point further out on the same side (away from the match, which only ever
+        // increases clearance).
+        startX = onRight ? Math.min(vw - 4, endX + 140) : Math.max(4, endX - 140);
+        dx = endX - startX;
+      }
+      dy = endY - startY;
+    } else {
+      // Above/below fallback: approach vertically, converging on endX so the weave (applied
+      // to y below) can't walk the bat sideways into the match while it is still well clear
+      // vertically.
+      startX = endX;
+      var onAbove = landing.side === 'above';
+      startY = onAbove ? Math.max(4, endY - 220) : Math.min(vh - 4, endY + 220);
+      dy = endY - startY;
+      if (Math.abs(dy) < 80) {
+        startY = onAbove ? Math.max(4, endY - 140) : Math.min(vh - 4, endY + 140);
+        dy = endY - startY;
+      }
+      dx = endX - startX;
+    }
+
+    // Erratic, non-parabolic approach: two summed sine weaves, damped toward 0 near arrival
+    // so the landing point itself is exact and the path never overshoots back across the
+    // match's edge. Hand-authored constants (rule 11: no Math.random anywhere).
+    var FLY_DUR = 900;
+    var STEPS = 40;
+    var WEAVE_AMP = 22, WEAVE_CYCLES = 3.5, WEAVE_PHASE = 0.6;
+    var JITTER_AMP = 8, JITTER_CYCLES = 9, JITTER_PHASE = 1.3;
+
+    // Document coordinates (rule 2): SCROLL_X/SCROLL_Y are added exactly once, at the point
+    // each viewport-space value is actually written into this path string or a left/top --
+    // animateHorseman's own offset-path precedent.
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var pathPts = [];
+    for (var i = 0; i <= STEPS; i++) {
+      var frac = i / STEPS;
+      var damp = 1 - frac * 0.85;
+      var weave = WEAVE_AMP * Math.sin(frac * WEAVE_CYCLES * 2 * Math.PI + WEAVE_PHASE) * damp;
+      var jitter = JITTER_AMP * Math.sin(frac * JITTER_CYCLES * 2 * Math.PI + JITTER_PHASE) * damp;
+      var px = startX + dx * frac; // viewport space
+      var py = startY + dy * frac + weave + jitter; // viewport space
+      pathPts.push([px + SCROLL_X, py + SCROLL_Y]); // document space
+    }
+    pathPts[STEPS] = [endX + SCROLL_X, endY + SCROLL_Y]; // exact landing, immune to float rounding
+
+    var pathStr = 'M ' + pathPts.map(function (p) { return p[0] + ' ' + p[1]; }).join(' L ');
+
+    // ── Bat ──────────────────────────────────────────────────────────────────────────
+    var batAnims = [];
+    function trackBat(a) { batAnims.push(a); return a; }
+
+    var batEl = document.createElement('div');
+    batEl.className = 'oc-beacon oc-beacon-transient';
+    batEl.setAttribute('data-batflight', 'bat');
+    batEl.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + BAT_W + 'px', 'height:' + BAT_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
+      'opacity:1'
+    ].join(';');
+    document.documentElement.appendChild(batEl);
+
+    var batSvg = document.createElementNS(NS, 'svg');
+    batSvg.setAttribute('width', String(BAT_W));
+    batSvg.setAttribute('height', String(BAT_H));
+    batSvg.setAttribute('viewBox', '0 0 ' + BAT_VB_W + ' ' + BAT_VB_H);
+    batSvg.style.cssText = 'display:block;overflow:visible;';
+    batSvg.appendChild(batDefs);
+    batEl.appendChild(batSvg);
+
+    var frameOutG = buildBatFrame(WING_OUT_L, WING_OUT_R, OUT_PATCH, 'Out');
+    frameOutG.setAttribute('data-bf-part', 'wing-out');
+    var frameTuckedG = buildBatFrame(WING_TUCKED_L, WING_TUCKED_R, TUCKED_PATCH, 'Tucked');
+    frameTuckedG.setAttribute('data-bf-part', 'wing-tucked');
+    batSvg.appendChild(frameOutG);
+    batSvg.appendChild(frameTuckedG);
+
+    // Discrete swap, not a squash: each frame is fully opaque for its half of the period and
+    // fully transparent for the other -- a flip-book, not an interpolation (a sub-part squash
+    // rendered invisibly on animateFlappy's first wing pass). Hung on frameOutG/frameTuckedG
+    // (child nodes of batSvg) but tracked into batEl's own __waapiAnims below (rule 4).
+    var FLAP_PERIOD = 130;
+    var FLAP_ITER = Math.ceil(FLY_DUR / FLAP_PERIOD);
+    trackBat(frameOutG.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 1, offset: 0.49 },
+      { opacity: 0, offset: 0.5 },
+      { opacity: 0, offset: 1 }
+    ], { duration: FLAP_PERIOD * durFactor, iterations: FLAP_ITER, fill: 'forwards' }));
+    trackBat(frameTuckedG.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 0, offset: 0.49 },
+      { opacity: 1, offset: 0.5 },
+      { opacity: 1, offset: 1 }
+    ], { duration: FLAP_PERIOD * durFactor, iterations: FLAP_ITER, fill: 'forwards' }));
+
+    trackBat(batEl.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: FLY_DUR * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // ── Mist column ──────────────────────────────────────────────────────────────────
+    // Every raw ms constant below stays UNSCALED, used only for offset RATIOS (rule 6:
+    // durations/delays are the only thing multiplied by durFactor, at the .animate() call
+    // itself) -- animateHorseman's own timeline-comment precedent.
+    var MIST_DELAY = FLY_DUR - 180;
+    var MIST_GROW_DUR = 260;
+    var MIST_HOLD = 150;
+    var MIST_FADE_DUR = 320;
+    var MIST_TOTAL_DUR = MIST_GROW_DUR + MIST_HOLD + MIST_FADE_DUR; // 730
+
+    // oculist-1ta.8: for the 'below' landing only, the fade-out's overshoot anchor flips to
+    // the box's TOP edge so scaleY(1.25)'s extra 0.25*mistH grows downward, away from the
+    // match, instead of upward into it. Every other landing keeps the base 50% 100% anchor
+    // through both the grow-in and the fade-out, byte-identical to before this special case.
+    var mistFadeOrigin = landing.side === 'below' ? '50% 0%' : '50% 100%';
+
+    var mistW = figWidth + MIST_PAD * 2, mistH = figHeight + MIST_PAD * 2;
+    var mistEl = document.createElement('div');
+    mistEl.className = 'oc-beacon oc-beacon-transient';
+    mistEl.setAttribute('data-batflight', 'mist');
+    mistEl.style.cssText = [
+      'position:absolute',
+      'left:' + (endX - mistW / 2 + SCROLL_X) + 'px', 'top:' + (endY - mistH / 2 + SCROLL_Y) + 'px',
+      'width:' + mistW + 'px', 'height:' + mistH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'background:' +
+        'radial-gradient(ellipse 60% 38% at 50% 18%, rgba(148,144,168,0.85), rgba(148,144,168,0) 70%),' +
+        'radial-gradient(ellipse 70% 42% at 50% 50%, rgba(120,114,150,0.8), rgba(120,114,150,0) 70%),' +
+        'radial-gradient(ellipse 64% 40% at 50% 82%, rgba(96,90,128,0.75), rgba(96,90,128,0) 70%)',
+      'transform-origin:50% 100%',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(mistEl);
+
+    // Grow-in and fade-out are ONE .animate() call (not two stacked on the same properties)
+    // -- oculist-7x3j's own compositing fix, ported as-is: two separate calls keyframing the
+    // same properties on one element block compositing.
+    var mistAnims = [];
+    mistAnims.push(mistEl.animate([
+      { offset: 0, opacity: 0, transform: 'scaleY(0.35)', transformOrigin: '50% 100%', easing: 'ease-out' },
+      { offset: MIST_GROW_DUR / MIST_TOTAL_DUR, opacity: 0.9, transform: 'scaleY(1)', transformOrigin: '50% 100%', easing: 'linear' },
+      { offset: (MIST_GROW_DUR + MIST_HOLD) / MIST_TOTAL_DUR, opacity: 0.9, transform: 'scaleY(1)', transformOrigin: mistFadeOrigin, easing: 'ease-in' },
+      { offset: 1, opacity: 0, transform: 'scaleY(1.25)', transformOrigin: mistFadeOrigin }
+    ], { duration: MIST_TOTAL_DUR * durFactor, delay: MIST_DELAY * durFactor, fill: 'forwards' }));
+
+    // Bat vanishes into the rising mist rather than cross-fading straight into the figure --
+    // a direct cross-fade of two sprites this small reads as a smudge, not a transformation.
+    var BAT_FADE_DELAY = MIST_DELAY + 40;
+    var BAT_FADE_DUR = 220;
+    trackBat(batEl.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: BAT_FADE_DUR * durFactor, delay: BAT_FADE_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    batEl.__waapiAnims = batAnims;
+    function removeBatEl() { batEl.remove(); }
+    Promise.allSettled(batAnims.map(function (a) { return a.finished; })).then(removeBatEl);
+
+    mistEl.__waapiAnims = mistAnims;
+    function removeMistEl() { mistEl.remove(); }
+    Promise.allSettled(mistAnims.map(function (a) { return a.finished; })).then(removeMistEl);
+
+    // ── Figure ───────────────────────────────────────────────────────────────────────
+    var figWrap = document.createElement('div');
+    figWrap.className = 'oc-beacon oc-beacon-transient';
+    figWrap.setAttribute('data-batflight', 'figure');
+    figWrap.setAttribute('data-bf-side', landing.side);
+    figWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (endX - figWidth / 2 + SCROLL_X) + 'px', 'top:' + (endY - figHeight / 2 + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(figWrap);
+
+    var figSvg = document.createElementNS(NS, 'svg');
+    figSvg.setAttribute('width', String(figWidth));
+    figSvg.setAttribute('height', String(figHeight));
+    figSvg.setAttribute('viewBox', '0 0 ' + FIG_VB_W + ' ' + FIG_VB_H);
+    figSvg.style.cssText = 'display:block;overflow:visible;';
+    figWrap.appendChild(figSvg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var figDefs = document.createElementNS(NS, 'defs');
+    figSvg.appendChild(figDefs);
+    function figClip(id, d) {
+      var clip = document.createElementNS(NS, 'clipPath');
+      clip.setAttribute('id', id);
+      addShape('path', { d: d }, clip);
+      figDefs.appendChild(clip);
+      return id;
+    }
+
+    // Collar -- apex y=26, well below the head's top (y=12), and offset in x outside the
+    // head's own span, so it reads as a popped collar beside the neck, not a spike above the
+    // skull (oculist-1ta.1's own "horned imp" defect).
+    var collarLD = 'M 10 64 L 16 26 L 28 56 Z';
+    var collarRD = 'M 80 64 L 74 26 L 62 56 Z';
+    var collarLClip = figClip(uid + 'collarL', collarLD);
+    var collarRClip = figClip(uid + 'collarR', collarRD);
+    addShape('polygon', { points: '10,64 16,26 28,56', fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    addShape('polygon', { points: '80,64 74,26 62,56', fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    addShape('ellipse', { cx: '16', cy: '39', rx: '5', ry: '9', fill: CAPE_HI, 'clip-path': 'url(#' + collarLClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '22', cy: '51', rx: '5', ry: '9', fill: CAPE_SHADE, 'clip-path': 'url(#' + collarLClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '68', cy: '39', rx: '5', ry: '9', fill: CAPE_HI, 'clip-path': 'url(#' + collarRClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '74', cy: '51', rx: '5', ry: '9', fill: CAPE_SHADE, 'clip-path': 'url(#' + collarRClip + ')' }, figSvg);
+    var capeBodyD = 'M 14 108 C 16 78 22 60 30 56 L 60 56 C 68 60 74 78 76 108 Z';
+    addShape('path', { d: capeBodyD, fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    var capeClip = figClip(uid + 'cape', capeBodyD);
+    addShape('path', {
+      d: 'M 14 108 C 16 78 22 60 30 56 L 40 58 C 32 64 28 80 26 106 Z',
+      fill: CAPE_HI, 'clip-path': 'url(#' + capeClip + ')'
+    }, figSvg);
+    addShape('path', {
+      d: 'M 60 56 C 68 60 74 78 76 108 L 64 106 C 66 80 62 62 50 58 Z',
+      fill: CAPE_SHADE, 'clip-path': 'url(#' + capeClip + ')'
+    }, figSvg);
+    // Head -- drawn after the collar/cape so it paints on top, at the viewBox's top edge.
+    var headD = 'M 45 33 m -18 0 a 18 21 0 1 0 36 0 a 18 21 0 1 0 -36 0';
+    addShape('ellipse', { cx: '45', cy: '33', rx: '18', ry: '21', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '2.5' }, figSvg);
+    var headClip = figClip(uid + 'head', headD);
+    addShape('ellipse', { cx: '27', cy: '28', rx: '11', ry: '16', fill: SKIN_HI, 'clip-path': 'url(#' + headClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '61', cy: '40', rx: '11', ry: '17', fill: SKIN_SHADE, 'clip-path': 'url(#' + headClip + ')' }, figSvg);
+    // oculist-1ta.14: the hair outline was dropped rather than lightened, since HAIR is
+    // already near-black and there is no darker shade left to draw a real outline in -- the
+    // fill alone already reads as a distinct dark shape against both the page and SKIN.
+    addShape('path', {
+      d: 'M 27 24 Q 45 8 63 24 Q 63 16 45 12 Q 27 16 27 24 Z',
+      fill: HAIR
+    }, figSvg);
+    addShape('ellipse', { cx: '37', cy: '34', rx: '3.6', ry: '4.4', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, figSvg);
+    addShape('ellipse', { cx: '53', cy: '34', rx: '3.6', ry: '4.4', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, figSvg);
+    addShape('circle', { cx: '37', cy: '35.2', r: '1.8', fill: IRIS }, figSvg);
+    addShape('circle', { cx: '53', cy: '35.2', r: '1.8', fill: IRIS }, figSvg);
+    addShape('polygon', { points: '43,44 47,44 45,48', fill: NOSE }, figSvg);
+    // oculist-1ta.14: the mouth moved up 3 units, clear of the head outline's own stroke
+    // band, so it reads as a distinct feature instead of fusing into the chin line.
+    addShape('path', { d: 'M 39 48 Q 45 51 51 48', fill: 'none', stroke: HAIR, 'stroke-width': '1.6', style: 'stroke-linecap:round;' }, figSvg);
+
+    // Fade-in and final fade-out are ONE .animate() call, same compositing reasoning as the
+    // mist column above (oculist-mu91's own precedent for a figure fade-in/out pair).
+    var FIGURE_FADE_DELAY = MIST_DELAY + MIST_GROW_DUR - 60;
+    var FIGURE_FADE_DUR = 260;
+    var FIGURE_HOLD_AFTER = 600;
+    var FIGURE_FINAL_FADE_DELAY = FIGURE_FADE_DELAY + FIGURE_FADE_DUR + FIGURE_HOLD_AFTER;
+    var FIGURE_FINAL_FADE_DUR = 300;
+    var FIGURE_TOTAL_DUR = FIGURE_FINAL_FADE_DELAY + FIGURE_FINAL_FADE_DUR - FIGURE_FADE_DELAY;
+
+    var figAnim = figWrap.animate([
+      { offset: 0, opacity: 0, transform: 'scale(0.85)', easing: 'ease-out' },
+      { offset: FIGURE_FADE_DUR / FIGURE_TOTAL_DUR, opacity: 1, transform: 'scale(1)', easing: 'linear' },
+      { offset: (FIGURE_FADE_DUR + FIGURE_HOLD_AFTER) / FIGURE_TOTAL_DUR, opacity: 1, transform: 'scale(1)', easing: 'ease-in' },
+      { offset: 1, opacity: 0, transform: 'scale(1)' }
+    ], { duration: FIGURE_TOTAL_DUR * durFactor, delay: FIGURE_FADE_DELAY * durFactor, fill: 'forwards' });
+
+    figWrap.__waapiAnims = [figAnim];
+    function removeFigWrap() { figWrap.remove(); }
+    figAnim.finished.then(removeFigWrap).catch(removeFigWrap);
   }
 
   function animateLightning(rect) {
