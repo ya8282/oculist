@@ -46,6 +46,7 @@ const LONG_MATCHING_TERM = FILLER.repeat(2).slice(0, 108);
 
 const INPUT = '#oc-wrap >> .oc-input';
 const CHIP_TERM = '#oc-wrap >> .oc-chip-term';
+const CHIP_COUNT = '#oc-wrap >> .oc-chip-count';
 const CHIP_REMOVE = '#oc-wrap >> .oc-chip-remove';
 const NOTICE = '#oc-wrap >> .oc-notice';
 const NOTICE_TEXT = '#oc-wrap >> .oc-notice-text';
@@ -286,6 +287,14 @@ describe('Chip row and working-list state', () => {
 
   function chipTerms() {
     return page.locator(CHIP_TERM).allTextContents();
+  }
+
+  // Parallel to chipTerms() — the visible per-chip count span, in the same DOM order, so a
+  // termRanges[i]/workListTerms[i] misalignment (a count landing on the wrong chip) shows
+  // up directly instead of being masked by only checking the active chip or the CSS
+  // highlight registry.
+  function chipCounts() {
+    return page.locator(CHIP_COUNT).allTextContents();
   }
 
   function activeChipTerm() {
@@ -994,6 +1003,214 @@ describe('Chip row and working-list state', () => {
       await activeChipTerm(),
       'quarklet',
       'the chip active in memory when the restore landed must stay active, even under the cap'
+    );
+  });
+
+  // Reviewer follow-up (oculist-fqti, cap dedup): a full 10-term restored list that
+  // happens to share ONE term's exact text with a term the user separately typed this
+  // mount must never drop that term. addChipTerm()'s own dedupe means the user's own 't9'
+  // Enter activates the not-yet-restored idea of "t9" rather than pushing a duplicate, so
+  // it never lands in addedSinceMount — the pre-fix restored-side slice(0, keepRestored)
+  // cut it anyway because it sat at the very end of the restored order.
+  test('a late restore of a full 10-term list keeps a user term that duplicates a restored one (oculist-fqti)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    const restored = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'];
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: " + JSON.stringify(restored) + ", activeIndex: 2 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    // The user types 't9' (duplicating a term still only on disk, unseen this mount) then
+    // 'quarklet', before the delayed restore lands.
+    await addTerm('t9');
+    await addTerm('quarklet');
+    assert.deepStrictEqual(await chipTerms(), ['t9', 'quarklet']);
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    const terms = await chipTerms();
+    assert.strictEqual(terms.length, 10, 'the merged list must still respect the 10-term cap');
+    assert.ok(terms.includes('t9'), 't9, which the user also typed this mount, must survive the cap trim');
+    assert.ok(terms.includes('quarklet'), 'quarklet, added after t9, must survive too');
+  });
+
+  // Reviewer follow-up (oculist-fqti, active match): a next-match press on the active chip
+  // before a delayed restore lands must not appear to roll back to "0 of N" once the merge's
+  // performListSearch() rescan runs — the same position-preserving contract
+  // rescanAfterMutation() already gives a background DOM rescan.
+  test('a late restore preserves the next-match position the user already advanced to (oculist-fqti)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['gamma'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    // zenithquokka has 3 matches — enough room to move past match 1 before the restore
+    // lands.
+    await addTerm('zenithquokka');
+    let count = await page.locator(COUNT).textContent();
+    assert.match(count, /^1 of 3$/, `expected "1 of 3" right after commit, got "${count}"`);
+
+    await page.locator(NEXT_BTN).click();
+    count = await page.locator(COUNT).textContent();
+    assert.match(count, /^2 of 3$/, `expected "2 of 3" after next-match, got "${count}"`);
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    count = await page.locator(COUNT).textContent();
+    assert.match(
+      count,
+      /^2 of 3$/,
+      `the late restore's rescan must not roll the counter back to "0 of 3", got "${count}"`
+    );
+  });
+
+  // Reviewer follow-up (oculist-fqti, draft highlight): if the user has moved on to typing
+  // a fresh draft term when a delayed restore lands, the merge's list rescan must not steal
+  // the draft's own highlight/count — that belongs to whatever the user is looking at right
+  // now, not to the chip that was active before they started typing.
+  test('a late restore does not replace an in-progress draft\'s highlight (oculist-fqti)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['gamma'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    await addTerm('quarklet');
+    assert.deepStrictEqual(await chipTerms(), ['quarklet']);
+    assert.strictEqual(await highlightCount('oculist-match'), 1, 'sanity check: quarklet has 1 real match');
+
+    // Type a fresh, uncommitted draft — a different term with a distinctly different
+    // match count — and wait for its own debounced search to actually land.
+    const firesBefore = await armDebounceFireCounter();
+    await page.locator(INPUT).fill('zenithquokka');
+    await waitForContentScriptValue(evalInContentScript, 'window.__ocDebounceFires', (v) => v > firesBefore, {
+      timeout: POLL_TIMEOUT,
+      message: 'the draft debounce for zenithquokka never fired',
+    });
+    assert.strictEqual(await highlightCount('oculist-match'), 3, 'sanity check: the draft now owns oculist-match with zenithquokka\'s 3 matches');
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.strictEqual(
+      await highlightCount('oculist-match'),
+      3,
+      'the late restore\'s list rescan must not replace the draft\'s highlight with the (inactive-to-the-user) quarklet chip\'s'
+    );
+    const count = await page.locator(COUNT).textContent();
+    assert.match(
+      count,
+      /of 3$/,
+      `the count must keep reflecting the draft zenithquokka's 3 matches, not quarklet's, got "${count}"`
+    );
+
+    // The merge's data still lands underneath the draft, even though the scan is deferred:
+    // the chip row now shows both terms, restored first.
+    assert.deepStrictEqual(
+      await chipTerms(),
+      ['gamma', 'quarklet'],
+      'the merged terms must still be applied and rendered, even while the scan itself is deferred'
+    );
+    // Every chip's own count must land on the right chip: gamma (restored, never
+    // scanned) blank, quarklet (scanned before the merge) still its real 1 — not shifted
+    // onto the wrong term by the merge's re-indexing (oculist-fqti finding A).
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['', '1'],
+      'gamma must stay unscanned (blank) and quarklet must keep its own real count, not a misaligned one'
+    );
+
+    // Clearing the draft hands ownership back to the active chip (quarklet) via
+    // restoreActiveChip(), which reads straight from termRanges[activeTermIndex] — this
+    // is where a misaligned/stale remap would surface as a blank or wrong count.
+    await emptyInputByBackspace();
+
+    assert.strictEqual(
+      await highlightCount('oculist-match'),
+      1,
+      'once the draft clears, oculist-match must hold quarklet\'s own real 1 match, not a blank/misaligned slot'
+    );
+    const countAfterClear = await page.locator(COUNT).textContent();
+    assert.match(
+      countAfterClear,
+      /^0 of 1$/,
+      `expected quarklet's real "0 of 1" once the draft clears, got "${countAfterClear}"`
+    );
+    assert.strictEqual(await activeChipTerm(), 'quarklet');
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['', '1'],
+      'the active chip\'s (quarklet) own count must still read correctly after the draft clears'
+    );
+  });
+
+  // Reviewer follow-up (oculist-fqti, finding B): leftover draft text in the input after
+  // clicking a DIFFERENT chip owns nothing (oculist-l6m.19) — the click's own
+  // performListSearch() already handed the highlight back to the list. A raw
+  // input.value-vs-active-chip string compare misreads that leftover text as a draft and
+  // wrongly defers the merge's rescan, leaving every chip's count shifted onto the wrong
+  // term once restored terms are spliced in ahead of them.
+  test('a late restore still rescans when the input merely has leftover text from a chip click (oculist-fqti)', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+
+    await evalInContentScript(
+      "new Promise((resolve) => chrome.storage.session.set(" +
+        "{ 'oc-worklist': { terms: ['gamma'], activeIndex: 0 } }, resolve))"
+    );
+
+    await installDelayOnNextGet(evalInContentScript, LATE_LOAD_DELAY_MS);
+
+    await openFinder();
+    await waitForChipCount(0);
+
+    await addTerm('quarklet');
+    await addTerm('zenithquokka');
+    assert.deepStrictEqual(await chipTerms(), ['quarklet', 'zenithquokka']);
+
+    // Click back to the quarklet chip — a real, synchronous performListSearch() —
+    // leaving 'zenithquokka' sitting untouched in the input.
+    await page.locator(CHIP_TERM).filter({ hasText: 'quarklet' }).click();
+    await page.waitForFunction(() => {
+      const root = document.getElementById('oc-wrap').shadowRoot;
+      const active = root.querySelector('.oc-chip-term.active');
+      return !!active && active.textContent === 'quarklet';
+    }, null, { timeout: POLL_TIMEOUT });
+    assert.strictEqual(await page.locator(INPUT).inputValue(), 'zenithquokka', 'the click must never touch the input');
+
+    await new Promise((resolve) => setTimeout(resolve, LATE_LOAD_DELAY_MS + LATE_LOAD_SETTLE_MARGIN));
+
+    assert.deepStrictEqual(await chipTerms(), ['gamma', 'quarklet', 'zenithquokka']);
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['0', '1', '3'],
+      'leftover input text must not defer the rescan — every chip (including the newly restored gamma) must show its own real, freshly-scanned count, not one shifted onto the wrong term'
+    );
+    assert.strictEqual(
+      await highlightCount('oculist-match'),
+      1,
+      'the active chip (quarklet) must keep its own real 1-match highlight, not a stale or shifted one'
     );
   });
 });
