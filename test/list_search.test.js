@@ -18,6 +18,7 @@ const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName } = require('./helpers/accessible_name');
+const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const CLOSED = () => !document.getElementById('oc-wrap');
@@ -93,6 +94,10 @@ describe('performListSearch() and per-term chip counts', () => {
     });
     await openFinderRetry();
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    // beforeEach() below makes its own raw chrome.storage.session.remove() call, with no
+    // retry of its own — wait out the setAccessLevel() startup race first (oculist-434k /
+    // oculist-ilkz; see helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
     await page.keyboard.press('Escape');
     await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
   });
@@ -531,6 +536,11 @@ describe('performListSearch() total match cap across all terms (oculist-l6m.7)',
       timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
+    // beforeEach() below (and the unscanned-vs-starved test's own seed) makes raw
+    // chrome.storage.session calls with no retry of their own — wait out the
+    // setAccessLevel() startup race first (oculist-434k / oculist-ilkz; see
+    // helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
   });
 
   after(async () => {
