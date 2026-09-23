@@ -25,6 +25,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -127,6 +128,10 @@ describe('findNext() respects list ownership instead of re-deriving the term fro
     await page.keyboard.press('Control+f');
     await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    // beforeEach() below makes its own raw chrome.storage.session.remove() call, with no
+    // retry of its own — wait out the setAccessLevel() startup race first (oculist-434k /
+    // oculist-ilkz; see helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
   });

@@ -27,6 +27,7 @@ const { chromium } = require('playwright');
 const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName, waitForComputedAccessibleName } = require('./helpers/accessible_name');
+const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -109,6 +110,10 @@ describe('Chip term accessible name includes the hit count', () => {
     await page.keyboard.press('Control+f');
     await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
     assert.ok(isolatedContextId, 'never observed the content script isolated execution context');
+    // beforeEach() below makes its own raw chrome.storage.session.remove() call, with no
+    // retry of its own — wait out the setAccessLevel() startup race first (oculist-434k /
+    // oculist-ilkz; see helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
     await page.keyboard.press('Escape');
     await waitForOverlayClosed();
   });
@@ -290,6 +295,10 @@ describe('A Lite Mode chip announces the real countMatchesOnly() count, not a bl
       if (Date.now() > deadline) throw new Error('never observed the content script isolated execution context');
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    // beforeEach() below makes its own raw chrome.storage.session.remove() call, with no
+    // retry of its own — wait out the setAccessLevel() startup race first (oculist-434k /
+    // oculist-ilkz; see helpers/session_access.js for the full account).
+    await waitForSessionAccess(client, isolatedContextId);
   });
 
   after(async () => {
