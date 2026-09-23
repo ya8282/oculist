@@ -301,33 +301,191 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     }
   });
 
-  test('Beacon Size L and XL: the bird\'s landed bottom edge keeps the same 3px overlap as the default size', async () => {
-    // getBeaconScale() (content.js): 'l' -> 1.5, 'xl' -> 2.25. The Beacon Size transform
-    // scales the sprite around its own wrapper's centre, the same point offset-anchor:50%
-    // 50% tracks along the flight path -- so the sprite's visible bottom edge sits at
-    // pathEndY + spriteHeight*scale/2, not pathEndY + spriteHeight/2. Asserted directly
-    // against the fired path's own end point rather than by waiting out the whole flight:
-    // the landing point is fixed at fire time, it does not move over the animation's own
-    // duration.
-    const SIZES = [['l', 1.5], ['xl', 2.25]];
+  test('Beacon Size L and XL: the rendered sprite scales, the landed overlap stays proportional (not just the pinned +3px formula), and the painted intrusion stays near the M figure (oculist-rnqe)', async () => {
+    // The old version of this test recomputed the landed bottom edge from the fired
+    // path's own end point plus its OWN copy of getBeaconScale()'s 1.5/2.25 multiplier
+    // -- since content.js's own endY formula is built the same way (subtract
+    // SPRITE_H*beaconScale/2), the two arithmetically cancel out and reconstruct the
+    // "correct" answer even when the wrap2 CSS `scale(...)` transform never actually
+    // renders (i.e. disabling the Beacon Size TRANSFORM, as opposed to getBeaconScale()
+    // itself, leaves it green). This version reads the real rendered box instead:
+    // bird.firstElementChild (wrap2 in content.js) is the element the Beacon Size scale
+    // transform is actually applied to, so its own getBoundingClientRect() reflects
+    // whatever getBeaconScale() really painted.
+    //
+    // CONTACT_T: getBeaconDuration(900) at the default animationSpeed:'normal' this
+    // suite never changes -- the exact instant travelAnim's offsetDistance keyframes
+    // reach 100% (fill:'forwards' holds the bird there), i.e. the moment it actually
+    // lands. Every WAAPI animation on the bird (travel, wing, fade) is paused and
+    // seeked to this instant so the read is deterministic -- the same
+    // pause()/currentTime idiom horseman_effect.test.js's own oculist-4afn test and
+    // cheshire_effect.test.js use for frame-exact geometry.
+    const CONTACT_T = 900;
+
+    async function landedGeom() {
+      await replay(() => (document.querySelector('.oc-flappy-bird') ? true : null));
+      return page.evaluate((t) => {
+        const bird = document.querySelector('.oc-flappy-bird');
+        bird.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = t; });
+        const wrap = bird.firstElementChild;
+        const wrapRect = wrap.getBoundingClientRect();
+        const targetRect = document.getElementById('target').getBoundingClientRect();
+        return { wrapBottom: wrapRect.bottom, wrapHeight: wrapRect.height, targetTop: targetRect.top };
+      }, CONTACT_T);
+    }
+
+    // Screenshots the match's own rect with no beacon at all (baseline) vs at the
+    // landed frame, and counts pixels that actually changed -- the real "how much of
+    // the match got painted over" metric a bounding-box comparison can't see, since
+    // the bird is a pixel-art sprite, not a solid rectangle. Same in-repo PNG-decode
+    // idiom as horseman_effect.test.js's own oculist-4afn test, via a throwaway decode
+    // page so the extension's own overlay never interferes with the decode.
+    async function paintedIntrusionPx(decodePage) {
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+      const r = await page.evaluate(() => {
+        const b = document.getElementById('target').getBoundingClientRect();
+        return { x: b.x, y: b.y, width: b.width, height: b.height };
+      });
+      const clip = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+      const decode = (buf) => decodePage.evaluate(async (b64) => {
+        const img = new Image();
+        img.src = 'data:image/png;base64,' + b64;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        const g = c.getContext('2d');
+        g.drawImage(img, 0, 0);
+        return Array.from(g.getImageData(0, 0, c.width, c.height).data);
+      }, buf.toString('base64'));
+
+      const base = await decode(await page.screenshot({ clip }));
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('.oc-flappy-bird'), null, { timeout: POLL_TIMEOUT });
+      await page.evaluate((t) => {
+        document.querySelectorAll('.oc-beacon-transient').forEach((el) => {
+          el.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = t; });
+        });
+      }, CONTACT_T);
+      const shot = await decode(await page.screenshot({ clip }));
+
+      let painted = 0;
+      for (let i = 0; i < base.length; i += 4) {
+        const d = Math.max(Math.abs(base[i] - shot[i]), Math.abs(base[i + 1] - shot[i + 1]), Math.abs(base[i + 2] - shot[i + 2]));
+        if (d > 0) painted++;
+      }
+      return painted;
+    }
+
+    // #target sits behind a 4000px spacer (this fixture's own note above) -- bring it
+    // into the physical viewport, same idiom as the document-space correctness test,
+    // since a screenshot clip against an off-screen rect fails outright and the box
+    // read above would otherwise be comparing a match that's nowhere near the bird.
+    const targetDocY = await page.evaluate(() => {
+      const r = document.getElementById('target').getBoundingClientRect();
+      return r.top + window.scrollY + r.height / 2;
+    });
+    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+
+    // Measured 2026-09-23 (headless Chromium, this fixture, CONTACT_T=900) in both
+    // directions -- normal (mouse at 200,120, left of match) and mirrored (mouse at
+    // 1100,300, right of match):
+    //
+    //   size×mirrored -> wrapBottom  wrapHeight  targetTop  overlapPx  paintedPx
+    //   m  normal      671.45..728.55  57.11      721.00     7.55       56
+    //   m  mirrored     672.76..727.24 54.49      721.00     6.24       59
+    //   l  normal       645.14..730.86 85.71      721.00     9.86       67
+    //   l  mirrored     647.11..728.89 81.77      721.00     7.89       76
+    //   xl normal       605.66..734.34 128.69     721.00    13.34       83
+    //   xl mirrored     608.63..731.37 122.74     721.00    10.37      106
+    //
+    // wrapHeight scaled almost exactly with getBeaconScale() (1, 1.5, 2.25): l/m =
+    // 1.501/1.501, xl/m = 2.254/2.253 in the two directions -- that ratio is what a
+    // disabled Beacon Size TRANSFORM (the wrap2 `scale(...)` never applied, the exact
+    // gap the old test had) breaks outright, since wrapHeight would then stay flat
+    // across all three sizes.
+    //
+    // (overlapPx - 3) / wrapHeight -- 3 being the fixed overlap content.js's own endY
+    // formula pins -- came out effectively constant per direction regardless of size
+    // (normal: 0.0797/0.0800/0.0803; mirrored: 0.0595/0.0598/0.0600, all within 1% of
+    // each other): the remaining, size-scaling part of the overlap is sprite tilt from
+    // the flight physics (offset-rotate:auto tracking a near-, not exactly, level
+    // tangent at landing -- content.js's own comment on the ease-out correction term),
+    // not a formula bug. So the ratio itself is what's size-invariant, and is asserted
+    // against Beacon Size m's own ratio (computed at runtime, not hardcoded) with a
+    // generous relative tolerance for run-to-run integration noise -- still tight
+    // enough to catch the landing-offset regression this bead's own neighbouring
+    // comment describes fixing (an unscaled half-height once put the bottom edge at
+    // y=374/392 instead of 362 on a 359-377 match at L/XL, many times this ratio).
+    //
+    // Painted intrusion grew with size but stayed under 2x the M figure in both
+    // directions (1.48x normal, 1.80x mirrored) -- the same <=2x factor
+    // horseman_effect.test.js's own oculist-4afn test uses for the same reason: a
+    // bigger sprite's rounded silhouette is wider at the same landing depth, so some
+    // growth is expected, but it must not balloon with beaconScale the way an unpinned
+    // depth would.
+    const SCALE_TOLERANCE = 0.1; // wrapHeight/m's own wrapHeight vs the nominal 1.5/2.25 multiplier
+    const RATIO_TOLERANCE = 0.5; // L/XL's own overlap ratio vs m's own ratio
+    const PAINT_TOLERANCE = 2; // painted intrusion vs the m figure
+
+    let decodePage;
     try {
-      for (const [size, scale] of SIZES) {
-        await setVisionSettings({ beaconSize: size });
-        const geom = await replay(flappyBirdSnapshot);
-        assert.ok(geom, `expected a mounted .oc-flappy-bird at Beacon Size ${size}`);
+      decodePage = await ctx.newPage();
 
-        const parsed = parseFlightPath(geom.offsetPath);
-        const landedBottom = parsed.end[1] + (geom.spriteHeight * scale) / 2;
-        const expectedBottom = geom.targetTop + geom.scrollY + 3;
+      for (const mousePos of [{ x: 200, y: 120, mode: 'normal' }, { x: 1100, y: 300, mode: 'mirrored' }]) {
+        await page.mouse.move(mousePos.x, mousePos.y);
 
+        await setVisionSettings({ beaconSize: 'm' });
+        const mGeom = await landedGeom();
+        const mPainted = await paintedIntrusionPx(decodePage);
+        const mRatio = (mGeom.wrapBottom - mGeom.targetTop - 3) / mGeom.wrapHeight;
         assert.ok(
-          landedBottom <= expectedBottom + 1,
-          `at Beacon Size ${size}, the bird's landed bottom edge (${landedBottom}) must not reach past the ` +
-            `match's top edge + 3px overlap (${expectedBottom}) -- it would otherwise paint over the match's own glyphs`
+          mGeom.wrapBottom > mGeom.targetTop,
+          `sanity check: the Beacon Size m bird must actually overlap the match's top edge (${mousePos.mode}), got wrapBottom=${mGeom.wrapBottom}, targetTop=${mGeom.targetTop}`
+        );
+
+        for (const [size, scale] of [['l', 1.5], ['xl', 2.25]]) {
+          await setVisionSettings({ beaconSize: size });
+          const geom = await landedGeom();
+
+          const heightRatio = geom.wrapHeight / mGeom.wrapHeight;
+          assert.ok(
+            Math.abs(heightRatio - scale) <= scale * SCALE_TOLERANCE,
+            `at Beacon Size ${size} (${mousePos.mode}), the rendered sprite height (${geom.wrapHeight}) must scale ~${scale}x Beacon Size m's own rendered height (${mGeom.wrapHeight}) -- got x${heightRatio.toFixed(3)}, which is exactly what a disabled Beacon Size transform breaks`
+          );
+
+          const ratio = (geom.wrapBottom - geom.targetTop - 3) / geom.wrapHeight;
+          assert.ok(
+            Math.abs(ratio - mRatio) <= mRatio * RATIO_TOLERANCE,
+            `at Beacon Size ${size} (${mousePos.mode}), the landed overlap-to-height ratio (${ratio.toFixed(4)}) must stay near Beacon Size m's own ratio (${mRatio.toFixed(4)}) -- a bigger drift means the landing offset is not tracking the rendered sprite's own scaled size, and the bird would drift past the match's top edge`
+          );
+        }
+
+        // beaconSize is already 'xl' from the last loop iteration above -- chrome.
+        // storage.sync only fires onChanged on a genuine value change (this file's own
+        // "pack enumeration" test documents the same gotcha), so re-setting it to the
+        // value it already holds would hang setVisionSettings()'s echo-wait.
+        const xlPainted = await paintedIntrusionPx(decodePage);
+        assert.ok(
+          xlPainted <= mPainted * PAINT_TOLERANCE,
+          `at Beacon Size xl (${mousePos.mode}), the painted intrusion into the match's own rect (${xlPainted}px) must stay near the Beacon Size m figure (${mPainted}px), i.e. <= ${PAINT_TOLERANCE}x it -- it would otherwise be genuinely painting over the match's glyphs`
         );
       }
     } finally {
+      if (decodePage) await decodePage.close();
       await setVisionSettings({ beaconSize: 'm' });
+      await page.mouse.move(200, 120);
+      // No explicit scrollTo(0, 0) here, unlike the document-space correctness test
+      // above -- every replay()/paintedIntrusionPx() call already fired the finder's
+      // own "scroll the active match into view" behavior, which leaves #target on-
+      // screen for whatever runs next. Measured: forcing scrollY back to 0 instead
+      // pushes #target back behind this fixture's own 4000px spacer, and a
+      // subsequent page.mouse.move() at that now off-screen y silently fails to
+      // dispatch a real mousemove at all -- which is exactly what broke the
+      // "placement fallback" test immediately after this one while this line was
+      // still here.
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
     }
   });
 
