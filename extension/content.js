@@ -820,6 +820,7 @@
     // Curly apostrophe (U+2019): the docs sites match this exact character.
     effectJackOLantern: 'Jack-o’-Lantern Flicker',
     effectHorseman: 'Galloping Throw',
+    effectTentacleRise: 'Tentacle Rise',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -936,7 +937,8 @@
     flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' },
     cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' },
     jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
-    horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' }
+    horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
+    tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -4329,6 +4331,411 @@
       burst.__waapiAnims = [burstAnim];
       burstAnim.finished.then(function () { burst.remove(); }).catch(function () { burst.remove(); });
     });
+  }
+
+  // oculist-nq1x.7: promotes fxTentacleRise (artifacts/prototypes/effects-playground.html,
+  // the oculist-ke53 tentacles-v2 redraw integrated by oculist-4k8y) into the shipped
+  // beacon contract, the sixth entry in the Halloween pack. Two tentacles rise from a
+  // hidden waterline just below the match's own line, curl their tips inward like a pair
+  // of brackets around the word, a small dark dome with a pair of chartreuse eyes opens
+  // beneath it, blinks once, then everything uncurls and sinks back out of sight.
+  //
+  // TWO REVIEWER-RETRY FINDINGS FROM THE PROTOTYPE'S OWN HISTORY, carried forward
+  // unchanged (oculist-8qrc's amendment to this bead corrects the effect-specific notes
+  // that originally miscited them as a "below-fallback"):
+  // 1. BOTH-OR-NEITHER TENTACLE PAIRING (oculist-1ta.24, defect 1). planTentacle() computes
+  //    each side's clamped position and whether it would overlap #match, purely
+  //    analytically, before anything mounts; if EITHER side would overlap, BOTH are
+  //    suppressed together -- a lone surviving limb reads as Vine Swing, the exact G6
+  //    collision this effect must avoid.
+  // 2. VIEWPORT-BOTTOM DOME SUPPRESSION (oculist-1ta.24, defect 2). When #match sits
+  //    within DOME_H+DOME_MARGIN of the viewport's bottom edge, the dome and eyes are
+  //    suppressed entirely rather than mounted off-screen or half-cropped -- the tentacles'
+  //    own rise/curl/sink is unaffected and still plays in full; only the eyes beat drops.
+  // The REACH_MIN_X/REACH_MAX_X clearance floor (derived from the tentacles-v2 ribbon/
+  // shadow/highlight/sucker geometry, not hand-picked) and the MARGIN/STROKE_BULGE/
+  // EDGE_ALLOW constants below are oculist-4k8y's and oculist-tlg2's own values, kept
+  // exactly as measured -- see their close reasons for the derivation and the exact
+  // 11.4px reproducer oculist-tlg2 hardened against.
+  //
+  // Fixed identity palette (the promotion contract's own license, "the pumpkin's
+  // orange"): no neighbouring shipped character effect has set an accessibility-accent
+  // precedent that applies here, and (like Jack-o'-Lantern's shell and Horseman's ink)
+  // this effect has no separate flash/accent element to carry getEffectiveColors().beacon.
+  //
+  // NO START-POINT CASCADE (rule 9 of the promotion contract). Tentacles rise in place,
+  // anchored to the match's own left/right edges -- fxTentacleRise never reads
+  // lastMouseX/lastMouseY or the find bar's position anywhere in the prototype. This is
+  // not the "travels from somewhere to the match" shape rule 9 describes.
+  //
+  // Lite Mode (rule 7 of the promotion contract): a no-op, the same reasoning Bone
+  // Assembly's/Horseman's own header comments give for themselves -- this effect has no
+  // filter, no box-shadow, and no glow anywhere in its art; the one blink is the effect's
+  // own defining beat, not a decorative flicker. Full mode and Lite Mode render and time
+  // identically. settings.performanceMode is deliberately never read below.
+  function animateTentacleRise(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = rect.left + rect.width / 2;
+
+    var TENT = '#2f4a35', TENT_SHADE = '#17231a', TENT_HI = '#4f7256';
+    var SUCKER = '#d8c9a3';
+    var DOME_COLOR = '#141d17', DOME_SHADE = '#0a0f0b';
+    var EYE_COLOR = '#d7f24a';
+    var PUPIL = '#0a0f08';
+    var STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    // ── Tentacle authoring grid, canonical drawing curls toward local +x (i.e.
+    // rightward). Used as-is for the LEFT tentacle (curling right == curling toward the
+    // word); mirrored via CSS scaleX(-1) on the wrapper for the RIGHT tentacle. Verbatim
+    // from fxTentacleRise / the tentacles-v2 redraw (oculist-ke53/oculist-4k8y). ──
+    var VB_W = 36, VB_H = 72;
+    var SPINE_RISE = [[15, 72], [15, 58], [14, 43], [14.5, 28], [16, 14], [18.5, 3]];
+    var SPINE_CURL_HALF = [[15, 72], [15, 58], [15.5, 43], [18, 29], [22, 18], [26, 11], [28, 9.5], [28.5, 12]];
+    var SPINE_CURL_FULL = [[15, 72], [15, 58], [16, 43], [19, 29], [23, 18], [26.5, 11], [27.8, 7], [27, 4], [23.5, 3], [21, 5]];
+    var BASE_W = 12, TIP_W = 4.5;
+
+    function ribbonPoints(spine, baseW, tipW) {
+      var n = spine.length;
+      var left = [], right = [];
+      for (var i = 0; i < n; i++) {
+        var w = baseW + (tipW - baseW) * (i / (n - 1));
+        var p = spine[i];
+        var prev = spine[Math.max(0, i - 1)];
+        var next = spine[Math.min(n - 1, i + 1)];
+        var dx = next[0] - prev[0], dy = next[1] - prev[1];
+        var len = Math.hypot(dx, dy) || 1;
+        var nx = -dy / len;
+        var ny = dx / len;
+        left.push([p[0] + nx * w / 2, p[1] + ny * w / 2]);
+        right.push([p[0] - nx * w / 2, p[1] - ny * w / 2]);
+      }
+      return left.concat(right.reverse());
+    }
+
+    function pointString(points) {
+      return points.map(function (p) { return p[0].toFixed(2) + ',' + p[1].toFixed(2); }).join(' ');
+    }
+
+    // Flat sheet-derived regions -- the ribbon remains the one shared-width silhouette
+    // generator; these closed regions supply the broad shadow and highlight masses that
+    // distinguish the creature from Vine Swing.
+    var POSE_ART = [
+      {
+        name: 'rise', spine: SPINE_RISE, suckers: [],
+        shadow: [[15, 72], [16.2, 58], [16.1, 43], [16.8, 28], [18.3, 14], [20.3, 4.2], [20.7, 5.4], [19.2, 16], [18.7, 29], [18.6, 43], [19.1, 58], [21, 72]],
+        highlight: [[10.2, 69], [10.8, 57], [11, 44], [11.7, 31], [13, 18], [15.7, 7], [17, 6], [15.5, 18], [14.3, 31], [13.8, 44], [13.7, 57], [13.5, 69]]
+      },
+      {
+        name: 'half', spine: SPINE_CURL_HALF,
+        suckers: [[25.6, 13, 2.1, 3, -35], [21.7, 19.2, 2.1, 3, -35], [18.7, 27.2, 2.1, 3, -22]],
+        shadow: [[15, 72], [16.2, 58], [17, 43], [19.3, 30], [23.4, 20], [27, 14], [29.7, 11.4], [29.1, 14], [26, 16.3], [22.6, 22], [20.4, 31], [19.5, 44], [19.2, 58], [21, 72]],
+        highlight: [[10.2, 69], [10.8, 57], [11.4, 44], [13.1, 31], [16, 21], [20.4, 13.8], [24.8, 9.5], [26.1, 9.2], [22, 14.4], [18, 22], [15.4, 32], [14, 45], [13.6, 58], [13.5, 69]]
+      },
+      {
+        name: 'full', spine: SPINE_CURL_FULL,
+        suckers: [[27.1, 10.2, 2.1, 3, -55], [23.8, 16.8, 2.1, 3, -42], [20.6, 23.5, 2.1, 3, -30], [18.2, 32, 2.1, 3, -15]],
+        shadow: [[15, 72], [16.2, 58], [17.6, 43], [20.5, 30], [24.5, 20], [28.1, 14], [30.4, 9], [30.2, 6.6], [28.9, 4.8], [27.6, 5.2], [28.3, 7.4], [27.1, 11.3], [23.4, 18.4], [21.1, 25], [19.5, 32], [19.3, 44], [19.2, 58], [21, 72]],
+        highlight: [[10.2, 69], [10.8, 57], [11.8, 44], [14.1, 31], [17.3, 21], [21.5, 13], [25.4, 7.4], [27.3, 5.4], [27.8, 4.8], [25.3, 5.6], [21.1, 11], [17.3, 19], [14.8, 30], [13.8, 44], [13.6, 58], [13.5, 69]]
+      }
+    ];
+
+    POSE_ART.forEach(function (art) {
+      art.body = ribbonPoints(art.spine, BASE_W, TIP_W);
+    });
+
+    var PAINT_X = (function () {
+      var xs = [];
+      POSE_ART.forEach(function (art) {
+        art.body.concat(art.shadow, art.highlight).forEach(function (p) { xs.push(p[0]); });
+        art.suckers.forEach(function (s) {
+          var a = s[4] * Math.PI / 180;
+          var xr = Math.hypot(s[2] * Math.cos(a), s[3] * Math.sin(a));
+          xs.push(s[0] - xr, s[0] + xr);
+        });
+      });
+      return { min: Math.min.apply(null, xs), max: Math.max.apply(null, xs) };
+    })();
+    var REACH_MIN_X = PAINT_X.min;
+    var REACH_MAX_X = PAINT_X.max;
+
+    function buildTentacleSvg(figWidth, figHeight) {
+      var svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('width', String(figWidth));
+      svg.setAttribute('height', String(figHeight));
+      svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+      svg.setAttribute('data-tr-art', '');
+      svg.style.cssText = 'display:block;overflow:visible;';
+
+      function pose(art) {
+        var g = document.createElementNS(NS, 'g');
+        g.setAttribute('data-tr-pose', art.name);
+        svgEl('polygon', {
+          points: pointString(art.body), fill: TENT, stroke: DOME_SHADE,
+          'stroke-width': '1.4', style: STROKE, 'data-tr-body': ''
+        }, g);
+        svgEl('polygon', { points: pointString(art.shadow), fill: TENT_SHADE, 'data-tr-layer': 'shadow' }, g);
+        svgEl('polygon', { points: pointString(art.highlight), fill: TENT_HI, 'data-tr-layer': 'highlight' }, g);
+        art.suckers.forEach(function (s) {
+          var sucker = svgEl('g', {
+            transform: 'rotate(' + s[4] + ' ' + s[0] + ' ' + s[1] + ')', 'data-tr-sucker': ''
+          }, g);
+          svgEl('ellipse', {
+            cx: s[0], cy: s[1], rx: s[2], ry: s[3], fill: SUCKER,
+            stroke: DOME_SHADE, 'stroke-width': '0.5', style: STROKE
+          }, sucker);
+        });
+        svg.appendChild(g);
+        return g;
+      }
+
+      var poseRise = pose(POSE_ART[0]);
+      var poseHalf = pose(POSE_ART[1]);
+      var poseFull = pose(POSE_ART[2]);
+      poseHalf.style.opacity = '0';
+      poseFull.style.opacity = '0';
+
+      return { svg: svg, poseRise: poseRise, poseHalf: poseHalf, poseFull: poseFull };
+    }
+
+    // Real screen-space clearance floor between the tentacle's own painted edge (including
+    // its 1.4px non-scaling stroke) and #match's own rect -- oculist-4k8y's/oculist-tlg2's
+    // own measured values, kept exactly. These stay FIXED screen-px constants, unaffected
+    // by beaconScale below: the ribbon's stroke is vector-effect:non-scaling-stroke, a
+    // constant on-screen width regardless of the SVG's own internal scale.
+    var MARGIN = 2;
+    var STROKE_BULGE = 0.7; // half the 1.4px non-scaling ribbon stroke
+    var EDGE_ALLOW = 20;
+    // beaconScale (rule 6) scales the whole creature's on-screen size -- applied to
+    // figHeight, the one root value scale/figWidth/DOME_W/DOME_H all derive from, before
+    // any placement math below is computed from it (the same "scale before computing
+    // placement" discipline animateHorseman's own SPRITE_H comment describes).
+    var figHeight = Math.max(46, Math.min(72, 2.1 * rect.height)) * beaconScale;
+    var scale = figHeight / VB_H;
+    var figWidth = VB_W * scale;
+
+    // Dome + eyes scale with beaconScale too, so the creature stays proportioned at every
+    // Beacon Size; DOME_MARGIN is a fixed screen-px clearance buffer (like MARGIN above),
+    // not an art dimension, so it stays unscaled.
+    var DOME_W = 34 * beaconScale, DOME_H = 18 * beaconScale;
+    var DOME_MARGIN = 4;
+    var domeVisible = (rect.bottom + DOME_H + DOME_MARGIN) <= vh;
+    var waterlineY = Math.min(rect.bottom + DOME_H, vh);
+
+    // ── Shared static clip: one absolute, full-viewport wrapper anchored at the current
+    // viewport's own document-space origin (rule 2 of the promotion contract -- position:
+    // absolute + window.scrollX/scrollY, not the prototype's position:fixed), clipped to a
+    // plain rectangle from the viewport's top down to the waterline. Every child below is
+    // positioned in THIS element's own local coordinate space, which starts at the
+    // viewport's top-left exactly like the prototype's fixed-position math did -- so every
+    // viewport-space offset below (clampedLeft, wrapTop, domeLeft, rect.bottom) ports
+    // unchanged; only this one wrapper's own left/top carry the scroll offset. This also
+    // means an EDGE_ALLOW bleed past the physical viewport edge is absorbed by this same
+    // clip-path (its own polygon already excludes x<0 or x>vw), exactly as "free real
+    // estate" as it was under position:fixed's own viewport clipping.
+    var riseWrap = document.createElement('div');
+    riseWrap.className = 'oc-beacon oc-beacon-transient';
+    riseWrap.setAttribute('data-tentaclerise', '');
+    riseWrap.style.cssText = [
+      'position:absolute',
+      'left:' + window.scrollX + 'px', 'top:' + window.scrollY + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'clip-path:polygon(0px 0px, ' + vw + 'px 0px, ' + vw + 'px ' + waterlineY + 'px, 0px ' + waterlineY + 'px)'
+    ].join(';');
+    document.documentElement.appendChild(riseWrap);
+
+    // Every WAAPI animation this beacon creates -- including on the tentacle/dome/eye child
+    // nodes below -- is collected here and hung off riseWrap (the element cancelBeacons()
+    // actually selects), the same trackOuter()/track() idiom animateHorseman's/
+    // animateJackOLantern's own header comments describe (rule 4/5 of the promotion
+    // contract).
+    var anims = [];
+    function track(a) { anims.push(a); return a; }
+
+    // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, so
+    // relative timing is preserved exactly; every boundary below is precomputed once,
+    // matching animateBoneAssembly's own `raw * durFactor` idiom. ──
+    var RISE_DUR = 420 * durFactor;
+    var POSE_HOLD = 160 * durFactor;
+    var T_POSE_HALF = RISE_DUR;
+    var T_POSE_FULL = RISE_DUR + POSE_HOLD;
+    var DOME_RISE_START = RISE_DUR;
+    var DOME_RISE_DUR = 250 * durFactor;
+    var EYES_OPEN_START = DOME_RISE_START + DOME_RISE_DUR;
+    var EYES_FADE_DUR = 150 * durFactor;
+    var BLINK_START = 980 * durFactor;
+    var BLINK_DUR = 260 * durFactor;
+    var SINK_START = 1300 * durFactor;
+    var SINK_DUR = 380 * durFactor;
+    var T_UNCURL_HALF = SINK_START;
+    var T_UNCURL_RISE = SINK_START + 140 * durFactor;
+    var DOME_SINK_DUR = 300 * durFactor;
+    var EYES_CLOSE_DUR = 150 * durFactor;
+    var CUT_EPS = 1 * durFactor;
+
+    // Bead reviewer-retry (oculist-1ta.24, defect 1): planTentacle() computes where a limb
+    // WOULD land and whether it would overlap #match, without mounting anything -- the
+    // caller below builds either both tentacles or neither, only once BOTH plans are known
+    // to be safe. "MUST NOT reach past #match" is enforced purely analytically here (near =
+    // rect.left - MARGIN / rect.right + MARGIN, exactly, by construction), NOT by the
+    // EDGE_ALLOW clamp -- that clamp only trades unpainted off-canvas bleed for on-screen
+    // fit, it never narrows the margin below. The overlap check stays as a defensive second
+    // line, still real: EDGE_ALLOW is deliberately short of the largest-font edge-placement
+    // deficit, so those rows still get clamped past the safe margin and this check is what
+    // suppresses them.
+    function planTentacle(mirrored) {
+      var reachLocal = mirrored ? (VB_W - REACH_MAX_X) : REACH_MAX_X;
+      var farLocal = mirrored ? (VB_W - REACH_MIN_X) : REACH_MIN_X;
+      var idealLeft = mirrored
+        ? (rect.right + MARGIN - reachLocal * scale)
+        : (rect.left - MARGIN - reachLocal * scale);
+      var clampedLeft = Math.max(-EDGE_ALLOW, Math.min(vw + EDGE_ALLOW - figWidth, idealLeft));
+      var near = clampedLeft + Math.min(reachLocal, farLocal) * scale;
+      var far = clampedLeft + Math.max(reachLocal, farLocal) * scale;
+      return {
+        mirrored: mirrored,
+        clampedLeft: clampedLeft,
+        overlaps: near - STROKE_BULGE < rect.right && far + STROKE_BULGE > rect.left
+      };
+    }
+
+    function buildTentacle(plan) {
+      var mirrored = plan.mirrored, clampedLeft = plan.clampedLeft;
+      var wrapTop = waterlineY - figHeight;
+      var built = buildTentacleSvg(figWidth, figHeight);
+      var wrap = document.createElement('div');
+      wrap.setAttribute('data-tr-tentacle', mirrored ? 'right' : 'left');
+      var mirrorPrefix = mirrored ? 'scaleX(-1) ' : '';
+      wrap.style.cssText = [
+        'position:absolute',
+        'left:' + clampedLeft + 'px', 'top:' + wrapTop + 'px',
+        'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+        'transform:' + mirrorPrefix + 'translateY(' + figHeight + 'px)'
+      ].join(';');
+      wrap.appendChild(built.svg);
+      riseWrap.appendChild(wrap);
+
+      track(wrap.animate([
+        { transform: mirrorPrefix + 'translateY(' + figHeight + 'px)' },
+        { transform: mirrorPrefix + 'translateY(0px)' }
+      ], { duration: RISE_DUR, easing: 'ease-out', fill: 'forwards' }));
+      track(wrap.animate([
+        { transform: mirrorPrefix + 'translateY(0px)' },
+        { transform: mirrorPrefix + 'translateY(' + figHeight + 'px)' }
+      ], { duration: SINK_DUR, delay: SINK_START, easing: 'ease-in', fill: 'forwards' }));
+
+      function hardCut(el, toVisible, delay) {
+        track(el.animate([{ opacity: toVisible ? 0 : 1 }, { opacity: toVisible ? 1 : 0 }],
+          { duration: CUT_EPS, delay: delay, fill: 'forwards' }));
+      }
+      hardCut(built.poseRise, false, T_POSE_HALF - CUT_EPS);
+      hardCut(built.poseHalf, true, T_POSE_HALF - CUT_EPS);
+      hardCut(built.poseHalf, false, T_POSE_FULL - CUT_EPS);
+      hardCut(built.poseFull, true, T_POSE_FULL - CUT_EPS);
+      // Sink beat uncurls back through the same poses in reverse.
+      hardCut(built.poseFull, false, T_UNCURL_HALF - CUT_EPS);
+      hardCut(built.poseHalf, true, T_UNCURL_HALF - CUT_EPS);
+      hardCut(built.poseHalf, false, T_UNCURL_RISE - CUT_EPS);
+      hardCut(built.poseRise, true, T_UNCURL_RISE - CUT_EPS);
+    }
+
+    // Bead reviewer-retry (defect 1): the bracketing PAIR is what reads as a creature
+    // rather than Vine Swing's own single curving stroke -- a lone surviving limb is worse
+    // than none. Plan both sides first; only mount either once neither would overlap
+    // #match, so it is always both tentacles or neither, never one.
+    var planLeft = planTentacle(false);
+    var planRight = planTentacle(true);
+    if (!planLeft.overlaps && !planRight.overlaps) {
+      buildTentacle(planLeft);  // left tentacle, canonical (unmirrored) orientation
+      buildTentacle(planRight); // right tentacle, mirrored
+    }
+
+    // ── Dome + eyes ──────────────────────────────────────────────────────────────────────
+    // Bead reviewer-retry (defect 2): see domeVisible's own comment above -- skipped
+    // entirely rather than mounted off-screen/half-cropped when #match sits within
+    // DOME_H+DOME_MARGIN of the viewport's bottom edge.
+    if (domeVisible) {
+      var domeLeft = Math.max(4, Math.min(vw - 4 - DOME_W, mcx - DOME_W / 2));
+      var domeWrap = document.createElement('div');
+      domeWrap.setAttribute('data-tr-dome-wrap', '');
+      domeWrap.style.cssText = [
+        'position:absolute',
+        'left:' + domeLeft + 'px', 'top:' + rect.bottom + 'px',
+        'width:' + DOME_W + 'px', 'height:' + DOME_H + 'px',
+        'transform:translateY(' + DOME_H + 'px)'
+      ].join(';');
+      riseWrap.appendChild(domeWrap);
+
+      var domeSvg = document.createElementNS(NS, 'svg');
+      domeSvg.setAttribute('width', String(DOME_W));
+      domeSvg.setAttribute('height', String(DOME_H));
+      domeSvg.setAttribute('viewBox', '0 0 34 18');
+      domeSvg.setAttribute('data-tr-dome', '');
+      domeSvg.style.cssText = 'display:block;overflow:visible;';
+      domeWrap.appendChild(domeSvg);
+
+      svgEl('path', {
+        d: 'M0.7 17.3 Q2.5 3 17 3 Q31.5 3 33.3 17.3 Z', fill: DOME_COLOR,
+        stroke: DOME_SHADE, 'stroke-width': '1.4', style: STROKE
+      }, domeSvg);
+      svgEl('path', { d: 'M17 17.3 Q20 5 31.5 12 Q32.8 14 33.3 17.3 Z', fill: DOME_SHADE }, domeSvg);
+
+      var eyeGroup = document.createElementNS(NS, 'g');
+      eyeGroup.setAttribute('data-tr-eyes', '');
+      eyeGroup.style.cssText = 'transform-box:fill-box;transform-origin:50% 50%;opacity:0;';
+      domeSvg.appendChild(eyeGroup);
+      [10, 24].forEach(function (cx) {
+        var eye = svgEl('g', { 'data-tr-eye': '' }, eyeGroup);
+        svgEl('ellipse', { cx: String(cx), cy: '11', rx: '5.5', ry: '6', fill: EYE_COLOR }, eye);
+        svgEl('ellipse', { cx: String(cx), cy: '11', rx: '1.2', ry: '3.2', fill: PUPIL }, eyeGroup);
+        svgEl('circle', { cx: String(cx - 2), cy: '8', r: '1.2', fill: '#ffffff' }, eye);
+      });
+
+      track(domeWrap.animate([
+        { transform: 'translateY(' + DOME_H + 'px)' },
+        { transform: 'translateY(0px)' }
+      ], { duration: DOME_RISE_DUR, delay: DOME_RISE_START, easing: 'ease-out', fill: 'forwards' }));
+      track(domeWrap.animate([
+        { transform: 'translateY(0px)' },
+        { transform: 'translateY(' + DOME_H + 'px)' }
+      ], { duration: DOME_SINK_DUR, delay: SINK_START, easing: 'ease-in', fill: 'forwards' }));
+
+      track(eyeGroup.animate([{ opacity: 0 }, { opacity: 1 }],
+        { duration: EYES_FADE_DUR, delay: EYES_OPEN_START, fill: 'forwards' }));
+      // One slow blink during the hold -- a squash on the eye group itself (transform
+      // only), not a second eyelid shape.
+      track(eyeGroup.animate([
+        { transform: 'scaleY(1)', offset: 0 },
+        { transform: 'scaleY(0.08)', offset: 0.5 },
+        { transform: 'scaleY(1)', offset: 1 }
+      ], { duration: BLINK_DUR, delay: BLINK_START, easing: 'ease-in-out', fill: 'forwards' }));
+      track(eyeGroup.animate([{ opacity: 1 }, { opacity: 0 }],
+        { duration: EYES_CLOSE_DUR, delay: SINK_START, fill: 'forwards' }));
+    }
+
+    riseWrap.__waapiAnims = anims;
+
+    // Natural completion removes riseWrap only once EVERY animation has settled (rule 5).
+    // destroyBeacon() still removes riseWrap synchronously on cancel, cancelling every
+    // entry in __waapiAnims regardless of this promise -- same idiom animateJackOLantern's
+    // own removePumpkin() uses. If nothing was mounted (both tentacles suppressed and the
+    // dome not visible), anims is empty and this resolves immediately.
+    function removeRiseWrap() { riseWrap.remove(); }
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeRiseWrap);
   }
 
   function animateLightning(rect) {
