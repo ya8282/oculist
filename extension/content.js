@@ -821,6 +821,7 @@
     effectJackOLantern: 'Jack-o’-Lantern Flicker',
     effectHorseman: 'Galloping Throw',
     effectTentacleRise: 'Tentacle Rise',
+    effectReanimate: 'Reanimation Jolt',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -938,7 +939,8 @@
     cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' },
     jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
     horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
-    tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' }
+    tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
+    reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -4736,6 +4738,390 @@
     // dome not visible), anims is empty and this resolves immediately.
     function removeRiseWrap() { riseWrap.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeRiseWrap);
+  }
+
+  // oculist-nq1x.8: promotes fxReanimate (artifacts/prototypes/effects-playground.html,
+  // the geometry rebuilt by oculist-20qz/oculist-4v2u after oculist-1ta.22's own forearm-
+  // legibility fix was superseded) into the shipped beacon contract, the seventh entry in
+  // the Halloween pack. A stiff-armed figure lies flanked by two conductor posts, is jolted
+  // upright by two brief electrode arcs, opens its eyes, holds, then fades.
+  //
+  // PLACEMENT: right by default, mirrored to the left ONLY if the right side does not fit,
+  // and NEVER above/below -- fxReanimate has only right and left landings, with an
+  // explicit never-above/below comment in the prototype (oculist-1ta.22's own close reason
+  // independently confirms this). The degenerate case -- neither side fits -- falls back to
+  // sideRight rather than suppressing (unlike Tentacle Rise's both-or-neither pairing);
+  // carried forward unchanged because it is provably safe, not because it was unexamined:
+  // sideRight.x is ALWAYS r.right + GAP + REACH_INWARD and sideLeft.x is ALWAYS
+  // r.left - GAP - REACH_INWARD, so REACH_INWARD (the figure's own tightest inward bound,
+  // sampled across the actual jerk/overshoot sweep) keeps the near edge exactly GAP px
+  // clear of #match by construction regardless of whether the FAR edge (REACH_OUTWARD)
+  // fits inside the viewport -- "doesn't fit" only ever means the outward side may bleed
+  // past the browser window's own edge, never that the inward side moves toward the match.
+  // test/reanimate_effect.test.js exercises this exact extreme-narrow-viewport/wide-match
+  // scenario directly rather than assuming the above reasoning without proof.
+  //
+  // NO START-POINT CASCADE (rule 9 of the promotion contract), the same reasoning
+  // animateTentacleRise's own header comment gives for itself: the figure rises in place at
+  // its own landing position, anchored to #match's own left/right edge -- fxReanimate never
+  // reads lastMouseX/lastMouseY or the find bar's position anywhere in the prototype. This
+  // is not the "travels from somewhere to the match" shape rule 9 describes. The effect's
+  // own mirrored branch (right-landing vs. left-fallback, LIE's sign flip) is real and is
+  // exercised for real by a fixture that forces the left fallback, not merely compiled.
+  //
+  // G4 FLICKER GATE (WCAG 2.3.1, the photosensitive general flash threshold): the jolt is a
+  // luminance change, so this is the one gate this effect can fail. There are exactly TWO
+  // opacity pulses in the ENTIRE clip (ARC1 and ARC2 below), never more, and durFactor (rule
+  // 6) multiplies every one of ARC1_DELAY/ARC1_DUR/ARC2_DELAY/ARC2_DUR by the SAME factor,
+  // so the pulse COUNT never changes at any Animation Speed the user can pick -- only the
+  // wall-clock window they fall inside shrinks or grows. Two flashes total, anywhere in that
+  // window, is under the "no more than three flashes in any one-second period" threshold by
+  // construction, at every speed setting, without needing a per-window sampling proof.
+  //
+  // Fixed identity palette (the promotion contract's own license, "the pumpkin's orange"):
+  // no neighbouring shipped character effect has set an accessibility-accent precedent that
+  // applies here, and (like Horseman's own burst bands) the electrode arc is the character's
+  // own electrical prop, not a UI accent tied to landing on the match -- so
+  // getEffectiveColors().beacon is never read below.
+  //
+  // Lite Mode (rule 7 of the promotion contract) drops the electrode arc's own glow layer
+  // (arcGlow, the wider cyan under-stroke the prototype's own comment calls a glow) while
+  // keeping the recognizable silhouette and the effect's defining beat: the figure's full
+  // lie/jerk/overshoot/settle motion and the arc's white core (arcCore), which alone still
+  // carries both jolt pulses. This is the only mode-dependent difference; no box-shadow or
+  // filter exists anywhere else in this effect's art.
+  function animateReanimate(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var mcy = rect.top + rect.height / 2;
+    var vw = window.innerWidth;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    var GAP = 10; // match-rect clearance floor, a fixed screen-px margin unaffected by beaconScale (the same MARGIN/STROKE_BULGE discipline animateTentacleRise's own header comment describes) -- see fxArrowShot's STRIKE_GAP note on why this can't be trimmed casually.
+
+    var SKIN = '#aeb8aa', SKIN_OUTLINE = '#28302c', SKIN_HI = '#d8dfd3', SKIN_SHADE = '#68756c';
+    var HAIR = '#171a19', HAIR_HI = '#303633';
+    var COAT = '#292d36', COAT_OUTLINE = '#0d0f14', COAT_HI = '#444a57', COAT_SHADOW = '#181b22';
+    var SHIRT = '#4b4d3d', SHIRT_HI = '#686a54', SHIRT_SHADOW = '#303228';
+    var PANTS = '#3b3834', PANTS_HI = '#55504a', PANTS_SHADOW = '#25231f';
+    var BOOT = '#24262b', BOOT_HI = '#41444a', BOOT_SHADOW = '#111216';
+    // Forearms are their own garment part (a cuff), not the coat body. oculist-1ta.22's own
+    // fix separated ARM from COAT by an "ARM ramp at or below COAT's own ramp" palette rule,
+    // but that rule was superseded along with the geometry: outer-repo commit 2c78974 (oculist-20qz)
+    // re-derived both ARM and COAT from the v2 character sheet, and the current values no
+    // longer satisfy it (ARM_HI luminance .0837 > COAT_HI .0681) -- separation at the shipped
+    // size now comes from geometry (the arm clears the coat silhouette), not a luminance
+    // ordering; see this function's own forearm-legibility test.
+    var ARM_BASE = '#343944', ARM_HI = '#4b5260', ARM_SHADOW = '#1d2027';
+    var ELECTRODE = '#3a3a3f', ELECTRODE_OUTLINE = '#111114', ELECTRODE_TIP = '#8a8a92';
+    var ARC_CORE = '#ffffff', ARC_GLOW = '#7fe8ff';
+    var STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var VB_W = 70, VB_H = 90;
+    // figHeight carries beaconScale (rule 6) BEFORE any placement/clearance math below is
+    // derived from it -- the same "scale before computing placement" discipline
+    // animateTentacleRise's own figHeight comment describes -- so the figure's own SVG
+    // viewBox stretch (VB_W x VB_H mapped onto figWidth x figHeight) grows/shrinks the whole
+    // body at once, and every electrode dimension below (scaled by the SAME beaconScale
+    // factor, directly, since the electrode's own esvg is a separate 1:1-viewBox SVG rather
+    // than sharing the figure's VB_W/VB_H grid) grows with it, so the whole creature -- figure
+    // and conductor posts together -- scales as one piece at every Beacon Size.
+    var figHeight = Math.max(40, Math.min(60, 2.0 * rect.height)) * beaconScale;
+    var figWidth = figHeight * (VB_W / VB_H);
+
+    // Electrode geometry, needed here (before the pivot is chosen) purely for the clearance
+    // math -- the actual electrode elements are built further down, once figLeft/figTop are
+    // known. Every dimension below is a body-part SIZE (scales with beaconScale, directly,
+    // matching animateTentacleRise's own DOME_W/DOME_H precedent); their outline/glow
+    // stroke-widths stay the prototype's fixed constants (vector-effect:non-scaling-stroke,
+    // the same fixed-thin-outline convention as the figure's own body strokes).
+    var postW = 7 * beaconScale, postH = 28 * beaconScale, postGap = 9 * beaconScale;
+    var postBaseOverhang = 2 * beaconScale, postNeckW = 2 * beaconScale, terminalR = 3 * beaconScale;
+    var ARC_CY_FRAC = 0.32; // dimensionless fraction of figHeight, unaffected by beaconScale
+    var terminalCy = 11 * beaconScale;
+    var elecHalfW = figWidth / 2 + postGap + terminalR * 2 + postNeckW + postW + postBaseOverhang;
+    var elecTopY = -figHeight + figHeight * ARC_CY_FRAC - terminalCy;
+    var elecBottomY = elecTopY + postH;
+
+    // Rotation magnitudes (unsigned -- LIE/STEP1/OVERSHOOT below apply the per-side sign).
+    // Declared up here because the clearance math needs them before the landing side, and
+    // therefore the actual signed angles, are chosen.
+    var LIE_MAG = 90, STEP1_MAG = 40, OVERSHOOT_MAG = 8;
+
+    // REACH_OUTWARD: isotropic corner-distance bound (generous, viewport-fit check only).
+    var outwardCorners = [
+      [figWidth / 2, -figHeight], [-figWidth / 2, -figHeight],
+      [elecHalfW, elecTopY], [-elecHalfW, elecTopY],
+      [elecHalfW, elecBottomY], [-elecHalfW, elecBottomY]
+    ];
+    var REACH_OUTWARD = 0;
+    outwardCorners.forEach(function (c) {
+      REACH_OUTWARD = Math.max(REACH_OUTWARD, Math.sqrt(c[0] * c[0] + c[1] * c[1]));
+    });
+    REACH_OUTWARD += 2;
+
+    // REACH_INWARD: exact bound for the actual swept angle range, computed in the canonical
+    // "as if landing on the right" orientation (inward = negative local x); safe to reuse
+    // as-is for a left landing too, since that side's motion is this one mirrored exactly
+    // (STEP1/OVERSHOOT/LIE are negated together in the timeline below). Only the figure's
+    // own two top corners are checked -- its bottom corners (py=0) trace a strictly smaller
+    // |x| than the top corners at every angle in this range.
+    var sweepMin = -OVERSHOOT_MAG, sweepMax = LIE_MAG; // covers 0 and STEP1_MAG too
+    var topCorners = [[figWidth / 2, -figHeight], [-figWidth / 2, -figHeight]];
+    var inwardFig = 0;
+    for (var deg = sweepMin; deg <= sweepMax; deg += 1) {
+      var rad = deg * Math.PI / 180, cosT = Math.cos(rad), sinT = Math.sin(rad);
+      topCorners.forEach(function (c) {
+        var x = c[0] * cosT - c[1] * sinT;
+        if (-x > inwardFig) inwardFig = -x;
+      });
+    }
+    var REACH_INWARD = Math.max(inwardFig, elecHalfW) + 2; // +2 for the 1deg sampling step and rounding
+
+    var sideRight = { x: rect.right + GAP + REACH_INWARD, side: 'right' };
+    sideRight.fits = sideRight.x + REACH_OUTWARD <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - REACH_INWARD, side: 'left' };
+    sideLeft.fits = sideLeft.x - REACH_OUTWARD >= 4;
+    // Right by default; mirror left only if the right side doesn't fit -- never above/below
+    // (this effect never covers the word from any angle). The degenerate "neither fits"
+    // case falls back to sideRight, which stays match-safe by construction -- see this
+    // function's own header comment.
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+
+    var pivotX = landing.x, pivotY = mcy;
+    var onRight = landing.side === 'right';
+    var figLeft = pivotX - figWidth / 2, figTop = pivotY - figHeight;
+
+    // ── Shared static wrapper: one absolute, full-viewport-sized element anchored at the
+    // current viewport's own document-space origin (rule 2 of the promotion contract --
+    // position:absolute + window.scrollX/scrollY, not the prototype's position:fixed).
+    // Every child below is positioned in THIS element's own local coordinate space, which
+    // starts at the viewport's top-left exactly like the prototype's fixed-position math
+    // did -- so every viewport-space offset below (pivotX/pivotY/figLeft/figTop/elecTopY)
+    // ports unchanged; only this one wrapper's own left/top carry the scroll offset. Same
+    // idiom as animateTentacleRise's own riseWrap. ──
+    var vh = window.innerHeight;
+    var reanimateWrap = document.createElement('div');
+    reanimateWrap.className = 'oc-beacon oc-beacon-transient';
+    reanimateWrap.setAttribute('data-reanimate', '');
+    reanimateWrap.style.cssText = [
+      'position:absolute',
+      'left:' + window.scrollX + 'px', 'top:' + window.scrollY + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642'
+    ].join(';');
+    document.documentElement.appendChild(reanimateWrap);
+
+    // Every WAAPI animation this beacon creates -- including on the electrode/figure/eye
+    // child nodes below -- is collected here and hung off reanimateWrap (the element
+    // cancelBeacons() actually selects), the same trackOuter()/track() idiom
+    // animateTentacleRise's own header comment describes (rule 4/5 of the promotion
+    // contract).
+    var anims = [];
+    function track(a) { anims.push(a); return a; }
+
+    // ── Electrode posts + arc (static fixtures; never rotate) ────────────────────────────
+    var boxLeft = pivotX - elecHalfW;
+    var boxRight = pivotX + elecHalfW;
+    var boxW = boxRight - boxLeft;
+    var arcCy = figTop + figHeight * ARC_CY_FRAC; // roughly head/shoulder height
+    var boxTop = arcCy - terminalCy;
+    var boxH = postH;
+
+    var elecWrap = document.createElement('div');
+    elecWrap.setAttribute('data-rj-elecwrap', '');
+    elecWrap.style.cssText = 'position:absolute;left:' + boxLeft + 'px;top:' + boxTop + 'px;width:' + boxW + 'px;height:' + boxH + 'px;opacity:0;';
+    reanimateWrap.appendChild(elecWrap);
+
+    var esvg = document.createElementNS(NS, 'svg');
+    esvg.setAttribute('width', String(boxW));
+    esvg.setAttribute('height', String(boxH));
+    esvg.setAttribute('viewBox', '0 0 ' + boxW + ' ' + boxH);
+    esvg.style.cssText = 'display:block;overflow:visible;';
+    elecWrap.appendChild(esvg);
+
+    var leftPostX = postBaseOverhang;
+    var rightPostX = boxW - postBaseOverhang - postW;
+    var leftTerminalX = leftPostX + postW + postNeckW + terminalR;
+    var rightTerminalX = rightPostX - postNeckW - terminalR;
+    svgEl('path', { 'data-rj-part': 'post-left', d: 'M ' + leftPostX + ' 2 H ' + (leftPostX + postW) + ' V 23 H ' + (leftPostX + postW + postBaseOverhang) + ' V 28 H 0 V 23 H ' + leftPostX + ' Z', fill: ELECTRODE, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1.5', style: STROKE }, esvg);
+    svgEl('path', { 'data-rj-part': 'post-right', d: 'M ' + rightPostX + ' 2 H ' + (rightPostX + postW) + ' V 23 H ' + boxW + ' V 28 H ' + (rightPostX - postBaseOverhang) + ' V 23 H ' + rightPostX + ' Z', fill: ELECTRODE, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1.5', style: STROKE }, esvg);
+    svgEl('rect', { x: String(leftPostX + postW), y: String(terminalCy - 2), width: String(postNeckW + terminalR), height: '4', fill: ELECTRODE_TIP, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1' }, esvg);
+    svgEl('rect', { x: String(rightTerminalX), y: String(terminalCy - 2), width: String(postNeckW + terminalR), height: '4', fill: ELECTRODE_TIP, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1' }, esvg);
+    svgEl('circle', { 'data-rj-part': 'terminal-left', cx: String(leftTerminalX), cy: String(terminalCy), r: String(terminalR), fill: ELECTRODE_TIP, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1' }, esvg);
+    svgEl('circle', { 'data-rj-part': 'terminal-right', cx: String(rightTerminalX), cy: String(terminalCy), r: String(terminalR), fill: ELECTRODE_TIP, stroke: ELECTRODE_OUTLINE, 'stroke-width': '1' }, esvg);
+
+    // One fixed five-segment path is painted twice and reused by both pulses.
+    var tipL = leftTerminalX + terminalR, tipR = rightTerminalX - terminalR, span = tipR - tipL;
+    var arcD = 'M ' + tipL + ' ' + terminalCy +
+      ' L ' + (tipL + span * 0.2) + ' ' + (terminalCy - 4) +
+      ' L ' + (tipL + span * 0.4) + ' ' + (terminalCy + 3) +
+      ' L ' + (tipL + span * 0.6) + ' ' + (terminalCy - 3) +
+      ' L ' + (tipL + span * 0.8) + ' ' + (terminalCy + 4) +
+      ' L ' + tipR + ' ' + terminalCy;
+    // Glow via a wider under-stroke plus a thin white core -- both static shapes, only
+    // opacity animates, so there is no filter and no forced re-raster (the same reasoning
+    // that cut fxCheshire's teeth glow). Lite Mode (rule 7) drops arcGlow entirely, below.
+    var arcCore = svgEl('path', { 'data-rj-part': 'arc-core', d: arcD, fill: 'none', stroke: ARC_CORE, 'stroke-width': '1.4', opacity: '0', style: STROKE }, esvg);
+    var arcGlow = null;
+    if (!settings.performanceMode) {
+      arcGlow = svgEl('path', { 'data-rj-part': 'arc-under', d: arcD, fill: 'none', stroke: ARC_GLOW, 'stroke-width': '4', opacity: '0', style: STROKE }, esvg);
+      arcGlow.parentNode.insertBefore(arcGlow, arcCore); // under-stroke paints behind the core
+    }
+
+    // ── Figure (rotates upright about its own bottom-center pivot) ───────────────────────
+    var figWrap = document.createElement('div');
+    figWrap.setAttribute('data-rj-figwrap', '');
+    figWrap.setAttribute('data-rj-side', landing.side);
+    // Lying angle points AWAY from the match (right side lies rotated +90deg, which CSS's
+    // clockwise rotate maps to "up" pointing screen-right; left side is the mirror, -90deg,
+    // "up" pointing screen-left) -- an aesthetic choice, not a safety requirement, since
+    // REACH above already bounds every direction equally.
+    var LIE = onRight ? LIE_MAG : -LIE_MAG;
+    var STEP1 = onRight ? STEP1_MAG : -STEP1_MAG;
+    var OVERSHOOT = onRight ? -OVERSHOOT_MAG : OVERSHOOT_MAG;
+    figWrap.style.cssText = 'position:absolute;left:' + figLeft + 'px;top:' + figTop + 'px;width:' + figWidth + 'px;height:' + figHeight + 'px;opacity:0;transform-origin:50% 100%;transform:rotate(' + LIE + 'deg);';
+    reanimateWrap.appendChild(figWrap);
+
+    var figSvg = document.createElementNS(NS, 'svg');
+    figSvg.setAttribute('width', String(figWidth));
+    figSvg.setAttribute('height', String(figHeight));
+    figSvg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    figSvg.style.cssText = 'display:block;overflow:visible;';
+    figWrap.appendChild(figSvg);
+
+    // Broad hard-edged regions survive the 40px figure-height floor: uneven hair,
+    // softened-square head, compact coat, short split legs, oversized boots (oculist-20qz's
+    // rebuild of the Reanimation-Jolt-v2 character sheet, integrated by oculist-4v2u).
+    svgEl('path', { 'data-rj-part': 'face', d: 'M 21 8 L 26 4 L 44 4 L 50 9 L 49 27 L 43 35 L 27 35 L 21 28 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '2.2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 22 10 L 27 6 L 31 6 L 28 31 L 23 27 Z', fill: SKIN_HI }, figSvg);
+    svgEl('path', { d: 'M 43 6 L 49 10 L 48 27 L 43 33 L 40 29 Z', fill: SKIN_SHADE }, figSvg);
+    svgEl('path', { 'data-rj-part': 'hair', d: 'M 19 15 L 20 7 L 25 8 L 28 2 L 32 5 L 37 1 L 40 4 L 46 2 L 45 6 L 51 7 L 49 15 L 44 12 L 40 14 L 35 11 L 30 14 L 25 11 L 22 17 Z', fill: HAIR, stroke: COAT_OUTLINE, 'stroke-width': '1.5', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 24 8 L 29 4 L 31 7 L 27 11 Z', fill: HAIR_HI }, figSvg);
+
+    // Heavy brows, restrained eyes and mouth. Glints remain independent so the one-shot eye
+    // beat can target them without a pose swap.
+    svgEl('path', { d: 'M 24 19 L 32 18 L 32 21 L 24 21 Z M 38 18 L 46 19 L 46 21 L 38 21 Z', fill: SKIN_OUTLINE }, figSvg);
+    svgEl('path', { d: 'M 26 22 L 31 22 L 30 25 L 26 25 Z M 39 22 L 44 22 L 44 25 L 40 25 Z', fill: '#202522' }, figSvg);
+    var glintL = svgEl('circle', { 'data-rj-part': 'eye-left', cx: '29.5', cy: '23', r: '2.4', fill: '#eaffff', opacity: '0' }, figSvg);
+    var glintR = svgEl('circle', { 'data-rj-part': 'eye-right', cx: '40.5', cy: '23', r: '2.4', fill: '#eaffff', opacity: '0' }, figSvg);
+    svgEl('path', { d: 'M 31 30 L 39 30', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE }, figSvg);
+
+    // Narrow neck leaves page-colored gaps beside it before the shoulders.
+    svgEl('path', { d: 'M 30 34 L 40 34 L 42 43 L 28 43 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE }, figSvg);
+
+    // Legs and boots paint behind the coat so their separation is explicit.
+    svgEl('path', { 'data-rj-part': 'leg-left', d: 'M 22 63 L 33 63 L 32 82 L 20 82 Z', fill: PANTS_HI, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { 'data-rj-part': 'leg-right', d: 'M 37 63 L 48 63 L 50 82 L 38 82 Z', fill: PANTS, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 43 64 L 48 64 L 50 82 L 44 82 Z', fill: PANTS_SHADOW }, figSvg);
+    svgEl('path', { 'data-rj-part': 'boot-left', d: 'M 19 79 L 32 79 L 34 85 L 33 90 L 14 90 L 14 86 Z', fill: BOOT, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 16 82 L 29 82 L 30 85 L 15 86 Z', fill: BOOT_HI }, figSvg);
+    svgEl('path', { 'data-rj-part': 'boot-right', d: 'M 38 79 L 51 79 L 56 86 L 56 90 L 37 90 L 36 85 Z', fill: BOOT, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 40 82 L 50 82 L 54 86 L 38 85 Z', fill: BOOT_HI }, figSvg);
+    svgEl('path', { d: 'M 14 87 L 33 87 L 33 90 L 14 90 Z M 37 87 L 56 87 L 56 90 L 37 90 Z', fill: BOOT_SHADOW }, figSvg);
+
+    // Compact coat with a visible shirt wedge and simple lapels.
+    var coatD = 'M 17 45 L 27 40 L 43 40 L 53 45 L 52 70 L 44 73 L 40 65 L 30 65 L 26 73 L 18 70 Z';
+    svgEl('path', { 'data-rj-part': 'coat', d: coatD, fill: COAT, stroke: COAT_OUTLINE, 'stroke-width': '2.5', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 18 46 L 27 41 L 30 45 L 26 69 L 19 68 Z', fill: COAT_HI }, figSvg);
+    svgEl('path', { d: 'M 43 41 L 52 46 L 51 69 L 44 71 L 40 65 Z', fill: COAT_SHADOW }, figSvg);
+    svgEl('path', { d: 'M 29 43 L 35 50 L 41 43 L 40 64 L 30 64 Z', fill: SHIRT, stroke: COAT_OUTLINE, 'stroke-width': '1.4', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 30 45 L 34 50 L 32 63 L 30 63 Z', fill: SHIRT_HI }, figSvg);
+    svgEl('path', { d: 'M 24 42 L 34 50 L 29 55 Z M 46 42 L 36 50 L 41 55 Z', fill: COAT_HI, stroke: COAT_OUTLINE, 'stroke-width': '1.2', style: STROKE }, figSvg);
+
+    // Stiff sleeve-bars sit outside the coat silhouette with page-colored negative space
+    // along most of their length (oculist-1ta.22's geometry lesson, re-confirmed at the
+    // shipped 40px floor by oculist-20qz); compact fists cap the tips.
+    svgEl('path', { 'data-rj-part': 'forearm-left', d: 'M 18 47 L 13 45 L 4 31 L 9 28 L 22 42 Z', fill: ARM_BASE, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 7 31 L 10 30 L 18 42 L 14 43 Z', fill: ARM_HI }, figSvg);
+    svgEl('path', { 'data-rj-part': 'forearm-right', d: 'M 52 47 L 57 45 L 66 31 L 61 28 L 48 42 Z', fill: ARM_BASE, stroke: COAT_OUTLINE, 'stroke-width': '2', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 63 31 L 60 30 L 52 42 L 56 43 Z', fill: ARM_SHADOW }, figSvg);
+    svgEl('path', { 'data-rj-part': 'fist-left', d: 'M 1 31 L 3 26 L 7 24 L 11 27 L 11 32 L 7 35 L 3 34 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 3 27 L 6 25 L 8 27 L 5 30 Z', fill: SKIN_HI }, figSvg);
+    svgEl('path', { 'data-rj-part': 'fist-right', d: 'M 69 31 L 67 26 L 63 24 L 59 27 L 59 32 L 63 35 L 67 34 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE }, figSvg);
+    svgEl('path', { d: 'M 67 27 L 64 25 L 62 27 L 65 30 Z', fill: SKIN_HI }, figSvg);
+
+    // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, so
+    // relative timing (and the total flash count, see this function's own header comment)
+    // is preserved exactly, matching animateTentacleRise's own `raw * durFactor` idiom. ──
+    var APPEAR_DUR = 180 * durFactor;
+    var DIM = 0.55;
+    // Two pulses only, spaced >=350ms apart (measured end-of-first to start-of-second) --
+    // the photosensitive-flicker gate (WCAG 2.3.1) this function's own header comment calls
+    // out by number.
+    var ARC1_DELAY = 400 * durFactor, ARC1_DUR = 140 * durFactor;
+    var ARC2_DELAY = 900 * durFactor, ARC2_DUR = 140 * durFactor;
+    var JERK_DELAY = ARC2_DELAY + ARC2_DUR + 150 * durFactor;
+    var JERK_DUR = 320 * durFactor;
+    var EYES_DELAY = JERK_DELAY + JERK_DUR - 60 * durFactor;
+    var EYES_DUR = 150 * durFactor;
+    var HOLD_AFTER = 520 * durFactor;
+    var FADE_DELAY = JERK_DELAY + JERK_DUR + HOLD_AFTER;
+    var FADE_DUR = 300 * durFactor;
+    var DUR = FADE_DELAY + FADE_DUR;
+
+    // Electrodes: fade in with the scene, pulse twice, fade out at the end.
+    track(elecWrap.animate([
+      { opacity: 0 }, { opacity: 1 }
+    ], { duration: APPEAR_DUR, easing: 'ease-out', fill: 'forwards' }));
+    [arcCore].concat(arcGlow ? [arcGlow] : []).forEach(function (el) {
+      track(el.animate([
+        { opacity: 0, offset: 0 },
+        { opacity: 1, offset: 0.5 },
+        { opacity: 0, offset: 1 }
+      ], { duration: ARC1_DUR, delay: ARC1_DELAY, fill: 'forwards' }));
+      track(el.animate([
+        { opacity: 0, offset: 0 },
+        { opacity: 1, offset: 0.5 },
+        { opacity: 0, offset: 1 }
+      ], { duration: ARC2_DUR, delay: ARC2_DELAY, fill: 'forwards' }));
+    });
+    track(elecWrap.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: FADE_DUR, delay: FADE_DELAY, easing: 'ease-in', fill: 'forwards' }));
+
+    // Figure: dim appear -> hold lying -> jerks upright (rotation) while brightening -> eyes
+    // open -> held settled pose -> fade out.
+    track(figWrap.animate([
+      { opacity: 0 }, { opacity: DIM }
+    ], { duration: APPEAR_DUR, easing: 'ease-out', fill: 'forwards' }));
+    track(figWrap.animate([
+      { transform: 'rotate(' + LIE + 'deg)', offset: 0 },
+      { transform: 'rotate(' + STEP1 + 'deg)', offset: 0.35 },
+      { transform: 'rotate(' + OVERSHOOT + 'deg)', offset: 0.65 },
+      { transform: 'rotate(0deg)', offset: 1 }
+    ], { duration: JERK_DUR, delay: JERK_DELAY, fill: 'forwards' }));
+    track(figWrap.animate([
+      { opacity: DIM }, { opacity: 1 }
+    ], { duration: JERK_DUR, delay: JERK_DELAY, fill: 'forwards' }));
+    [glintL, glintR].forEach(function (el) {
+      track(el.animate([
+        { opacity: 0 }, { opacity: 1 }
+      ], { duration: EYES_DUR, delay: EYES_DELAY, fill: 'forwards' }));
+    });
+    track(figWrap.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: FADE_DUR, delay: FADE_DELAY, easing: 'ease-in', fill: 'forwards' }));
+
+    reanimateWrap.__waapiAnims = anims;
+
+    // Natural completion removes reanimateWrap only once EVERY animation has settled (rule
+    // 5). destroyBeacon() still removes reanimateWrap synchronously on cancel, cancelling
+    // every entry in __waapiAnims regardless of this promise -- same idiom
+    // animateTentacleRise's own removeRiseWrap() uses.
+    function removeReanimateWrap() { reanimateWrap.remove(); }
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeReanimateWrap);
   }
 
   function animateLightning(rect) {
