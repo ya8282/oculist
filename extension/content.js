@@ -9096,6 +9096,13 @@
       var activeTermValue = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
         ? workListTerms[activeTermIndex]
         : null;
+      // Draft check (oculist-l6m.19): performListSearch()/addChipTerm()/activateChip()
+      // always alias searchRanges to termRanges[activeTermIndex] itself — only a real
+      // performDraftSearch() builds searchRanges fresh, breaking that identity.
+      var oldWorkListTerms = workListTerms;
+      var oldTermRanges = termRanges;
+      var oldTermStarved = termStarved;
+      var draftActive = !!input.value && searchRanges !== oldTermRanges[activeTermIndex];
       var restoredTerms = list.terms.slice();
       var addedSinceMount = workListTerms.filter(function (t) {
         return restoredTerms.indexOf(t) === -1;
@@ -9104,7 +9111,29 @@
       // already sees and is acting on their own chips this mount; a restored term they've
       // never seen yet is the one that should give way when both sides can't fit.
       var keepRestored = Math.max(0, MAX_LIST_TERMS - addedSinceMount.length);
-      var mergedTerms = restoredTerms.slice(0, keepRestored).concat(addedSinceMount);
+      var trimmedRestored;
+      if (restoredTerms.length <= keepRestored) {
+        trimmedRestored = restoredTerms;
+      } else {
+        // A restored term whose value the user also typed this mount is deduped into
+        // addChipTerm()'s existing chip, not addedSinceMount — keep it regardless of
+        // position; cut only terms with no matching user term (oculist-fqti).
+        var protectedCount = restoredTerms.filter(function (t) {
+          return workListTerms.indexOf(t) !== -1;
+        }).length;
+        var unprotectedBudget = keepRestored - protectedCount;
+        trimmedRestored = [];
+        for (var ri = 0; ri < restoredTerms.length; ri++) {
+          var rt = restoredTerms[ri];
+          if (workListTerms.indexOf(rt) !== -1) {
+            trimmedRestored.push(rt);
+          } else if (unprotectedBudget > 0) {
+            trimmedRestored.push(rt);
+            unprotectedBudget--;
+          }
+        }
+      }
+      var mergedTerms = trimmedRestored.concat(addedSinceMount);
 
       workListTerms = mergedTerms;
       if (activeTermValue !== null && mergedTerms.indexOf(activeTermValue) !== -1) {
@@ -9114,7 +9143,35 @@
           ? list.activeIndex
           : -1;
       }
-      performListSearch();
+
+      if (!draftActive) {
+        // Preserve a next-match position the same way rescanAfterMutation() already does
+        // for a background DOM rescan: a plain performListSearch() call always resets
+        // activeIndex to -1, which would otherwise roll a pressed next-match back to 0.
+        var previousActiveIndex = activeIndex;
+        performListSearch();
+        if (previousActiveIndex >= 0 && searchRanges.length > 0) {
+          activeIndex = Math.min(previousActiveIndex, searchRanges.length - 1);
+          firstEnter = false;
+          highlightActiveRange(false, true);
+        }
+      } else {
+        // A draft owns the highlight — skip the rescan so it survives; the next natural
+        // trigger picks the merged terms up. Still realign termRanges/termStarved by term
+        // value so a scanned term doesn't inherit another term's stale slot (oculist-fqti).
+        var remappedRanges = new Array(mergedTerms.length);
+        var remappedStarved = new Array(mergedTerms.length);
+        for (var mi = 0; mi < mergedTerms.length; mi++) {
+          var oldIdx = oldWorkListTerms.indexOf(mergedTerms[mi]);
+          if (oldIdx !== -1) {
+            remappedRanges[mi] = oldTermRanges[oldIdx];
+            remappedStarved[mi] = oldTermStarved[oldIdx];
+          }
+        }
+        termRanges = remappedRanges;
+        termStarved = remappedStarved;
+        renderChipRow();
+      }
       persistWorkList();
     });
   }
