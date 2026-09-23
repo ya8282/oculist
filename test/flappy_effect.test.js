@@ -414,10 +414,16 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     // tangent at landing -- content.js's own comment on the ease-out correction term),
     // not a formula bug. So the ratio itself is what's size-invariant, and is asserted
     // against Beacon Size m's own ratio (computed at runtime, not hardcoded) with a
-    // generous relative tolerance for run-to-run integration noise -- still tight
-    // enough to catch the landing-offset regression this bead's own neighbouring
-    // comment describes fixing (an unscaled half-height once put the bottom edge at
-    // y=374/392 instead of 362 on a 359-377 match at L/XL, many times this ratio).
+    // relative tolerance for run-to-run integration noise -- still tight enough to catch
+    // the landing-offset regression this bead's own neighbouring comment describes fixing
+    // (an unscaled half-height once put the bottom edge at y=374/392 instead of 362 on a
+    // 359-377 match at L/XL, many times this ratio). oculist-vqq1: this suite's own l/xl
+    // relative drift came out 0.34%/0.82% (normal) and 0.34%/0.83% (mirrored), identical
+    // across 8 runs (5 solo, 3 alongside the rest of this file at
+    // --test-concurrency=2) since every geometry read here comes from a WAAPI animation
+    // paused and seeked to a fixed CONTACT_T, not a live timing race -- 0.15 (15%) still
+    // leaves ~18x headroom over that measured drift for any real cross-machine/browser-
+    // version noise, while cutting the tolerated extra XL drop from ~5px to ~1.5px.
     //
     // Painted intrusion grew with size but stayed under 2x the M figure in both
     // directions (1.48x normal, 1.80x mirrored) -- the same <=2x factor
@@ -426,8 +432,21 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     // growth is expected, but it must not balloon with beaconScale the way an unpinned
     // depth would.
     const SCALE_TOLERANCE = 0.1; // wrapHeight/m's own wrapHeight vs the nominal 1.5/2.25 multiplier
-    const RATIO_TOLERANCE = 0.5; // L/XL's own overlap ratio vs m's own ratio
+    const RATIO_TOLERANCE = 0.15; // L/XL's own overlap ratio vs m's own ratio (oculist-vqq1: tightened from 0.5, see comment above)
     const PAINT_TOLERANCE = 2; // painted intrusion vs the m figure
+
+    // Tracks the last beaconSize actually written, so the finally below can skip its own
+    // reset when we're already at 'm' -- chrome.storage.sync only fires onChanged on a
+    // genuine value change (the "pack enumeration" test documents the same gotcha, and the
+    // xl-already-set comment a few lines down relies on it too), so re-writing 'm' while
+    // already at 'm' hangs setVisionSettings()'s echo-wait for the full POLL_TIMEOUT. That
+    // matters here because an assertion failure inside the try below can itself leave
+    // beaconSize at 'm' (the sanity check right after the write two lines down, for
+    // instance) -- an unconditional reset in finally would then swallow the real assertion
+    // error under a 15s "never echoed" timeout thrown while unwinding (oculist-vqq1: measured
+    // by doubling content.js's own SPRITE_H*beaconScale half-height term, which fails that
+    // sanity check and reproduces exactly this mask).
+    let currentBeaconSize = null;
 
     let decodePage;
     try {
@@ -437,6 +456,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
         await page.mouse.move(mousePos.x, mousePos.y);
 
         await setVisionSettings({ beaconSize: 'm' });
+        currentBeaconSize = 'm';
         const mGeom = await landedGeom();
         const mPainted = await paintedIntrusionPx(decodePage);
         const mRatio = (mGeom.wrapBottom - mGeom.targetTop - 3) / mGeom.wrapHeight;
@@ -447,6 +467,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
 
         for (const [size, scale] of [['l', 1.5], ['xl', 2.25]]) {
           await setVisionSettings({ beaconSize: size });
+          currentBeaconSize = size;
           const geom = await landedGeom();
 
           const heightRatio = geom.wrapHeight / mGeom.wrapHeight;
@@ -469,12 +490,16 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
         const xlPainted = await paintedIntrusionPx(decodePage);
         assert.ok(
           xlPainted <= mPainted * PAINT_TOLERANCE,
-          `at Beacon Size xl (${mousePos.mode}), the painted intrusion into the match's own rect (${xlPainted}px) must stay near the Beacon Size m figure (${mPainted}px), i.e. <= ${PAINT_TOLERANCE}x it -- it would otherwise be genuinely painting over the match's glyphs`
+          `at Beacon Size xl (${mousePos.mode}), the painted intrusion into the match's own rect (${xlPainted}px) must stay near the Beacon Size m figure (${mPainted}px), i.e. <= ${PAINT_TOLERANCE}x it -- this counts every changed pixel in the match's own rect (mostly background above the letters, not glyph ink), so exceeding it means the sprite is covering disproportionately more of that rect than its own scale explains`
         );
       }
     } finally {
       if (decodePage) await decodePage.close();
-      await setVisionSettings({ beaconSize: 'm' });
+      // Skip the reset when we're already at 'm' -- see currentBeaconSize's own comment
+      // above the try block.
+      if (currentBeaconSize !== 'm') {
+        await setVisionSettings({ beaconSize: 'm' });
+      }
       await page.mouse.move(200, 120);
       // No explicit scrollTo(0, 0) here, unlike the document-space correctness test
       // above -- every replay()/paintedIntrusionPx() call already fired the finder's
