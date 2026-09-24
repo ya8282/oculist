@@ -9,6 +9,13 @@ below the 1.5.0 heading is what landed across that span.
 
 ### Added
 
+* **Effect packs.** Effects now come in optional packs on top of the twelve core effects that
+  ship with Oculist directly, switched on and off individually from a new pack toggle list in
+  the settings panel. Turning a pack on folds its effects straight into the effect picker, no
+  reload needed. A one-time dismissible notice under the find bar points you to the settings
+  panel when a pack is available that you have not switched on. **Halloween is the first pack**, and it ships turned on by default and
+  free for both new installs and everyone already running Oculist — nothing to buy or opt into
+  to see it, though it switches off the same way as any other pack.
 * **Speed Lines.** A new effect that fires horizontal light streaks blasting outward from the
   match; the streak hue rides your beacon colour.
 * **Chrono Tunnel.** A new effect with kaleidoscopic rings rushing outward in a slit-scan smear;

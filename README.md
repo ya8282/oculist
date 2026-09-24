@@ -35,6 +35,13 @@ Oculist features a comprehensive suite of vision-specific enhancements to suppor
 * **Lock Override Protection:** Activating an accessibility profile injects a lock overlay in the settings popup to protect users against accidental overrides of accessibility parameters.
 * **WCAG 2.1 AA Certified:** Fully keyboard navigable (with clear `:focus-visible` states), screen-reader friendly (using explicit ARIA labels), and compliant with text contrast ratios.
 
+## Effect Packs (since v1.7.0)
+
+Oculist ships with twelve core effects plus effect packs, switched on and off individually from
+the settings panel. The Halloween pack is the first pack — it comes preloaded, free, and on by
+default, for new installs and existing users alike. Turn a pack off from the settings panel if
+you'd rather stick to the core effects; you can turn it back on the same way.
+
 ## Reliability & Performance Features (since v1.5.0)
 
 * **MutationObserver Infinite-Scroll Scanning:** Listens for DOM changes and dynamically re-scans match collections when virtual feeds (like Reddit or Twitter) swap text nodes, ensuring highlights never vanish.
