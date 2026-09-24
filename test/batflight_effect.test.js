@@ -1,4 +1,4 @@
-// Bat Flight beacon effect (oculist-nq1x.9): promotes fxBatFlight (artifacts/prototypes/
+// Vampire Bat beacon effect (oculist-nq1x.9): promotes fxBatFlight (artifacts/prototypes/
 // effects-playground.html) into extension/content.js as the eighth entry in the Halloween
 // pack. A bat flies in along an erratic weave, vanishes into a rising mist column, and a
 // cloaked head-and-shoulders figure fades in beside the match (right by default, left if
@@ -87,7 +87,7 @@ const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
 const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
 const BATFLIGHT_EFFECT_ROW = '#oc-wrap >> [data-oc-key="effect:batflight"]';
 
-describe('Bat Flight: a bat flies in, vanishes into a mist column, and a cloaked figure fades in beside (or above/below) the match', () => {
+describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloaked figure fades in beside (or above/below) the match', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   before(async () => {
