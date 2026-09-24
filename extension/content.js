@@ -13409,9 +13409,19 @@
         '  flex-shrink: 0;',
         '  transition: background-color 120ms, opacity 120ms, color 120ms;',
         '}',
+        // oculist-nlp8: the generic 'button:hover' rule above applies transform: scale(1.05)
+        // to every <button>, including this one — .oc-radio-item is a full-width row
+        // (width: 100%) inside .oc-radio-list, a scrolling container (overflow-y: auto,
+        // which per the CSS overflow spec makes the unset overflow-x compute to auto too).
+        // Scaling a full-width row up on hover pushed its painted box past the list's right
+        // edge, growing scrollWidth past clientWidth and popping a horizontal scrollbar for
+        // as long as the pointer stayed over any row. Pinning transform: none here reserves
+        // the same box in both states — hover feedback still comes through via
+        // background/opacity above, just without the growth.
         '.oc-radio-item:hover {',
         '  background: var(--oc-btn-hover-bg);',
         '  opacity: 1;',
+        '  transform: none;',
         '}',
         '.oc-radio-item.active {',
         '  color: var(--oc-accent);',
@@ -13447,7 +13457,7 @@
         '  flex-shrink: 0;',
         '}',
         // oculist-tdj.2: same capped-scroll idiom as .oc-radio-list (oculist-dvt.5) —
-        // this list is empty today (see knownPacks()) so it renders zero rows, but a
+        // this list renders one row per known pack (see knownPacks()), and a
         // future pack list should not be able to regrow the whole-panel overflow problem
         // .oc-radio-list already had to fix once.
         '.oc-checkbox-list {',
@@ -13480,9 +13490,13 @@
         '  flex-shrink: 0;',
         '  transition: background-color 120ms, opacity 120ms, color 120ms;',
         '}',
+        // oculist-nlp8: same fix, same cause as .oc-radio-item:hover above — this is the
+        // Packs checkbox list's full-width row, in a scrolling .oc-checkbox-list container,
+        // hit by the same generic 'button:hover' transform: scale(1.05).
         '.oc-checkbox-item:hover {',
         '  background: var(--oc-btn-hover-bg);',
         '  opacity: 1;',
+        '  transform: none;',
         '}',
         '.oc-checkbox-item.active {',
         '  color: var(--oc-accent);',
