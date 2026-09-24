@@ -4787,11 +4787,13 @@
   // G4 FLICKER GATE (WCAG 2.3.1, the photosensitive general flash threshold): the jolt is a
   // luminance change, so this is the one gate this effect can fail. There are exactly TWO
   // opacity pulses in the ENTIRE clip (ARC1 and ARC2 below), never more, and durFactor (rule
-  // 6) multiplies every one of ARC1_DELAY/ARC1_DUR/ARC2_DELAY/ARC2_DUR by the SAME factor,
-  // so the pulse COUNT never changes at any Animation Speed the user can pick -- only the
-  // wall-clock window they fall inside shrinks or grows. Two flashes total, anywhere in that
-  // window, is under the "no more than three flashes in any one-second period" threshold by
-  // construction, at every speed setting, without needing a per-window sampling proof.
+  // 6) scales ARC1_DELAY/ARC1_DUR/ARC2_DUR directly and ARC2_DELAY by the same factor floored
+  // against a fixed 350ms onset-to-onset minimum (oculist-kkwz), so the pulse COUNT never
+  // changes at any Animation Speed the user can pick -- only the wall-clock window they fall
+  // inside shrinks or grows (never below the 350ms floor). Two flashes total, anywhere in
+  // that window, is under the "no more than three flashes in any one-second period"
+  // threshold by construction, at every speed setting, without needing a per-window sampling
+  // proof.
   //
   // Fixed identity palette (the promotion contract's own license, "the pumpkin's orange"):
   // no neighbouring shipped character effect has set an accessibility-accent precedent that
@@ -5078,14 +5080,22 @@
 
     // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, so
     // relative timing (and the total flash count, see this function's own header comment)
-    // is preserved exactly, matching animateTentacleRise's own `raw * durFactor` idiom. ──
+    // is preserved exactly, matching animateTentacleRise's own `raw * durFactor` idiom, with
+    // one exception: ARC2_DELAY is also floored against a fixed 350ms onset spacing (see the
+    // comment just above it, oculist-kkwz). ──
     var APPEAR_DUR = 180 * durFactor;
     var DIM = 0.55;
-    // Two pulses only, spaced >=350ms apart (measured end-of-first to start-of-second) --
-    // the photosensitive-flicker gate (WCAG 2.3.1) this function's own header comment calls
-    // out by number.
+    // Two pulses only, spaced >=350ms apart onset-to-onset -- the photosensitive-flicker
+    // gate (WCAG 2.3.1) this function's own header comment calls out by number, and the
+    // >=350ms floor oculist-4v2u measured at normal speed. durFactor scales the raw 500ms
+    // onset spacing directly (rule 6), which is fine at normal (500ms) and slow (875ms) but
+    // undercuts the floor at fast (250ms) -- oculist-kkwz. Math.max floors ONLY the spacing
+    // that sets ARC2_DELAY; it is a no-op at durFactor >= 0.7 (500 * durFactor >= 350), so
+    // normal/slow are byte-for-byte unchanged, and at fast it pushes ARC2_DELAY (and every
+    // delay downstream of it: JERK_DELAY/EYES_DELAY/FADE_DELAY/DUR) later by exactly the
+    // 100ms the floor requires, rather than rescaling the whole clip.
     var ARC1_DELAY = 400 * durFactor, ARC1_DUR = 140 * durFactor;
-    var ARC2_DELAY = 900 * durFactor, ARC2_DUR = 140 * durFactor;
+    var ARC2_DELAY = ARC1_DELAY + Math.max(500 * durFactor, 350), ARC2_DUR = 140 * durFactor;
     var JERK_DELAY = ARC2_DELAY + ARC2_DUR + 150 * durFactor;
     var JERK_DUR = 320 * durFactor;
     var EYES_DELAY = JERK_DELAY + JERK_DUR - 60 * durFactor;
