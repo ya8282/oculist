@@ -4934,7 +4934,16 @@
       'left:' + window.scrollX + 'px', 'top:' + window.scrollY + 'px',
       'width:' + vw + 'px', 'height:' + vh + 'px',
       'pointer-events:none',
-      'z-index:2147483642'
+      'z-index:2147483642',
+      // oculist-mjv1: the degenerate placement fallback can land figLeft/elecLeft past
+      // vw (REACH_OUTWARD only guarantees the near/inward edge stays clear of #match, never
+      // that the far/outward edge fits inside the viewport). Without this, that overflow
+      // grows document.scrollWidth for the effect's whole lifetime and briefly gives the
+      // page a horizontal scrollbar. reanimateWrap already has an explicit vw x vh box (not
+      // 100%), so overflow:hidden clips the excess without the wrapper itself growing --
+      // same idiom animateLightning's/animateElectronCloud's own full-viewport container
+      // uses.
+      'overflow:hidden'
     ].join(';');
     document.documentElement.appendChild(reanimateWrap);
 

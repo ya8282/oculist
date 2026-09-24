@@ -551,6 +551,117 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
     }
   });
 
+  test('degenerate fallback at Beacon Size XL in a 320px viewport (oculist-mjv1): document.documentElement.scrollWidth never grows past its pre-fire baseline for the whole run, and the match still stays uncovered', async () => {
+    await switchToTarget('degenerateTarget')();
+    await page.setViewportSize({ width: 320, height: 900 });
+    // Same debounce wait as the sibling degenerate-fallback test above (oculist-f7vx).
+    await page.waitForTimeout(200);
+    let sizedXl = false;
+    let hidLeftFallback = false;
+    try {
+      // #leftFallbackTarget's own div (margin-left:1000px) is a permanent fixture of this
+      // page, always contributing its own unrelated horizontal overflow -- at a 320px
+      // viewport that swamps anything this effect could add, which would make a
+      // scrollWidth assertion vacuously pass regardless of whether the fix works. Hidden
+      // here (restored in `finally`) so the only horizontal overflow left to observe is
+      // #degenerateTarget's own known ~382px rendered width (this fixture's own documented
+      // "match wider than the viewport" technique) plus whatever the effect itself adds.
+      await page.evaluate(() => {
+        const el = document.getElementById('leftFallbackTarget');
+        if (el && el.parentElement) el.parentElement.style.display = 'none';
+      });
+      hidLeftFallback = true;
+
+      await scrollTargetTo('degenerateTarget', 100);
+      await setVisionSettings({ beaconSize: 'xl' });
+      sizedXl = true;
+      const before = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
+
+      // Baseline BEFORE firing, at this exact scroll/viewport/Beacon-Size state: the
+      // match itself (#degenerateTarget, this fixture's own "match wider than the
+      // viewport" technique -- see the PAGE fixture's own comment) already renders past
+      // 320px, so scrollWidth is never simply the 320px viewport width -- what this test
+      // actually proves is that the EFFECT'S OWN paint adds no further growth on top of
+      // whatever the page already measured before it fired.
+      const baselineScrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+
+      const measured = await measure('degenerateTarget');
+      // beaconScale=2.25 (XL) matches getBeaconDuration/getBeaconScale's own 'xl' factor
+      // (content.js) -- the figure is even bigger than the beaconScale=1 case the sibling
+      // test above proves degenerate, so this must stay degenerate too.
+      const predicted = predict(measured, 2.25);
+      assert.strictEqual(predicted.sideRightFits, false, 'sanity check: the right side must NOT fit at XL in this scenario');
+      assert.strictEqual(predicted.sideLeftFits, false, 'sanity check: the left side must NOT fit either at XL -- this must be the genuinely degenerate case');
+      assert.strictEqual(predicted.landingSide, 'right', 'sanity check: the fallback formula itself defaults to the right side');
+
+      // Samples document.documentElement.scrollWidth on every animation frame from the
+      // moment the transient wrapper mounts until it naturally removes itself -- not a
+      // single snapshot -- because REACH_OUTWARD (and therefore figLeft/elecLeft) is a
+      // static value fixed at mount time, so any overflow it causes is present for the
+      // effect's ENTIRE lifetime, not just at one instant (oculist-mjv1).
+      const scrollWidthSamplesPromise = page.evaluate(() => new Promise((resolve) => {
+        const samples = [];
+        function waitMount() {
+          if (document.querySelector('.oc-beacon-transient[data-reanimate]')) {
+            sampleLoop();
+          } else {
+            requestAnimationFrame(waitMount);
+          }
+        }
+        function sampleLoop() {
+          samples.push(document.documentElement.scrollWidth);
+          if (document.querySelector('.oc-beacon-transient[data-reanimate]')) {
+            requestAnimationFrame(sampleLoop);
+          } else {
+            resolve(samples);
+          }
+        }
+        waitMount();
+      }));
+
+      const result = await replay(() => {
+        const root = document.querySelector('.oc-beacon-transient[data-reanimate]');
+        if (!root) return null;
+        const figWrap = root.querySelector('[data-rj-figwrap]');
+        const elecWrap = root.querySelector('[data-rj-elecwrap]');
+        if (!figWrap || !elecWrap) return null;
+        const r = document.getElementById('degenerateTarget').getBoundingClientRect();
+        const figRect = figWrap.getBoundingClientRect();
+        const elecRect = elecWrap.getBoundingClientRect();
+        return {
+          fireLeft: r.left, fireRight: r.right,
+          side: figWrap.getAttribute('data-rj-side'),
+          figLeft: figRect.left, elecLeft: elecRect.left,
+        };
+      });
+      assert.ok(result, 'expected a mounted reanimate wrapper even in the degenerate case at XL');
+      assert.strictEqual(result.side, 'right', 'the degenerate fallback lands on the right at XL too, as content.js\'s own formula defaults');
+      assert.ok(result.figLeft >= result.fireRight - 1, `figure must not occlude #match even in the degenerate case at XL, got figLeft=${result.figLeft} vs match.right=${result.fireRight}`);
+      assert.ok(result.elecLeft >= result.fireRight - 1, `electrode posts must not occlude #match even in the degenerate case at XL, got elecLeft=${result.elecLeft} vs match.right=${result.fireRight}`);
+
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+
+      const scrollWidthSamples = await scrollWidthSamplesPromise;
+      assert.ok(scrollWidthSamples.length > 3, `expected several scrollWidth samples across the run, got ${scrollWidthSamples.length}`);
+      const maxScrollWidth = Math.max.apply(null, scrollWidthSamples);
+      assert.strictEqual(maxScrollWidth, baselineScrollWidth, `document.documentElement.scrollWidth must never grow beyond its pre-fire baseline (${baselineScrollWidth}px) for the whole Reanimation Jolt run at Beacon Size XL -- the effect's own figure must not widen the page any further, got a peak of ${maxScrollWidth} (samples: ${scrollWidthSamples.join(',')})`);
+
+      const after = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
+      assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even in the degenerate case at XL');
+    } finally {
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      if (hidLeftFallback) {
+        await page.evaluate(() => {
+          const el = document.getElementById('leftFallbackTarget');
+          if (el && el.parentElement) el.parentElement.style.display = '';
+        });
+      }
+      if (sizedXl) await setVisionSettings({ beaconSize: 'm' });
+      await page.setViewportSize(VIEWPORT);
+      await switchToTarget('target')();
+    }
+  });
+
   test('forearm legibility at the smallest Beacon Size (oculist-1ta.22/oculist-20qz): both forearms render with real, non-vanishing screen-space area at the shipped 28px floor (40px x 0.7 beaconScale), not just at playground size', async () => {
     // "Re-check them at the shipped getBeaconScale() range, not at playground size --
     // this defect class returns quietly" (oculist-nq1x.8's own effect-specific note).
