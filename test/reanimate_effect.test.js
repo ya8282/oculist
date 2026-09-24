@@ -732,6 +732,44 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
     }
   });
 
+  test('G4 arc pulse spacing (oculist-kkwz): the two arc-core pulses stay >=350ms apart onset-to-onset at every Animation Speed, even fast where durFactor alone would undercut it', async () => {
+    async function onsetSpacingMs() {
+      await replay();
+      const delays = await page.evaluate(() => {
+        const core = document.querySelector('[data-rj-part="arc-core"]');
+        return core
+          ? core.getAnimations().map((a) => a.effect.getComputedTiming().delay).sort((a, b) => a - b)
+          : [];
+      });
+      assert.strictEqual(delays.length, 2, `expected 2 pulse animations on the arc core, got ${delays.length}`);
+      return delays[1] - delays[0];
+    }
+
+    await scrollTargetTo('target', 200);
+    let currentSpeed = 'normal';
+    try {
+      const normalSpacing = await onsetSpacingMs();
+      assert.ok(
+        Math.abs(normalSpacing - 500) <= 1,
+        `normal speed onset spacing must stay unchanged at 500ms, got ${normalSpacing}`
+      );
+
+      currentSpeed = 'fast';
+      await setVisionSettings({ animationSpeed: 'fast' });
+      const fastSpacing = await onsetSpacingMs();
+      assert.ok(
+        fastSpacing >= 350,
+        `Animation Speed fast: onset spacing must be floored at >=350ms (oculist-4v2u's normal-speed margin), got ${fastSpacing}ms`
+      );
+    } finally {
+      if (currentSpeed !== 'normal') {
+        await setVisionSettings({ animationSpeed: 'normal' });
+      }
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+    }
+  });
+
   test('cancellation mid-animation: no .oc-beacon-transient nodes survive, and every WAAPI animation on every element is actually canceled', async () => {
     await scrollTargetTo('target', 200);
     // Folds the presence check AND the animation-collection into replay()'s own predicate
@@ -862,16 +900,26 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
         await setVisionSettings({ animationSpeed: speed });
         const timings = await renderedTimings();
         assert.strictEqual(timings.length, base.length, `Animation Speed ${speed}: expected the same ${base.length} animations`);
+        // oculist-kkwz: ARC2_DELAY (normal-speed base delay 900ms, the second arc pulse) is
+        // floored at a fixed 350ms onset spacing past ARC1_DELAY rather than pure durFactor
+        // scaling, so every delay from ARC2 onward (the second pulse itself, the jerk-rotate,
+        // eyes and fade-out that all key off it) picks up the same shift once the floor
+        // engages -- 0 at every factor that already clears 350ms (normal, slow), 100ms at
+        // fast. Mirrors content.js's own `Math.max(500 * durFactor, 350)` exactly (duplicated
+        // here on purpose, the same "known-good formula in the test" idiom this suite's own
+        // predict() uses above).
+        const arc2FloorShift = Math.max(500 * factor, 350) - 500 * factor;
         timings.forEach((t, i) => {
+          const delayShift = base[i].delay >= 900 ? arc2FloorShift : 0;
           const expectedDuration = base[i].duration * factor;
-          const expectedDelay = base[i].delay * factor;
+          const expectedDelay = base[i].delay * factor + delayShift;
           assert.ok(
             Math.abs(t.duration - expectedDuration) <= 1,
             `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base[i].duration}ms x ${factor}), got ${t.duration}ms`
           );
           assert.ok(
             Math.abs(t.delay - expectedDelay) <= 1,
-            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor}), got ${t.delay}ms`
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor} + ${delayShift}ms floor shift), got ${t.delay}ms`
           );
         });
       }
