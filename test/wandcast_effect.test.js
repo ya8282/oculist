@@ -319,6 +319,18 @@ describe('Wand Cast: an amber fairy lands beside the match, casts, and launches 
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
   }
 
+  // Content scripts run in an isolated JS world -- a listener content.js adds via
+  // window.addEventListener() is invisible to DOMDebugger.getEventListeners when queried off a
+  // main-world objectId for `window` (verified directly by the sibling suites: an isolated-
+  // world-added listener reads back as 0 through a main-world handle). The objectId has to come
+  // from Runtime.evaluate('window', ...) IN the isolated context itself for getEventListeners
+  // to see it.
+  async function countWindowResizeListeners() {
+    const windowObj = await client.send('Runtime.evaluate', { expression: 'window', returnByValue: false, contextId: isolatedContextId });
+    const { listeners } = await client.send('DOMDebugger.getEventListeners', { objectId: windowObj.result.objectId });
+    return listeners.filter((l) => l.type === 'resize').length;
+  }
+
   // Mirrors content.js's own animateWandCast() figure-placement/suppression formula verbatim
   // (measured and derived exactly the same way, not hand-picked -- the same duplication-in-the-
   // test idiom the sibling suites' own predict() functions use). Used only to PREDICT the
@@ -1041,6 +1053,34 @@ describe('Wand Cast: an amber fairy lands beside the match, casts, and launches 
     // No cancelBeacons() call here -- a genuine leak surfaces as this wait's own TimeoutError.
     // DUR is 1960ms; POLL_TIMEOUT comfortably covers it.
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+  });
+
+  test('resize listener leak: the window resize listener hardCutBackWrap() registers is removed after natural completion, and after a cancel -- not just when a resize actually fires', async () => {
+    await scrollTargetTo('target', 200);
+    const baseline = await countWindowResizeListeners();
+
+    // Natural completion: no resize ever fires, so { once: true } alone never removes the
+    // listener -- only the Promise.allSettled(...).then() cleanup does.
+    const mounted1 = await replay();
+    assert.ok(mounted1, 'sanity check: the effect must actually mount');
+    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+    const afterNatural = await countWindowResizeListeners();
+    assert.strictEqual(
+      afterNatural, baseline,
+      `resize listener count must return to baseline (${baseline}) after natural completion with no resize firing, got ${afterNatural}`
+    );
+
+    // Cancel mid-animation: destroyBeacon() cancels every __waapiAnims entry, including
+    // backWrap's, which settles the cleanup promise immediately -- the listener must come down
+    // here too, not just on the natural-completion path above.
+    const mounted2 = await replay();
+    assert.ok(mounted2, 'sanity check: the effect must actually mount');
+    await clearBeacons();
+    const afterCancel = await countWindowResizeListeners();
+    assert.strictEqual(
+      afterCancel, baseline,
+      `resize listener count must return to baseline (${baseline}) after a cancel, got ${afterCancel}`
+    );
   });
 
   test('Lite Mode, set for real through chrome.storage.sync: a no-op -- same rendered geometry and the same animation count in both modes', async () => {

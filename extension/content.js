@@ -6186,15 +6186,25 @@
     // debounce (overlayResizeTimer), which a dragged edge keeps re-arming on every event. Cancel
     // backWrap's own animations and remove it immediately on the first resize, ahead of that
     // debounce, so the ghosts can never paint through a hole that no longer matches #match.
-    // { once: true }: after firing (or after a later resize finds backWrap already detached by
-    // the normal cancel/complete path below -- a harmless no-op), the listener self-removes; it
-    // never outlives this one beacon run.
     function hardCutBackWrap() {
+      window.removeEventListener('resize', hardCutBackWrap);
       if (!backWrap.isConnected) return;
       backWrap.__waapiAnims.forEach(function (a) { try { a.cancel(); } catch (e) {} });
       backWrap.remove();
     }
     window.addEventListener('resize', hardCutBackWrap, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case, oculist-il11), the listener
+    // would otherwise outlive it, leaked on window forever and keeping backWrap reachable after
+    // it's already been removed. Explicitly remove it once backWrap has finished on its own
+    // (natural completion) or been cancelled (destroyBeacon() calls .cancel() on every
+    // __waapiAnims entry, which settles this promise immediately) -- this covers both paths
+    // hardCutBackWrap()'s own early removeEventListener does not reach, same technique
+    // hardCutArrowShot()/hardCutVineSwing() already use.
+    Promise.allSettled(backWrapAnims.map(function (a) { return a.finished; })).then(function () {
+      window.removeEventListener('resize', hardCutBackWrap);
+    });
 
     wrap.__waapiAnims = wrapAnims;
     Promise.allSettled(wrapAnims.map(function (a) { return a.finished; })).then(function () { wrap.remove(); });
