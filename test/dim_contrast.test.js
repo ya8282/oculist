@@ -21,7 +21,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const {
+  waitForCondition,
+  waitForContentScriptValue,
+  waitForPopupReady,
+  POLL_TIMEOUT,
+  LONG_TIMEOUT,
+} = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -360,6 +366,11 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
+    // oculist-6fhj: popup.js populates #vision-profile's value and attaches its 'change'
+    // listener only after an internal chrome.storage.sync.get() round trip resolves —
+    // reading inputValue() or selectOption() before that wiring lands races it (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
 
     // chrome.storage.onChanged never fires for a write whose value is unchanged from
     // what's already stored — a genuine case here, not just a defensive check: this file
@@ -394,6 +405,9 @@ describe('Dim treatment is gated on measured contrast, not vision profile name (
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#configure-drawer');
+    // oculist-6fhj: see setVisionProfile() above — the same wiring race applies to every
+    // control driven below.
+    await waitForPopupReady(popup);
     // #color-palette lives inside the collapsed <details> drawer — open it before trying
     // to interact with anything inside.
     await popup.evaluate(() => { document.getElementById('configure-drawer').open = true; });

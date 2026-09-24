@@ -13,7 +13,13 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const {
+  waitForCondition,
+  waitForContentScriptValue,
+  waitForPopupReady,
+  POLL_TIMEOUT,
+  LONG_TIMEOUT,
+} = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { waitForSessionAccess } = require('./helpers/session_access');
 const { waitForWorkListLoad } = require('./helpers/worklist');
@@ -246,6 +252,11 @@ describe('Dim highlight registry for inactive terms', () => {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    // oculist-6fhj: popup.js populates #toggle-lite-mode's checked state and attaches its
+    // 'change' listener only after an internal chrome.storage.sync.get() round trip
+    // resolves — reading isChecked or clicking before that wiring lands races it (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
     const checked = await popup.isChecked('#toggle-lite-mode');
     if (checked === enabled) {
       await popup.close();
@@ -594,6 +605,11 @@ describe('Dim highlight registry for inactive terms', () => {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
+    // oculist-6fhj: popup.js attaches #vision-profile's 'change' listener only after an
+    // internal chrome.storage.sync.get() round trip resolves — a selectOption() dispatched
+    // before that wiring lands has its 'change' event dropped for good (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
 
     // Not a waitForFunction-on-CSS-diff here: low-vision's colorPalette is 'default', the
     // same as the 'none' preset just asserted above, so the injected stylesheet text can be
@@ -632,6 +648,7 @@ describe('Dim highlight registry for inactive terms', () => {
     const resetPopup = await ctx.newPage();
     await resetPopup.goto(`chrome-extension://${extId}/popup.html`);
     await resetPopup.waitForSelector('#vision-profile');
+    await waitForPopupReady(resetPopup);
     await resetPopup.selectOption('#vision-profile', 'none');
     // Wait for the reset write to actually land in chrome.storage.sync before closing —
     // this context may persist across test file runs, so the write genuinely has to
