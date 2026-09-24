@@ -24,7 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForPopupReady, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -195,6 +195,11 @@ describe('OS-level media query flips refresh the injected CSS with no other user
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#configure-drawer');
+    // oculist-6fhj: popup.js attaches #vision-profile's/#color-palette's 'change'
+    // listeners only after an internal chrome.storage.sync.get() round trip resolves —
+    // selectOption() before that wiring lands has its 'change' event dropped for good
+    // (see waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
     await popup.evaluate(() => {
       document.getElementById('configure-drawer').open = true;
     });

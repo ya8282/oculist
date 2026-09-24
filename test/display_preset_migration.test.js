@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForPopupReady, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const PAGE = '<!doctype html><meta charset="utf-8"><p>alpha beta gamma</p>';
@@ -462,6 +462,11 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     pageErrors.length = 0;
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#vision-profile');
+    // oculist-6fhj: popup.js populates #vision-profile's value only after an internal
+    // chrome.storage.sync.get() round trip resolves — reading inputValue() before that
+    // lands can race the still-default value (see waitForPopupReady()'s own comment in
+    // helpers/wait.js).
+    await waitForPopupReady(popup);
 
     // The dropdown must show the migrated preset, not fall back to "None" because
     // displayPreset read as undefined.

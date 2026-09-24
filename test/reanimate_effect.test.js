@@ -499,6 +499,12 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
   test('degenerate fallback (neither side fits): an extreme narrow-viewport/wide-match scenario still lands on the right and never occludes the match', async () => {
     await switchToTarget('degenerateTarget')();
     await page.setViewportSize({ width: 320, height: 900 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo()/measure() below are just page.evaluate() reads, fast
+    // enough that without this wait the trailing repositionActiveOverlays() ->
+    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
+    // down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('degenerateTarget', 100);
       const before = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
@@ -540,6 +546,117 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.setViewportSize(VIEWPORT);
+      await switchToTarget('target')();
+    }
+  });
+
+  test('degenerate fallback at Beacon Size XL in a 320px viewport (oculist-mjv1): document.documentElement.scrollWidth never grows past its pre-fire baseline for the whole run, and the match still stays uncovered', async () => {
+    await switchToTarget('degenerateTarget')();
+    await page.setViewportSize({ width: 320, height: 900 });
+    // Same debounce wait as the sibling degenerate-fallback test above (oculist-f7vx).
+    await page.waitForTimeout(200);
+    let sizedXl = false;
+    let hidLeftFallback = false;
+    try {
+      // #leftFallbackTarget's own div (margin-left:1000px) is a permanent fixture of this
+      // page, always contributing its own unrelated horizontal overflow -- at a 320px
+      // viewport that swamps anything this effect could add, which would make a
+      // scrollWidth assertion vacuously pass regardless of whether the fix works. Hidden
+      // here (restored in `finally`) so the only horizontal overflow left to observe is
+      // #degenerateTarget's own known ~382px rendered width (this fixture's own documented
+      // "match wider than the viewport" technique) plus whatever the effect itself adds.
+      await page.evaluate(() => {
+        const el = document.getElementById('leftFallbackTarget');
+        if (el && el.parentElement) el.parentElement.style.display = 'none';
+      });
+      hidLeftFallback = true;
+
+      await scrollTargetTo('degenerateTarget', 100);
+      await setVisionSettings({ beaconSize: 'xl' });
+      sizedXl = true;
+      const before = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
+
+      // Baseline BEFORE firing, at this exact scroll/viewport/Beacon-Size state: the
+      // match itself (#degenerateTarget, this fixture's own "match wider than the
+      // viewport" technique -- see the PAGE fixture's own comment) already renders past
+      // 320px, so scrollWidth is never simply the 320px viewport width -- what this test
+      // actually proves is that the EFFECT'S OWN paint adds no further growth on top of
+      // whatever the page already measured before it fired.
+      const baselineScrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+
+      const measured = await measure('degenerateTarget');
+      // beaconScale=2.25 (XL) matches getBeaconDuration/getBeaconScale's own 'xl' factor
+      // (content.js) -- the figure is even bigger than the beaconScale=1 case the sibling
+      // test above proves degenerate, so this must stay degenerate too.
+      const predicted = predict(measured, 2.25);
+      assert.strictEqual(predicted.sideRightFits, false, 'sanity check: the right side must NOT fit at XL in this scenario');
+      assert.strictEqual(predicted.sideLeftFits, false, 'sanity check: the left side must NOT fit either at XL -- this must be the genuinely degenerate case');
+      assert.strictEqual(predicted.landingSide, 'right', 'sanity check: the fallback formula itself defaults to the right side');
+
+      // Samples document.documentElement.scrollWidth on every animation frame from the
+      // moment the transient wrapper mounts until it naturally removes itself -- not a
+      // single snapshot -- because REACH_OUTWARD (and therefore figLeft/elecLeft) is a
+      // static value fixed at mount time, so any overflow it causes is present for the
+      // effect's ENTIRE lifetime, not just at one instant (oculist-mjv1).
+      const scrollWidthSamplesPromise = page.evaluate(() => new Promise((resolve) => {
+        const samples = [];
+        function waitMount() {
+          if (document.querySelector('.oc-beacon-transient[data-reanimate]')) {
+            sampleLoop();
+          } else {
+            requestAnimationFrame(waitMount);
+          }
+        }
+        function sampleLoop() {
+          samples.push(document.documentElement.scrollWidth);
+          if (document.querySelector('.oc-beacon-transient[data-reanimate]')) {
+            requestAnimationFrame(sampleLoop);
+          } else {
+            resolve(samples);
+          }
+        }
+        waitMount();
+      }));
+
+      const result = await replay(() => {
+        const root = document.querySelector('.oc-beacon-transient[data-reanimate]');
+        if (!root) return null;
+        const figWrap = root.querySelector('[data-rj-figwrap]');
+        const elecWrap = root.querySelector('[data-rj-elecwrap]');
+        if (!figWrap || !elecWrap) return null;
+        const r = document.getElementById('degenerateTarget').getBoundingClientRect();
+        const figRect = figWrap.getBoundingClientRect();
+        const elecRect = elecWrap.getBoundingClientRect();
+        return {
+          fireLeft: r.left, fireRight: r.right,
+          side: figWrap.getAttribute('data-rj-side'),
+          figLeft: figRect.left, elecLeft: elecRect.left,
+        };
+      });
+      assert.ok(result, 'expected a mounted reanimate wrapper even in the degenerate case at XL');
+      assert.strictEqual(result.side, 'right', 'the degenerate fallback lands on the right at XL too, as content.js\'s own formula defaults');
+      assert.ok(result.figLeft >= result.fireRight - 1, `figure must not occlude #match even in the degenerate case at XL, got figLeft=${result.figLeft} vs match.right=${result.fireRight}`);
+      assert.ok(result.elecLeft >= result.fireRight - 1, `electrode posts must not occlude #match even in the degenerate case at XL, got elecLeft=${result.elecLeft} vs match.right=${result.fireRight}`);
+
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+
+      const scrollWidthSamples = await scrollWidthSamplesPromise;
+      assert.ok(scrollWidthSamples.length > 3, `expected several scrollWidth samples across the run, got ${scrollWidthSamples.length}`);
+      const maxScrollWidth = Math.max.apply(null, scrollWidthSamples);
+      assert.strictEqual(maxScrollWidth, baselineScrollWidth, `document.documentElement.scrollWidth must never grow beyond its pre-fire baseline (${baselineScrollWidth}px) for the whole Reanimation Jolt run at Beacon Size XL -- the effect's own figure must not widen the page any further, got a peak of ${maxScrollWidth} (samples: ${scrollWidthSamples.join(',')})`);
+
+      const after = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
+      assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even in the degenerate case at XL');
+    } finally {
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      if (hidLeftFallback) {
+        await page.evaluate(() => {
+          const el = document.getElementById('leftFallbackTarget');
+          if (el && el.parentElement) el.parentElement.style.display = '';
+        });
+      }
+      if (sizedXl) await setVisionSettings({ beaconSize: 'm' });
       await page.setViewportSize(VIEWPORT);
       await switchToTarget('target')();
     }
@@ -606,6 +723,44 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
         const count = await pulseCount();
         assert.strictEqual(count, 2, `Animation Speed ${speed}: pulse count must stay 2, never more or fewer, got ${count}`);
       }
+    } finally {
+      if (currentSpeed !== 'normal') {
+        await setVisionSettings({ animationSpeed: 'normal' });
+      }
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+    }
+  });
+
+  test('G4 arc pulse spacing (oculist-kkwz): the two arc-core pulses stay >=350ms apart onset-to-onset at every Animation Speed, even fast where durFactor alone would undercut it', async () => {
+    async function onsetSpacingMs() {
+      await replay();
+      const delays = await page.evaluate(() => {
+        const core = document.querySelector('[data-rj-part="arc-core"]');
+        return core
+          ? core.getAnimations().map((a) => a.effect.getComputedTiming().delay).sort((a, b) => a - b)
+          : [];
+      });
+      assert.strictEqual(delays.length, 2, `expected 2 pulse animations on the arc core, got ${delays.length}`);
+      return delays[1] - delays[0];
+    }
+
+    await scrollTargetTo('target', 200);
+    let currentSpeed = 'normal';
+    try {
+      const normalSpacing = await onsetSpacingMs();
+      assert.ok(
+        Math.abs(normalSpacing - 500) <= 1,
+        `normal speed onset spacing must stay unchanged at 500ms, got ${normalSpacing}`
+      );
+
+      currentSpeed = 'fast';
+      await setVisionSettings({ animationSpeed: 'fast' });
+      const fastSpacing = await onsetSpacingMs();
+      assert.ok(
+        fastSpacing >= 350,
+        `Animation Speed fast: onset spacing must be floored at >=350ms (oculist-4v2u's normal-speed margin), got ${fastSpacing}ms`
+      );
     } finally {
       if (currentSpeed !== 'normal') {
         await setVisionSettings({ animationSpeed: 'normal' });
@@ -745,16 +900,26 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
         await setVisionSettings({ animationSpeed: speed });
         const timings = await renderedTimings();
         assert.strictEqual(timings.length, base.length, `Animation Speed ${speed}: expected the same ${base.length} animations`);
+        // oculist-kkwz: ARC2_DELAY (normal-speed base delay 900ms, the second arc pulse) is
+        // floored at a fixed 350ms onset spacing past ARC1_DELAY rather than pure durFactor
+        // scaling, so every delay from ARC2 onward (the second pulse itself, the jerk-rotate,
+        // eyes and fade-out that all key off it) picks up the same shift once the floor
+        // engages -- 0 at every factor that already clears 350ms (normal, slow), 100ms at
+        // fast. Mirrors content.js's own `Math.max(500 * durFactor, 350)` exactly (duplicated
+        // here on purpose, the same "known-good formula in the test" idiom this suite's own
+        // predict() uses above).
+        const arc2FloorShift = Math.max(500 * factor, 350) - 500 * factor;
         timings.forEach((t, i) => {
+          const delayShift = base[i].delay >= 900 ? arc2FloorShift : 0;
           const expectedDuration = base[i].duration * factor;
-          const expectedDelay = base[i].delay * factor;
+          const expectedDelay = base[i].delay * factor + delayShift;
           assert.ok(
             Math.abs(t.duration - expectedDuration) <= 1,
             `Animation Speed ${speed}: duration[${i}] expected ~${expectedDuration}ms (base ${base[i].duration}ms x ${factor}), got ${t.duration}ms`
           );
           assert.ok(
             Math.abs(t.delay - expectedDelay) <= 1,
-            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor}), got ${t.delay}ms`
+            `Animation Speed ${speed}: delay[${i}] expected ~${expectedDelay}ms (base ${base[i].delay}ms x ${factor} + ${delayShift}ms floor shift), got ${t.delay}ms`
           );
         });
       }
@@ -769,6 +934,11 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
     await page.setViewportSize({ width: 500, height: 300 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('target', 100);
 
