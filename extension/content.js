@@ -825,6 +825,7 @@
     effectBatFlight: 'Bat Flight',
     effectWandCast: 'Wand Cast',
     effectArrowShot: 'Arrow Shot',
+    effectVineSwing: 'Vine Swing',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -946,7 +947,8 @@
     reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
     batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
     wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' },
-    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'halloween' }
+    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'halloween' },
+    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -7148,6 +7150,506 @@
     // this covers both paths hardCutArrowShot's own early removeEventListener does not reach.
     Promise.all([archerDone, arrowDone, targetDone]).then(function () {
       window.removeEventListener('resize', hardCutArrowShot);
+    });
+  }
+
+
+  // oculist-nq1x.12: promotes fxVineSwing (artifacts/prototypes/effects-playground.html:6426)
+  // into extension/content.js as the eleventh entry in the Halloween pack. A vine-swinging
+  // figure swoops in on a vine anchored off-screen above, releases near the bottom of the arc,
+  // and carries on to land beside the match on a short ballistic hop while the riderless vine
+  // swings on past and fades. RIGHTS: a generic public-domain jungle-swinger silhouette; the
+  // label names the motion, never a character (oculist-1ta.4's own DONE-CRITERIA / the epic's
+  // naming convention -- "Tarzan" is a live trademark).
+  //
+  // PLACEMENT, corrected (oculist-nq1x.12, oculist-8qrc, amended 2026-09-23): there is NO
+  // above/below decision in this effect. The vine is UNCONDITIONALLY anchored off-screen above
+  // -- PIVOT_Y starts at PIVOT_Y_BASE (above the viewport top by construction) -- there is no
+  // below option and nothing to fall back to. The only placement freedom is LEFT vs RIGHT
+  // LANDING SIDE, chosen the same "right by default, mirror left only if it doesn't fit" way
+  // animateReanimate/animateWandCast/animateTentacleRise choose theirs. When the match sits
+  // near the viewport TOP, the code does not switch sides -- it shortens the vine length L
+  // toward L_FLOOR (below which "it no longer reads as a swing") and, if that alone is not
+  // enough, pushes PIVOT_Y further off-screen, so releaseFeetY (the deepest point of the WHOLE
+  // swing arc) is clamped by construction to never exceed r.top - SAFE_MARGIN, for any r.top.
+  // oculist-1ta.4's own close reason confirms this clamp was tested and holds ("min clearance
+  // 13.86px in the near-top-of-viewport probe"). This clamp -- computed from the PRE-SCROLL
+  // viewport rect per contract rule 2, since "does the figure fit" is a viewport question even
+  // though every element below is positioned in document space -- is the first thing this
+  // file's own test asserts.
+  //
+  // RULE 9 EXCEPTION (oculist-i8zu, the same class fxArrowShot/fxWandCast/fxBatFlight already
+  // carry, see their own header comments): the shipped lastMouseX/find-bar/viewport
+  // start-point cascade animateTrail uses is deliberately NOT used here. Every geometric input
+  // to the swing -- Px (the vine's own pivot x, chosen by the side-selection math below),
+  // PIVOT_Y and L (both derived from #match's own rect and the viewport, see the clamp above)
+  // -- comes from the match's own geometry, never from the cursor or the find bar. A
+  // cursor-driven pivot would detach the vine from its own physics (theta(t) is defined about a
+  // fixed pivot) and could walk the swept arc across #match, which rule 10 forbids. Rule 9's
+  // other half -- the mirrored branch must work for real, not just compile -- still applies:
+  // the left-landing side is a genuine mirrored branch (theta0's sign, onRight, buildFigure's
+  // own mirror transform) and is tested below (the left-fallback test), not merely documented.
+  //
+  // OCCLUSION (verify the WHOLE arc, not just arrival): REACH_TOWARD/REACH_AWAY below are
+  // derived by sampling every degree of the swing's own entry sweep (theta in
+  // [-theta0Mag, 0]) against the figure's own rotating bounding corners, the same
+  // fxReanimate-derived REACH_INWARD/OUTWARD idiom animateReanimate's/animateWandCast's own
+  // header comments describe -- so the whole arc, not just the landing point, stays clear of
+  // #match. The vine itself never needs a separate sample: it is a straight segment from the
+  // pivot to the figure's own grip, strictly INSIDE the figure's own bounding-corner envelope
+  // at every sampled angle (the figure's own box always extends further from the pivot than
+  // the vine's attachment point at y=L), so the figure's own sweep bounds it too.
+  // REACH_TOWARD/REACH_AWAY are accepted as an undetectable gap by this file's own test suite
+  // (no fixture here makes the runway-based term lose to `r.right + GAP + REACH_TOWARD` --
+  // see test/vineswing_effect.test.js's own mutation-proof note on the 'normal placement'
+  // test). What actually protects #match for the WHOLE swing, independent of REACH_TOWARD's
+  // own horizontal value, is VERTICAL: releaseFeetY -- the deepest point the entire rotating
+  // arc ever reaches -- is clamped by construction (see the PLACEMENT note above) to stay at or
+  // above r.top - SAFE_MARGIN for any r.top, so the swinging figure can never descend far
+  // enough to reach #match's own row regardless of how close it swings horizontally.
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): SKIN/HAIR/SASH/
+  // CLOTH/VINE/LEAF are fixed literals, the same "no separate flash/UI-accent element" reasoning
+  // animateBatFlight's/animateWandCast's own header comments give for themselves -- there is no
+  // UI-accent element here for getEffectiveColors().beacon to drive.
+  //
+  // Lite Mode (rule 7): a no-op, the same reasoning animateWandCast's/animateBatFlight's own
+  // header comments give for themselves. There is no filter, no box-shadow and no decorative
+  // glow layer anywhere in this effect's shipped art -- the pendulum swing, the release at the
+  // bottom of the arc, and the real ballistic landing hop ARE the effect's defining beats, not
+  // decorative flicker to cut. settings.performanceMode is deliberately never read below.
+  //
+  // RESIZE, measured, load-bearing: every element below is positioned once, at fire time, from
+  // the pre-resize rect, and content.js's own handleResize() only reaches cancelBeacons() via
+  // repositionActiveOverlays() after a 100ms debounce a continuous resize drag keeps resetting
+  // -- so a reflowed #match can sit under this stale, still-mounted geometry for the whole
+  // drag. A shrinking-viewport reflow that moves #match AWAY from the landing side (see
+  // test/vineswing_effect.test.js's own 'resize mid-swing' test) shows zero delta regardless of
+  // the hard cut, because the gap between the stale figure and the match only widens -- that is
+  // not evidence of safety. The load-bearing case is a WIDENING reflow that moves #match TOWARD
+  // the fixed, fire-time landing position (the resize test's own fixture: fired at a narrower
+  // viewport, paused mid-hold, then widened, which shifts the centred #match ~40px toward the
+  // right-side landing figure): with hardCutVineSwing() below removed, that closes the gap
+  // enough for the stale, still-mounted landing figure to paint over #match's own new position
+  // -- max painted-pixel delta 206 on #match's rect, measured directly. With the hard cut in
+  // place, delta is 0. Torn down on the FIRST resize event, ahead of the debounce -- see
+  // hardCutVineSwing() below.
+  function animateVineSwing(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var r = rect; // viewport space (rule 2)
+    var mcy = r.top + r.height / 2;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Fixed screen-px geometry, unaffected by beaconScale -- same discipline animateReanimate's/
+    // animateBatFlight's own GAP comments describe for themselves. Only the figure/vine SIZES
+    // further down (figHeight, vine stroke widths, leaf size) scale directly with beaconScale.
+    var GAP = 14; // match-rect clearance floor (brief asks >=12px; a little headroom over the bare minimum, unlike fxArrowShot's STRIKE_GAP=8 cliff)
+    var SAFE_MARGIN = 12; // brief's clearance floor: the vine's deepest reach must stay this far above r.top
+    var L_FLOOR = 120; // below this the vine no longer reads as a swing -- push PIVOT_Y up instead of shortening past it
+    var DROP = 56; // visual fall distance (feet-to-feet) from release to the match's own vertical center
+    var PIVOT_Y_BASE = -70; // baseline, above the viewport top; may be pushed further up below for tight-viewport clearance
+
+    var SKIN = '#e39a52', SKIN_OUTLINE = '#572b16', SKIN_HI = '#f6bd78', SKIN_SHADE = '#b86a32';
+    var HAIR = '#21150f', HAIR_OUTLINE = '#100906';
+    var SASH = '#9d6523', SASH_HI = '#c88b38', SASH_SHADE = '#684018';
+    var CLOTH = '#6d421f', CLOTH_HI = '#9a6430', CLOTH_OUTLINE = '#160d08';
+    var VINE = '#4a7a2e', VINE_OUTLINE = '#243d16', VINE_HI = '#6ea23f';
+    var LEAF = '#5c8f34', LEAF_OUTLINE = '#2c4517', LEAF_HI = '#7fb44e';
+    var STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+
+    // ── Figure authoring grid -- used identically for the swinging figure and the
+    // post-release landing figure (identical artwork); both are nested <svg viewBox="0 0
+    // VB_W VB_H"> elements built by the same buildFigure() below. figHeight carries
+    // beaconScale (rule 6) BEFORE the placement/clearance math below is derived from it --
+    // the same "scale before computing placement" discipline animateReanimate's/
+    // animateWandCast's own figHeight comments describe.
+    var VB_W = 40, VB_H = 56;
+    var figHeight = 1.2 * Math.max(36, Math.min(48, 2.0 * r.height)) * beaconScale;
+    var figWidth = figHeight * (VB_W / VB_H);
+    var FACE_ANCHOR_Y = 16;
+
+    // Two hand-authored silhouettes in a shared 40x56 authoring grid, ported byte-for-byte
+    // from the prototype's own v2 character sheet (oculist-n8m0/oculist-38nv) -- broad
+    // regions survive the 36px floor without gradients, filters, clip ids, or a runtime
+    // raster asset.
+    function buildFigure(svg, mirrored, pose) {
+      var g = svgEl('g', {}, svg);
+      if (mirrored) g.setAttribute('transform', 'translate(' + VB_W + ',0) scale(-1,1)');
+
+      function shape(tag, attrs) { return svgEl(tag, attrs, g); }
+
+      if (pose === 'land') {
+        shape('path', { d: 'M 21 24 C 16 24 11 26 7 29 L 3 28 L 1 32 L 7 34 C 13 32 17 30 22 29 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-back' });
+        shape('path', { d: 'M 20 35 C 14 36 8 40 6 46 L 10 50 C 13 45 17 42 23 41 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-back' });
+        shape('path', { d: 'M 7 46 C 4 49 2 53 3 56 L 14 56 C 16 54 13 52 9 51 L 10 47 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'foot-back' });
+        shape('path', { d: 'M 18 22 C 22 18 28 20 32 26 L 29 36 C 26 40 19 39 15 34 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE });
+        shape('path', { d: 'M 20 21 C 25 23 28 27 30 33 L 24 38 C 22 33 19 29 15 27 Z', fill: SASH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'sash' });
+        shape('path', { d: 'M 15 34 L 30 34 L 32 40 L 22 42 L 13 45 L 12 39 Z', fill: CLOTH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.7', style: STROKE, 'data-vs-part': 'waist-cloth' });
+        shape('path', { d: 'M 14 37 L 18 35 L 17 41 L 13 43 Z', fill: CLOTH_HI });
+        shape('path', { d: 'M 25 35 C 32 35 37 39 36 44 C 35 48 31 50 28 52 L 25 49 C 29 46 31 44 29 41 L 23 40 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-front' });
+        shape('path', { d: 'M 28 49 C 27 52 27 55 29 56 L 39 56 C 40 54 37 52 33 51 L 33 49 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'foot-front' });
+        shape('path', { d: 'M 29 24 C 33 28 33 35 35 41 L 33 49 L 36 56 L 40 55 L 38 49 L 39 40 C 37 32 34 26 31 23 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-front' });
+      } else {
+        shape('path', { d: 'M 18 23 C 14 24 11 27 7 29 L 3 28 L 1 32 L 7 34 C 12 32 17 30 21 27 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-back' });
+        shape('path', { d: 'M 17 36 C 12 39 9 45 11 50 C 12 53 15 54 17 51 L 21 44 L 24 39 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-back' });
+        shape('path', { d: 'M 18 21 C 22 19 27 21 29 26 L 28 39 C 24 42 18 41 14 37 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE });
+        shape('path', { d: 'M 22 21 C 25 24 27 29 28 35 L 23 39 C 22 34 19 29 16 26 Z', fill: SASH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'sash' });
+        shape('path', { d: 'M 14 36 L 29 36 L 31 42 L 23 44 L 17 49 L 11 48 L 14 41 Z', fill: CLOTH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.7', style: STROKE, 'data-vs-part': 'waist-cloth' });
+        shape('path', { d: 'M 14 37 L 17 37 L 15 43 L 12 46 Z', fill: CLOTH_HI });
+        shape('path', { d: 'M 24 37 C 29 34 35 36 35 41 C 35 45 30 48 27 50 L 25 54 C 24 56 20 55 20 52 L 21 45 L 18 42 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-front' });
+        shape('path', { d: 'M 24 22 C 24 17 22 11 20 4 L 17 4 C 17 12 18 19 20 25 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-front' });
+        shape('path', { d: 'M 16 -3 C 18 -5 21 -4 22 -2 L 22 1 L 20 4 L 17 4 L 15 1 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'grip' });
+        shape('path', { d: 'M 17 -2 L 20 -3 L 21 -1', fill: 'none', stroke: SKIN_HI, 'stroke-width': '1.1', style: STROKE });
+      }
+
+      var headTransform = pose === 'land' ? 'translate(0,5)' : '';
+      shape('path', { d: 'M 18 9 C 14 8 11 10 12 13 L 9 15 L 13 16 L 10 19 L 16 18 C 17 22 21 24 25 22 L 29 17 L 28 11 Z', fill: HAIR, stroke: HAIR_OUTLINE, 'stroke-width': '1.7', style: STROKE, transform: headTransform, 'data-vs-part': 'hair' });
+      shape('path', { d: 'M 20 9 C 25 7 30 10 31 14 L 34 16 L 31 18 C 30 22 27 24 23 23 C 19 22 17 18 18 14 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, transform: headTransform, 'data-vs-part': 'face' });
+      shape('path', { d: 'M 19 11 C 16 9 13 9 11 11 L 14 9 L 10 9 L 15 7 L 20 8 L 24 8 L 28 11 L 25 13 L 22 11 L 20 16 L 18 14 Z', fill: HAIR, stroke: HAIR_OUTLINE, 'stroke-width': '1.5', style: STROKE, transform: headTransform });
+      shape('ellipse', { cx: '19', cy: '16', rx: '2', ry: '2.4', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1', transform: headTransform });
+      shape('path', { d: 'M 27 14 L 29 14', fill: 'none', stroke: HAIR_OUTLINE, 'stroke-width': '1.2', style: STROKE, transform: headTransform });
+      shape('path', { d: 'M 29 20 L 31 19', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1', style: STROKE, transform: headTransform });
+      shape('path', { d: pose === 'land' ? 'M 21 23 L 25 25 L 22 28 Z' : 'M 20 23 L 24 25 L 21 28 Z', fill: SASH_HI });
+      shape('path', { d: pose === 'land' ? 'M 28 33 L 31 36 L 27 39 Z' : 'M 25 34 L 28 36 L 24 39 Z', fill: SASH_SHADE });
+    }
+
+    // ── Pendulum physics, baked once at fire time (rule 1 of the effect's own brief: geometry
+    // generated once, not per-frame). theta(t) = theta0 * cos(sqrt(g/L) * t); omega/G are
+    // solved backwards from the chosen SWING_DUR (a quarter period) so a single analytic
+    // function reproduces it, and every timing constant below stays in RAW ms here -- durFactor
+    // (rule 6) is applied only to the WAAPI duration/delay values further down, never to the
+    // physics itself, so the frame SHAPE stays correct at any Animation Speed and only its
+    // playback rate changes. ──
+    var theta0Mag = 58; // degrees
+    var SWING_DUR = 820; // ms, entry -> release (raw; scaled by durFactor only at playback)
+    var omega = (Math.PI / 2) / SWING_DUR; // quarter period == SWING_DUR, so cos() reaches 0 exactly at release
+    var G = omega * omega;
+    function thetaAt(theta0, t) { return theta0 * Math.cos(Math.sqrt(G) * t); }
+
+    var PIVOT_Y = PIVOT_Y_BASE;
+    var FIG_Y_OFFSET = 0; // vine endpoint -> grip; shared with releaseFeetY so the pose swap stays pop-free
+
+    var Lraw = (mcy - DROP) - FIG_Y_OFFSET - figHeight - PIVOT_Y;
+    var L = Math.max(200, Lraw);
+
+    // Clearance clamp (oculist-1ta.4's own finding 1, re-asserted by oculist-nq1x.12/
+    // oculist-8qrc): the 200-floor clamp above can make L LONGER than the mcy-derived value
+    // ever intended when the match sits within ~230px of the viewport top -- check the single
+    // deepest point explicitly and correct it: shorten L if that alone keeps it a real swing,
+    // otherwise keep L at the swing-length floor and push the pivot further up instead. Both
+    // r.top and the clamp math below use the PRE-SCROLL viewport rect (rule 2).
+    var releaseFeetY = PIVOT_Y + L + FIG_Y_OFFSET + figHeight;
+    if (releaseFeetY > r.top - SAFE_MARGIN) {
+      var Lsafe = (r.top - SAFE_MARGIN) - PIVOT_Y - FIG_Y_OFFSET - figHeight;
+      if (Lsafe >= L_FLOOR) {
+        L = Lsafe;
+      } else {
+        L = L_FLOOR;
+        PIVOT_Y = (r.top - SAFE_MARGIN) - L - FIG_Y_OFFSET - figHeight;
+      }
+      releaseFeetY = PIVOT_Y + L + FIG_Y_OFFSET + figHeight; // recompute at the new boundary (== r.top - SAFE_MARGIN)
+    }
+
+    // REACH sampling: bounds how far the rotating figure (its own bbox corners, relative to
+    // the pivot) can reach either toward or away from the match, across the full entry sweep
+    // theta in [-theta0Mag, 0]. Mirrors animateReanimate's/animateWandCast's own REACH_INWARD/
+    // OUTWARD pattern; by mirror symmetry these two numbers are reused as-is for a left-side
+    // landing too (just applied to the opposite side).
+    var corners = [
+      [-figWidth / 2, L], [figWidth / 2, L],
+      [-figWidth / 2, L + figHeight], [figWidth / 2, L + figHeight]
+    ];
+    var minRel = 0, maxRel = 0;
+    for (var deg = -theta0Mag; deg <= 0; deg += 1) {
+      var rad = deg * Math.PI / 180, cosT = Math.cos(rad), sinT = Math.sin(rad);
+      corners.forEach(function (c) {
+        var rel = c[0] * cosT - c[1] * sinT;
+        if (rel < minRel) minRel = rel;
+        if (rel > maxRel) maxRel = rel;
+      });
+    }
+    var REACH_TOWARD = -minRel + 2; // +2 for the 1deg sampling step
+    var REACH_AWAY = maxRel + 2;
+
+    // Side selection: the exact constant-vx ballistic runway, so the clearance-bound pivot
+    // determines the final resting point, not a later speed adjustment. Prefer right, mirror
+    // left when only left fits (never above/below -- see the header comment's PLACEMENT note).
+    var FALL_DUR = 340; // ms, raw
+    var releaseRadius = L + figHeight * FACE_ANCHOR_Y / VB_H;
+    var releaseSpeed = releaseRadius * (theta0Mag * Math.PI / 180) * omega;
+    var runway = releaseSpeed * FALL_DUR;
+    var desiredRightX = r.right + GAP + figWidth / 2;
+    var rightPx = Math.max(desiredRightX + runway, r.right + GAP + REACH_TOWARD);
+    var sideRight = { x: rightPx - runway, px: rightPx, side: 'right' };
+    sideRight.fits = sideRight.x + figWidth / 2 <= vw - 4;
+    var desiredLeftX = r.left - GAP - figWidth / 2;
+    var leftPx = Math.min(desiredLeftX - runway, r.left - GAP - REACH_TOWARD);
+    var sideLeft = { x: leftPx + runway, px: leftPx, side: 'left' };
+    sideLeft.fits = sideLeft.x - figWidth / 2 >= 4;
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+    var onRight = landing.side === 'right';
+    var landingX = landing.x;
+    var Px = landing.px;
+
+    var theta0 = onRight ? -theta0Mag : theta0Mag;
+
+    // Real release velocity at theta=0 (the bottom, where this design releases): differentiating
+    // thetaAt() and evaluating at t=SWING_DUR (omega*t=pi/2) reduces to this one-line formula;
+    // the vertical velocity is exactly zero at the bottom, so the ballistic segment below starts
+    // with that same vector -- `landingX - Px` equals vxRelease*FALL_DUR exactly, so the flight
+    // inherits the pendulum's horizontal velocity without a seam.
+    var theta0Rad = theta0 * Math.PI / 180;
+    var vxRelease = releaseRadius * theta0Rad * omega; // px/ms, signed toward the landing side
+
+    // ── Shared static wrapper: DOCUMENT coordinates (rule 2), not the prototype's
+    // position:fixed. Every child below is positioned in THIS element's own local coordinate
+    // space, which starts at the viewport's top-left exactly like the prototype's fixed-
+    // position math did -- so every viewport-space offset below (Px/PIVOT_Y/L/figWidth/
+    // figHeight) ports unchanged; only this one wrapper's own left/top carry the scroll
+    // offset. Same idiom as animateReanimate's own reanimateWrap. ──
+    var vineWrap = document.createElement('div');
+    vineWrap.className = 'oc-beacon oc-beacon-transient';
+    vineWrap.setAttribute('data-vineswing', 'vine');
+    vineWrap.setAttribute('data-vineswing-side', landing.side);
+    vineWrap.setAttribute('data-vineswing-l', String(L));
+    vineWrap.setAttribute('data-vineswing-pivot-y', String(PIVOT_Y));
+    vineWrap.setAttribute('data-vineswing-release-feet-y', String(releaseFeetY));
+    vineWrap.setAttribute('data-vineswing-px', String(Px));
+    vineWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (SCROLL_X) + 'px', 'top:' + (SCROLL_Y) + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(vineWrap);
+
+    var vineAnims = [];
+    function trackVine(a) { vineAnims.push(a); return a; }
+
+    var vineSvg = svgEl('svg', {
+      width: String(vw), height: String(vh), viewBox: '0 0 ' + vw + ' ' + vh
+    }, vineWrap);
+    vineSvg.style.cssText = 'display:block;overflow:visible;';
+
+    var vineGroup = svgEl('g', {}, vineSvg);
+    vineGroup.style.cssText = 'transform-origin:' + Px + 'px ' + PIVOT_Y + 'px;transform:rotate(' + theta0 + 'deg);';
+
+    function vShape(tag, attrs) { return svgEl(tag, attrs, vineGroup); }
+
+    // Vine: outline stroke underneath, base stroke, thin highlight offset toward the
+    // upper-left (same lit-from-upper-left rule every other shape in this effect follows).
+    // Stroke widths are SIZES (rule 6), so they scale directly with beaconScale.
+    var vineD = 'M ' + Px + ' ' + PIVOT_Y + ' L ' + Px + ' ' + (PIVOT_Y + L);
+    vShape('path', { d: vineD, fill: 'none', stroke: VINE_OUTLINE, 'stroke-width': String(7 * beaconScale), style: STROKE });
+    vShape('path', { d: vineD, fill: 'none', stroke: VINE, 'stroke-width': String(4.5 * beaconScale), style: STROKE });
+    var vineHiD = 'M ' + (Px - 1) + ' ' + PIVOT_Y + ' L ' + (Px - 1) + ' ' + (PIVOT_Y + L);
+    vShape('path', { d: vineHiD, fill: 'none', stroke: VINE_HI, 'stroke-width': String(1.4 * beaconScale), style: STROKE });
+
+    // Two leaves along the vine, alternating sides.
+    [0.38, 0.72].forEach(function (frac, i) {
+      var ly = PIVOT_Y + L * frac;
+      var side = i === 0 ? 1 : -1;
+      var lx = Px + side * 9 * beaconScale;
+      var leafSpan = 6 * beaconScale;
+      var leafD = 'M ' + Px + ' ' + ly + ' L ' + lx + ' ' + (ly - leafSpan) + ' L ' + (lx + side * leafSpan) + ' ' + ly + ' L ' + lx + ' ' + (ly + leafSpan) + ' Z';
+      vShape('path', { d: leafD, fill: LEAF, stroke: LEAF_OUTLINE, 'stroke-width': String(1.4 * beaconScale), style: STROKE });
+      vShape('ellipse', { cx: String(lx), cy: String(ly - 2 * beaconScale), rx: String(2 * beaconScale), ry: String(1.4 * beaconScale), fill: LEAF_HI });
+    });
+
+    // Swinging figure -- a nested <svg> so buildFigure()'s authoring-unit grid can be reused
+    // verbatim; positioned so its own top edge (grip level) sits at the vine's lower end, in
+    // the group's local (pre-rotation) coordinates. Rotating the group therefore always
+    // carries the figure along with the vine's end -- attachment by construction.
+    // overflow:visible lets the raised-arm fist (drawn above y=0 in the 'swing' pose) render
+    // instead of being clipped by the nested <svg>'s own box.
+    var figSwingSvg = svgEl('svg', {
+      'data-vs-pose': 'swing',
+      x: String(Px - figWidth / 2), y: String(PIVOT_Y + L + FIG_Y_OFFSET),
+      width: String(figWidth), height: String(figHeight), viewBox: '0 0 ' + VB_W + ' ' + VB_H
+    }, vineGroup);
+    figSwingSvg.style.cssText = 'overflow:visible;';
+    buildFigure(figSwingSvg, !onRight, 'swing');
+
+    // ── Landing figure -- separate top-level element, identical artwork (crouched pose),
+    // hidden until release ────────────────────────────────────────────────────────────────
+    var FALL_PAD = 8; // headroom above the landing figure's own feet within its box, for the squash animation below
+    var LAND_HEAD_DROP = 5;
+    var landingPoseLift = figHeight * LAND_HEAD_DROP / VB_H;
+    var releaseLeft = Px - figWidth / 2, releaseTop = releaseFeetY - figHeight - FALL_PAD;
+
+    var fallOuter = document.createElement('div');
+    fallOuter.className = 'oc-beacon oc-beacon-transient';
+    fallOuter.setAttribute('data-vineswing', 'landing');
+    fallOuter.style.cssText = [
+      'position:absolute',
+      'left:' + (releaseLeft + SCROLL_X) + 'px', 'top:' + (releaseTop + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + (figHeight + FALL_PAD) + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(fallOuter);
+
+    var fallAnims = [];
+    function trackFall(a) { fallAnims.push(a); return a; }
+
+    var fallInner = document.createElement('div');
+    fallInner.style.cssText = 'width:100%;height:100%;transform-origin:50% 100%;';
+    fallOuter.appendChild(fallInner);
+
+    var figFallSvg = svgEl('svg', {
+      'data-vs-pose': 'land',
+      width: String(figWidth), height: String(figHeight), viewBox: '0 0 ' + VB_W + ' ' + VB_H
+    }, fallInner);
+    figFallSvg.style.cssText = 'display:block;overflow:visible;position:absolute;left:0;top:' + (FALL_PAD - landingPoseLift) + 'px;';
+    buildFigure(figFallSvg, !onRight, 'land');
+
+    // ── Timeline: every phase boundary below is computed in RAW ms (rule 6's own "phase
+    // boundaries scaling with it [durFactor] rather than staying absolute" -- the fraction
+    // math needs the raw values so the shape of the motion is unaffected by Animation Speed;
+    // durFactor is multiplied in only at the point each value is handed to a `duration:` or
+    // `delay:` option below). ──
+    var STEP = 16; // ms, fixed integration step (raw)
+
+    // The vine's own rotation is ONE continuous sample of the same pendulum formula from
+    // entry all the way to a natural stop on the FAR side (oculist-1ta.4's own finding 1:
+    // reversing back the way it came was wrong). FAR_FRAC=0.8 stops the sample on the far
+    // side while theta is still comfortably nonzero -- the vine is still visibly moving when
+    // it fades below.
+    var FAR_FRAC = 0.8;
+    var FAR_T = Math.acos(-FAR_FRAC) / omega;
+    var SWING_TOTAL = FAR_T; // raw ms
+
+    var SQUASH_DUR = 150, HOLD_AFTER = 500, FADE_DUR = 300, FADE_IN_DUR = 120, FADE_OUT_DUR = 200; // raw ms
+
+    var RELEASE_T = SWING_DUR; // theta=0, the bottom
+    var LAND_T = RELEASE_T + FALL_DUR;
+    var SQUASH_END_T = LAND_T + SQUASH_DUR;
+    var FADE_DELAY = SQUASH_END_T + HOLD_AFTER;
+
+    var rotFrames = [];
+    var nSteps = Math.max(2, Math.round(SWING_TOTAL / STEP));
+    for (var si = 0; si <= nSteps; si++) {
+      var st = (si / nSteps) * SWING_TOTAL;
+      var sth = thetaAt(theta0, st);
+      rotFrames.push({ transform: 'rotate(' + sth.toFixed(3) + 'deg)', offset: si / nSteps });
+    }
+    rotFrames.push({ transform: 'rotate(0deg)', offset: RELEASE_T / SWING_TOTAL });
+    rotFrames.sort(function (a, b) { return a.offset - b.offset; });
+    rotFrames[rotFrames.length - 1].offset = 1; // exact end, immune to float rounding
+    trackVine(vineGroup.animate(rotFrames, { duration: SWING_TOTAL * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // Swinging figure hides the instant release happens; the vine (now riderless) keeps
+    // going per rotFrames above, then fades.
+    var releaseFrac = RELEASE_T / SWING_TOTAL;
+    trackVine(figSwingSvg.animate([
+      { opacity: 1, offset: 0, easing: 'step-end' },
+      { opacity: 0, offset: releaseFrac },
+      { opacity: 0, offset: 1 }
+    ], { duration: SWING_TOTAL * durFactor, fill: 'forwards' }));
+
+    // Vine + figure fade in over the first FADE_IN_DUR ms (oculist-1ta.4's own finding 2: no
+    // materializing at rest -- the whole group is already moving, mid-rotation), held at full
+    // opacity through the swing, then fade out over the last FADE_OUT_DUR ms while the
+    // riderless vine is still moving.
+    var fadeInFrac = FADE_IN_DUR / SWING_TOTAL;
+    var fadeOutStartFrac = (SWING_TOTAL - FADE_OUT_DUR) / SWING_TOTAL;
+    trackVine(vineWrap.animate([
+      { opacity: 0, offset: 0, easing: 'ease-out' },
+      { opacity: 1, offset: fadeInFrac, easing: 'linear' },
+      { opacity: 1, offset: fadeOutStartFrac, easing: 'ease-in' },
+      { opacity: 0, offset: 1 }
+    ], { duration: SWING_TOTAL * durFactor, fill: 'forwards' }));
+
+    // Landing figure: hidden -> instant reveal at release -> a real projectile hop
+    // (oculist-1ta.4's own finding 3): constant horizontal velocity and a true kinematic
+    // parabola vertically (vy0*t + 0.5*g*t^2), not an eased mirror of gravity. The swing's
+    // vertical velocity at the exact theta=0 release point is exactly zero, so the ballistic
+    // segment starts with vy=0 and gravity bends that horizontal release into the landing ->
+    // squash -> held settle -> fade with the rest of the scene.
+    trackFall(fallOuter.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: 1 }
+    ], { duration: 1, delay: RELEASE_T * durFactor, fill: 'forwards' }));
+
+    var vxHop = (landingX - Px) / FALL_DUR; // px/ms, constant -- the actual release-to-landing gap over FALL_DUR (raw)
+    var vy0 = 0;
+    var TARGET_DROP = mcy - releaseFeetY + landingPoseLift;
+    var g = 2 * (TARGET_DROP - vy0 * FALL_DUR) / (FALL_DUR * FALL_DUR); // px/ms^2, raw-time-solved
+
+    var fallSteps = Math.max(2, Math.round(FALL_DUR / STEP));
+    var fallFrames = [];
+    for (var fi = 0; fi <= fallSteps; fi++) {
+      var ffrac = fi / fallSteps;
+      var ft = ffrac * FALL_DUR; // raw ms, used only to sample the physical curve's SHAPE
+      var fx = vxHop * ft;
+      var fy = vy0 * ft + 0.5 * g * ft * ft;
+      fallFrames.push({ transform: 'translate(' + fx.toFixed(2) + 'px,' + fy.toFixed(2) + 'px)', offset: ffrac });
+    }
+    trackFall(fallOuter.animate(fallFrames, { duration: FALL_DUR * durFactor, delay: RELEASE_T * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    trackFall(fallInner.animate([
+      { transform: 'scale(1,1)', offset: 0 },
+      { transform: 'scale(1.18,0.78)', offset: 0.45 },
+      { transform: 'scale(0.95,1.05)', offset: 0.75 },
+      { transform: 'scale(1,1)', offset: 1 }
+    ], { duration: SQUASH_DUR * durFactor, delay: LAND_T * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    trackFall(fallOuter.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: FADE_DUR * durFactor, delay: FADE_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    vineWrap.__waapiAnims = vineAnims;
+    fallOuter.__waapiAnims = fallAnims;
+
+    // Natural completion removes each top-level element only once EVERY one of its own
+    // animations has settled (rule 5). destroyBeacon() still removes both synchronously on
+    // cancel (cancelBeacons() selects every `.oc-beacon` element, and both wrappers carry
+    // that class independently), cancelling every entry in __waapiAnims regardless of these
+    // promises -- same idiom animateReanimate's own removeReanimateWrap() uses.
+    function removeVineWrap() { vineWrap.remove(); }
+    function removeFallOuter() { fallOuter.remove(); }
+    var vineDone = Promise.allSettled(vineAnims.map(function (a) { return a.finished; })).then(removeVineWrap);
+    var fallDone = Promise.allSettled(fallAnims.map(function (a) { return a.finished; })).then(removeFallOuter);
+
+    // RESIZE HARD CUT -- see the header comment's own RESIZE note. Tear both top-level
+    // elements down on the FIRST resize event, ahead of the 100ms cancelBeacons() debounce,
+    // the same technique hardCutArrowShot()/hardCutBackWrap() already use.
+    function hardCutVineSwing() {
+      window.removeEventListener('resize', hardCutVineSwing);
+      [vineWrap, fallOuter].forEach(function (el) {
+        if (!el.isConnected) return;
+        (el.__waapiAnims || []).forEach(function (a) { try { a.cancel(); } catch (e) {} });
+        el.remove();
+      });
+    }
+    window.addEventListener('resize', hardCutVineSwing, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case), the listener would
+    // otherwise outlive it, leaked on window forever. Explicitly remove it once every element
+    // has finished on its own (natural completion) or been cancelled (destroyBeacon() calls
+    // .cancel() on every __waapiAnims entry, which settles vineDone/fallDone immediately) --
+    // this covers both paths hardCutVineSwing()'s own early removeEventListener does not
+    // reach, using allSettled-based promises throughout so a cancel rejection can never skip
+    // this cleanup.
+    Promise.all([vineDone, fallDone]).then(function () {
+      window.removeEventListener('resize', hardCutVineSwing);
     });
   }
 
