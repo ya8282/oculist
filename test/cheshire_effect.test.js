@@ -1,4 +1,4 @@
-// Cheshire beacon effect (oculist-e2m.6): promotes fxCheshire (artifacts/prototypes/
+// Cheshire Cat beacon effect (oculist-e2m.6): promotes fxCheshire (artifacts/prototypes/
 // effects-playground.html, the geometric-dissolve redraw from oculist-e2m.8/.9) into
 // extension/content.js as the third entry in the Halloween pack. A hand-drawn cat fades
 // in above the match (or below it when there is no room), its six head/body regions
@@ -51,7 +51,7 @@ function expectedCatHeight(targetHeight) {
   return Math.max(48, Math.min(110, 3.2 * targetHeight));
 }
 
-describe('Cheshire: a hand-drawn cat fades in above (or below) the match, dissolves, and its grin settles, pops, holds, then fades', () => {
+describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, dissolves, and its grin settles, pops, holds, then fades', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   before(async () => {
@@ -91,7 +91,7 @@ describe('Cheshire: a hand-drawn cat fades in above (or below) the match, dissol
       message: 'never observed the content script isolated execution context',
     });
 
-    // Select Cheshire and turn its pack on for the whole suite before ever opening the
+    // Select Cheshire Cat and turn its pack on for the whole suite before ever opening the
     // finder -- every tab of this persistent context shares this chrome.storage.sync
     // write.
     await setSettings({ effect: 'cheshire', enabledPacks: ['halloween'] });

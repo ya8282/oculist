@@ -35,7 +35,7 @@
 //    out that tinted the match in the below-landing fallback... assert that fallback path
 //    hardest." oculist-1ta.8's own bead body (line 3173 of the playground, "mist", "sides
 //    and above all fail their fit tests") describes a totally different prototype --
-//    oculist-1ta.1's Bat Flight, not oculist-1ta.7's Headless Horseman. fxHorseman has
+//    oculist-1ta.1's Vampire Bat, not oculist-1ta.7's Headless Horseman. fxHorseman has
 //    exactly two placement branches (stage left / stage right-mirrored), never an above/
 //    below choice, and no mist element anywhere in its source. There is no below-landing
 //    path to assert here. What this suite asserts hardest instead is the real analogue for
@@ -230,8 +230,8 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
 
   // Pauses and seeks EVERY WAAPI animation on EVERY top-level beacon element this effect
   // creates (the rider `outer`, the projectile `pumpkin`, and the four burst bands -- six
-  // independent .oc-beacon-transient elements, not one shared root the way Cheshire/Jack-
-  // o'-Lantern's single <svg> is) to a fixed point on its own timeline, the same
+  // independent .oc-beacon-transient elements, not one shared root the way Cheshire Cat/
+  // Pumpkin Glow's single <svg> is) to a fixed point on its own timeline, the same
   // Animation.currentTime idiom test/cheshire_effect.test.js's own grinPopBox()/
   // seekAndSample() use, generalized across multiple roots.
   function seekAll(t) {
