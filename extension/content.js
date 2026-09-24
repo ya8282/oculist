@@ -10134,6 +10134,14 @@
     checkSiteOverride(searchRanges.length === 0);
   }
 
+  // Draft check (oculist-l6m.19), shared by the late working-list merge (oculist-fqti)
+  // and the mutation rescan (oculist-3p87): performListSearch()/addChipTerm()/
+  // activateChip() always alias searchRanges to termRanges[activeTermIndex] itself —
+  // only a real performDraftSearch() builds searchRanges fresh, breaking that identity.
+  function isDraftActive() {
+    return !!input.value && searchRanges !== termRanges[activeTermIndex];
+  }
+
   // Clearing the input hands ownership back to whichever chip was active before the draft
   // started — its cached termRanges become searchRanges again and oculist-match returns,
   // reusing the last scan rather than re-scanning the page (so rapid type-then-clear never
@@ -10253,6 +10261,33 @@
     // input (e.g. right after Enter commits a chip and the user hasn't typed since)
     // must still keep rescanning.
     if (!wrap || (!lastTerm && workListTerms.length === 0)) return;
+
+    if (isDraftActive()) {
+      // A real draft owns the highlight (oculist-3p87) — a bare performListSearch()
+      // would replace searchRanges with the working list's active chip (or nothing),
+      // stealing the highlight from the draft the user is actually looking at. But the
+      // working list's termRanges/counts/dim registry still need to track the mutated
+      // DOM: restoreActiveChip() (what runs when the draft is later cleared) only reads
+      // the cached termRanges, it never rescans, so leaving them stale here would surface
+      // as a wrong count/highlight the moment the draft ends, not just during it.
+      // performListSearch() then performDraftSearch(lastTerm) back to back — both fully
+      // synchronous, no await between them — refreshes termRanges/renderChipRow/the dim
+      // registry first and then immediately re-asserts the draft's own oculist-match/
+      // count/nav-enabled state over it, so the chip-owned intermediate state this
+      // produces is never actually painted.
+      var previousDraftIndex = activeIndex;
+      performListSearch();
+      performDraftSearch(lastTerm);
+      if (searchRanges.length > 0) {
+        activeIndex = Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
+        firstEnter = false;
+        // skipScroll: a background rescan re-attaches highlights, it must not yank the
+        // viewport back to the match while the user is scrolling elsewhere.
+        highlightActiveRange(false, true);
+      }
+      return;
+    }
+
     var previousActiveIndex = activeIndex;
     performListSearch();
     if (searchRanges.length > 0) {
@@ -12480,13 +12515,13 @@
       var activeTermValue = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
         ? workListTerms[activeTermIndex]
         : null;
-      // Draft check (oculist-l6m.19): performListSearch()/addChipTerm()/activateChip()
-      // always alias searchRanges to termRanges[activeTermIndex] itself — only a real
-      // performDraftSearch() builds searchRanges fresh, breaking that identity.
+      // isDraftActive() (oculist-l6m.19) must be read before workListTerms/termRanges/
+      // termStarved below are reassigned to the merged values — capture the pre-merge
+      // arrays it needs alongside it.
       var oldWorkListTerms = workListTerms;
       var oldTermRanges = termRanges;
       var oldTermStarved = termStarved;
-      var draftActive = !!input.value && searchRanges !== oldTermRanges[activeTermIndex];
+      var draftActive = isDraftActive();
       var restoredTerms = list.terms.slice();
       var addedSinceMount = workListTerms.filter(function (t) {
         return restoredTerms.indexOf(t) === -1;
@@ -13764,156 +13799,187 @@
       if (msg.action === 'toggle') window.__ocToggle();
       else if (msg.action === 'destroy') window.__ocDestroy();
     });
-
-    chrome.storage.onChanged.addListener(function(changes) {
-      if (!changes['oc-settings']) return;
-      var nv = changes['oc-settings'].newValue;
-      if (!nv) return;
-      // oculist-tuy: refresh writeOcSettings()'s three-way-merge base (see
-      // OculistSettingsMigration.rememberOcSettings()/mergeOcSettings() in
-      // settings-migration.js) from every foreign write, not just this tab's own.
-      // Without this, `base` stays frozen at the boot snapshot: two foreign writes to the
-      // same key straddling a local save would have this tab's next saveSettings() diff
-      // its in-memory value (adopted from the FIRST foreign write) against the stale boot
-      // base, see it differ, and treat it as a local edit that overwrites the SECOND
-      // foreign write that already landed in storage.
-      //   - Placed here, before the self-echo check below: `nv` is the full newValue of
-      //     'oc-settings', i.e. exactly what storage now holds, on every path — self-echo
-      //     included. On the echo of our own write this equals the `merged` object
-      //     writeOcSettings() already remembers in its own set() callback, so remembering
-      //     it here again is a same-value no-op that just removes an ordering dependency
-      //     on that async callback; on a coalesced write the echo branch below splices
-      //     several queued entries, but `nv` is still the latest stored state either way.
-      //   - Remembered as the FULL `nv`, not just the SETTINGS_KEYS subset applied to
-      //     `settings` below: `base` must mean the same "what storage held" thing here as
-      //     it does at the boot read at the bottom of this file, which also remembers the whole
-      //     stored object. This carries the same pre-existing hazard documented at
-      //     mergeOcSettings()'s own header comment (an unmodelled key surviving in storage only
-      //     while also absent from `base`) — unchanged by this fix, and guarded against by
-      //     SETTINGS_KEYS round-tripping every key any surface writes (see the note on
-      //     seededDefaultBlocklist in the settings defaults at the top of this file).
-      //   - This only ever ADVANCES `base` to a value `settings` already reflects (see the
-      //     unconditional `settings[k] = incoming;` a few lines below, which runs outside
-      //     the `changed` check) or is about to be given the exact same value — base never
-      //     moves ahead of what the in-memory object holds, so a genuine local edit made
-      //     after this can't be turned into a no-op by it.
-      //   - One asymmetry this creates: the 'effect' key below normalises a stale/unknown
-      //     incoming value to 'hud' before storing it in `settings`, so after that,
-      //     settings.effect ('hud') and base.effect (still the raw stale value, e.g.
-      //     'lens') diverge. The next merge then treats 'hud' as a local edit and persists
-      //     it — which heals the stale value rather than losing anything, so it's fine.
-      //   - Semantic change worth knowing: if a foreign write DELETES a modelled key,
-      //     `base` loses it too, so this tab's copy then reads as a local edit and gets
-      //     re-persisted, where before the deletion propagated. No writer deletes
-      //     modelled keys today (they all write whole objects) and re-persisting is the
-      //     self-healing direction, but a future factory-reset-by-deletion would need
-      //     this revisited.
-      //   - Out of scope: `if (!nv) return;` above (the key was deleted entirely) leaves
-      //     `base` stale relative to an empty store; left alone here.
-      OculistSettingsMigration.rememberOcSettings(nv);
-      // Our own writes echo back here. Rebuilding the panel on that echo detaches the
-      // live <input type="color">, dismissing the native colour dialog mid-interaction.
-      // Drop the matching entry and everything queued before it — a coalesced write can
-      // swallow the earlier echoes, and those are stale by definition. Applying an echo's
-      // values is skipped too: for our own write memory is already current or newer, so
-      // copying an older payload back in would undo the most recent pick.
-      var echo = stableStringify(nv);
-      var selfIndex = pendingSelfWrites.indexOf(echo);
-      if (selfIndex !== -1) {
-        pendingSelfWrites.splice(0, selfIndex + 1);
-        return;
-      }
-
-      var changed = false;
-      var performanceModeChanged = false;
-      // Only these keys feed drawActiveOverlays()/getEffectiveColors(): visionSettings
-      // carries magnifier/textLabels/borderStyle/colorPalette/customColors/motionSensitivity,
-      // and matchColor/activeColor/beaconColor are the 'default' palette's own colours.
-      // Everything else in SETTINGS_KEYS (disabledSites, effect, position, theme,
-      // scrollBehavior, performanceMode, displayPreset, ...) is either handled by its own
-      // branch below or never read by the active-match overlays, so redrawing on it would
-      // just be unnecessary DOM churn on an unrelated change.
-      var OVERLAY_AFFECTING_KEYS = { visionSettings: 1, matchColor: 1, activeColor: 1, beaconColor: 1 };
-      var overlaysAffected = false;
-      SETTINGS_KEYS.forEach(function(k) {
-        if (!(k in nv)) return;
-        // Compare the normalised value, not the raw stored one: a stale/removed effect
-        // key (e.g. 'lens' from an old build) always normalises to the same 'hud' that
-        // is already in memory, so treating it as "changed" would force a rebuild on
-        // every echo of that stale sync value forever (oculist-ais). Normalising before
-        // the comparison makes that echo a no-op while a genuine change (a different
-        // valid effect, or a stale value landing while memory holds something else)
-        // still compares unequal and rebuilds as before.
-        // oculist-tdj: routed through availableEffects() to ask "is it offered right
-        // now" (a pack-disabled key is not), but the coercion itself still gates on
-        // isGenuinelyUnknownEffect() (the raw registry) — a pack-disabled key must NOT
-        // be rewritten to 'hud' here, or re-enabling its pack would never restore it.
-        // See isGenuinelyUnknownEffect()'s header and animate() for where a
-        // pack-disabled key is actually resolved to hud, at run time, without this
-        // mutation.
-        var effectUnavailable = k === 'effect' && !availableEffects()[nv[k]];
-        var incoming = (effectUnavailable && isGenuinelyUnknownEffect(nv[k])) ? 'hud' : nv[k];
-        if (stableStringify(incoming) !== stableStringify(settings[k])) {
-          changed = true;
-          if (k === 'performanceMode') performanceModeChanged = true;
-          if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
-        }
-        settings[k] = incoming;
-      });
-      if (!changed) return;
-      if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
-      // Same defensive shape as disabledSites above: availableEffects() below indexOf()s
-      // into settings.enabledPacks, so a malformed stored value (not an array) must be
-      // corrected before that call, not after.
-      if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
-      // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as above, defensive
-      // re-check — a pack-disabled settings.effect is left alone here too.
-      if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
-        settings.effect = 'hud';
-      }
-      if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
-        window.__ocDestroy();
-      } else {
-        injectHighlightStyles();
-        // The overlay may be closed (wrap null) when a settings change lands from another
-        // context (popup, another tab, or a direct storage write) — applyWrapPosition()
-        // dereferences wrap unconditionally, so skip it until the overlay is reopened.
-        // `settings` above is already updated regardless, so reopening picks up the
-        // change via buildUI() -> applyWrapPosition() on its own.
-        if (wrap) {
-          applyWrapPosition();
-          updateViewportMarkers();
-          // Placed after applyWrapPosition()/updateViewportMarkers() (geometry unrelated to
-          // the active-match overlays anyway) but still inside this `if (wrap)` guard, since
-          // repositionActiveOverlays() redraws the border/label/magnifier for whatever match
-          // is currently active — without this, flipping the magnifier or Match Labels
-          // toggle left the on-screen match showing the stale overlay state until the next
-          // navigation or redraw (oculist-l6m.42). repositionActiveOverlays() already
-          // no-ops safely when there is no active match (activeIndex out of range) or the
-          // match's rect collapses to zero size, so gating on overlaysAffected here is only
-          // about not doing needless work on unrelated settings changes, not about safety.
-          if (overlaysAffected) {
-            repositionActiveOverlays();
-          }
-        }
-        if (settingsPanel) {
-          rebuildSettingsPanelPreservingFocus();
-        }
-        // Toggling Lite Mode changes both which terms get Ranges (and thus counts) and
-        // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
-        // that is already on screen has to be rescanned immediately, or its dim
-        // highlights/counts stay stuck showing the mode that was active when it was last
-        // scanned instead of the one now in effect. Gated on wrap (oculist-l6m.18): with
-        // the bar closed there is no chip row/count on screen to go stale, so paying a
-        // full buildPageIndex() rescan here bought nothing. The guard is also redundant in
-        // practice: __ocDestroy resets workListTerms, so wrap === null implies the length
-        // check below already fails. settings[...] above is updated regardless of this guard.
-        if (wrap && performanceModeChanged && workListTerms.length > 0) {
-          performListSearch();
-        }
-      }
-    });
   }
+
+  // oculist-1gjy: registered before the chrome.storage.sync.get() read below (not inside
+  // boot(), where it lived before) so a write landing in the gap between issuing that read
+  // and boot() finishing is never missed -- chrome.storage.onChanged only notifies
+  // listeners that are already registered when it fires, it doesn't replay to ones added
+  // later. Safe to fire before boot(): every value this handler touches (settings, wrap,
+  // settingsPanel, pendingSelfWrites, workListTerms) already carries its pre-boot default
+  // from the top-level var declarations above, and the overlay/panel branches below are
+  // gated on wrap/settingsPanel being truthy, which they aren't until boot() opens the
+  // panel; injectHighlightStyles() is ungated, exactly as it already was post-boot with the
+  // overlay closed. A pre-boot foreign write is NOT simply superseded by the read below,
+  // though: that read's own snapshot can be OLDER than a write this listener already
+  // applied (the read was issued before the write landed, but the write's onChanged
+  // fired -- and was applied live, below -- before the read's callback got around to
+  // running its own snapshot merge). awaitingBootRead/pendingPreBootChange record that
+  // latest pre-boot write so the read callback below can replay it, through this same
+  // applyForeignSettingsChange(), AFTER its own snapshot merge -- making the newest known
+  // value win no matter which one's callback happens to finish first. Added exactly once
+  // per content-script injection: boot() itself only runs from the single call site
+  // below, and the `if (window.__ocDestroy) { ...; return; }` guard at the top of this
+  // file keeps a re-injected script from reaching here a second time.
+  var awaitingBootRead = true;
+  var pendingPreBootChange;
+
+  function applyForeignSettingsChange(nv) {
+    if (!nv) return;
+    // oculist-tuy: refresh writeOcSettings()'s three-way-merge base (see
+    // OculistSettingsMigration.rememberOcSettings()/mergeOcSettings() in
+    // settings-migration.js) from every foreign write, not just this tab's own.
+    // Without this, `base` stays frozen at the boot snapshot: two foreign writes to the
+    // same key straddling a local save would have this tab's next saveSettings() diff
+    // its in-memory value (adopted from the FIRST foreign write) against the stale boot
+    // base, see it differ, and treat it as a local edit that overwrites the SECOND
+    // foreign write that already landed in storage.
+    //   - Placed here, before the self-echo check below: `nv` is the full newValue of
+    //     'oc-settings', i.e. exactly what storage now holds, on every path — self-echo
+    //     included. On the echo of our own write this equals the `merged` object
+    //     writeOcSettings() already remembers in its own set() callback, so remembering
+    //     it here again is a same-value no-op that just removes an ordering dependency
+    //     on that async callback; on a coalesced write the echo branch below splices
+    //     several queued entries, but `nv` is still the latest stored state either way.
+    //   - Remembered as the FULL `nv`, not just the SETTINGS_KEYS subset applied to
+    //     `settings` below: `base` must mean the same "what storage held" thing here as
+    //     it does at the boot read at the bottom of this file, which also remembers the whole
+    //     stored object. This carries the same pre-existing hazard documented at
+    //     mergeOcSettings()'s own header comment (an unmodelled key surviving in storage only
+    //     while also absent from `base`) — unchanged by this fix, and guarded against by
+    //     SETTINGS_KEYS round-tripping every key any surface writes (see the note on
+    //     seededDefaultBlocklist in the settings defaults at the top of this file).
+    //   - This only ever ADVANCES `base` to a value `settings` already reflects (see the
+    //     unconditional `settings[k] = incoming;` a few lines below, which runs outside
+    //     the `changed` check) or is about to be given the exact same value — base never
+    //     moves ahead of what the in-memory object holds, so a genuine local edit made
+    //     after this can't be turned into a no-op by it.
+    //   - One asymmetry this creates: the 'effect' key below normalises a stale/unknown
+    //     incoming value to 'hud' before storing it in `settings`, so after that,
+    //     settings.effect ('hud') and base.effect (still the raw stale value, e.g.
+    //     'lens') diverge. The next merge then treats 'hud' as a local edit and persists
+    //     it — which heals the stale value rather than losing anything, so it's fine.
+    //   - Semantic change worth knowing: if a foreign write DELETES a modelled key,
+    //     `base` loses it too, so this tab's copy then reads as a local edit and gets
+    //     re-persisted, where before the deletion propagated. No writer deletes
+    //     modelled keys today (they all write whole objects) and re-persisting is the
+    //     self-healing direction, but a future factory-reset-by-deletion would need
+    //     this revisited.
+    //   - Out of scope: `if (!nv) return;` above (the key was deleted entirely) leaves
+    //     `base` stale relative to an empty store; left alone here.
+    OculistSettingsMigration.rememberOcSettings(nv);
+    // Our own writes echo back here. Rebuilding the panel on that echo detaches the
+    // live <input type="color">, dismissing the native colour dialog mid-interaction.
+    // Drop the matching entry and everything queued before it — a coalesced write can
+    // swallow the earlier echoes, and those are stale by definition. Applying an echo's
+    // values is skipped too: for our own write memory is already current or newer, so
+    // copying an older payload back in would undo the most recent pick.
+    var echo = stableStringify(nv);
+    var selfIndex = pendingSelfWrites.indexOf(echo);
+    if (selfIndex !== -1) {
+      pendingSelfWrites.splice(0, selfIndex + 1);
+      return;
+    }
+
+    var changed = false;
+    var performanceModeChanged = false;
+    // Only these keys feed drawActiveOverlays()/getEffectiveColors(): visionSettings
+    // carries magnifier/textLabels/borderStyle/colorPalette/customColors/motionSensitivity,
+    // and matchColor/activeColor/beaconColor are the 'default' palette's own colours.
+    // Everything else in SETTINGS_KEYS (disabledSites, effect, position, theme,
+    // scrollBehavior, performanceMode, displayPreset, ...) is either handled by its own
+    // branch below or never read by the active-match overlays, so redrawing on it would
+    // just be unnecessary DOM churn on an unrelated change.
+    var OVERLAY_AFFECTING_KEYS = { visionSettings: 1, matchColor: 1, activeColor: 1, beaconColor: 1 };
+    var overlaysAffected = false;
+    SETTINGS_KEYS.forEach(function(k) {
+      if (!(k in nv)) return;
+      // Compare the normalised value, not the raw stored one: a stale/removed effect
+      // key (e.g. 'lens' from an old build) always normalises to the same 'hud' that
+      // is already in memory, so treating it as "changed" would force a rebuild on
+      // every echo of that stale sync value forever (oculist-ais). Normalising before
+      // the comparison makes that echo a no-op while a genuine change (a different
+      // valid effect, or a stale value landing while memory holds something else)
+      // still compares unequal and rebuilds as before.
+      // oculist-tdj: routed through availableEffects() to ask "is it offered right
+      // now" (a pack-disabled key is not), but the coercion itself still gates on
+      // isGenuinelyUnknownEffect() (the raw registry) — a pack-disabled key must NOT
+      // be rewritten to 'hud' here, or re-enabling its pack would never restore it.
+      // See isGenuinelyUnknownEffect()'s header and animate() for where a
+      // pack-disabled key is actually resolved to hud, at run time, without this
+      // mutation.
+      var effectUnavailable = k === 'effect' && !availableEffects()[nv[k]];
+      var incoming = (effectUnavailable && isGenuinelyUnknownEffect(nv[k])) ? 'hud' : nv[k];
+      if (stableStringify(incoming) !== stableStringify(settings[k])) {
+        changed = true;
+        if (k === 'performanceMode') performanceModeChanged = true;
+        if (OVERLAY_AFFECTING_KEYS[k]) overlaysAffected = true;
+      }
+      settings[k] = incoming;
+    });
+    if (!changed) return;
+    if (!Array.isArray(settings.disabledSites)) settings.disabledSites = [];
+    // Same defensive shape as disabledSites above: availableEffects() below indexOf()s
+    // into settings.enabledPacks, so a malformed stored value (not an array) must be
+    // corrected before that call, not after.
+    if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
+    // oculist-tdj: same isGenuinelyUnknownEffect()-gated coercion as above, defensive
+    // re-check — a pack-disabled settings.effect is left alone here too.
+    if (!availableEffects()[settings.effect] && isGenuinelyUnknownEffect(settings.effect)) {
+      settings.effect = 'hud';
+    }
+    if (settings.disabledSites.indexOf(window.location.hostname) !== -1 && wrap) {
+      window.__ocDestroy();
+    } else {
+      injectHighlightStyles();
+      // The overlay may be closed (wrap null) when a settings change lands from another
+      // context (popup, another tab, or a direct storage write) — applyWrapPosition()
+      // dereferences wrap unconditionally, so skip it until the overlay is reopened.
+      // `settings` above is already updated regardless, so reopening picks up the
+      // change via buildUI() -> applyWrapPosition() on its own.
+      if (wrap) {
+        applyWrapPosition();
+        updateViewportMarkers();
+        // Placed after applyWrapPosition()/updateViewportMarkers() (geometry unrelated to
+        // the active-match overlays anyway) but still inside this `if (wrap)` guard, since
+        // repositionActiveOverlays() redraws the border/label/magnifier for whatever match
+        // is currently active — without this, flipping the magnifier or Match Labels
+        // toggle left the on-screen match showing the stale overlay state until the next
+        // navigation or redraw (oculist-l6m.42). repositionActiveOverlays() already
+        // no-ops safely when there is no active match (activeIndex out of range) or the
+        // match's rect collapses to zero size, so gating on overlaysAffected here is only
+        // about not doing needless work on unrelated settings changes, not about safety.
+        if (overlaysAffected) {
+          repositionActiveOverlays();
+        }
+      }
+      if (settingsPanel) {
+        rebuildSettingsPanelPreservingFocus();
+      }
+      // Toggling Lite Mode changes both which terms get Ranges (and thus counts) and
+      // whether oculist-dim-match gets built at all (oculist-l6m.7) — a working list
+      // that is already on screen has to be rescanned immediately, or its dim
+      // highlights/counts stay stuck showing the mode that was active when it was last
+      // scanned instead of the one now in effect. Gated on wrap (oculist-l6m.18): with
+      // the bar closed there is no chip row/count on screen to go stale, so paying a
+      // full buildPageIndex() rescan here bought nothing. The guard is also redundant in
+      // practice: __ocDestroy resets workListTerms, so wrap === null implies the length
+      // check below already fails. settings[...] above is updated regardless of this guard.
+      if (wrap && performanceModeChanged && workListTerms.length > 0) {
+        performListSearch();
+      }
+    }
+  }
+
+  chrome.storage.onChanged.addListener(function(changes) {
+    if (!changes['oc-settings']) return;
+    var nv = changes['oc-settings'].newValue;
+    // Recorded raw while the boot read is still in flight (a delete records undefined,
+    // i.e. nothing to replay), so the read callback below replays whatever this listener
+    // last saw -- applyForeignSettingsChange() itself already no-ops on a falsy nv.
+    if (awaitingBootRead) pendingPreBootChange = nv;
+    applyForeignSettingsChange(nv);
+  });
 
   chrome.storage.sync.get('oc-settings', function (data) {
     // oculist-rnr.12 (review fix): normalisation now runs through the single shared
@@ -13955,9 +14021,20 @@
     if (needsMigration) {
       // Reuses saveSettings()'s own pendingSelfWrites bookkeeping so the write this
       // migration makes is recognized and swallowed as an echo by the
-      // chrome.storage.onChanged listener registered in boot() below, instead of being
+      // chrome.storage.onChanged listener registered above, instead of being
       // mistaken for a foreign change and tearing the (not-yet-open) panel down.
       saveSettings();
+    }
+    // oculist-1gjy: this read's own snapshot (merged above) can be older than a foreign
+    // write the onChanged listener already applied live while this read was in flight --
+    // replay that latest pre-boot write once more, through the exact same
+    // applyForeignSettingsChange() (rememberOcSettings() included), so it always wins
+    // over the stale snapshot rather than being clobbered by it.
+    awaitingBootRead = false;
+    if (pendingPreBootChange !== undefined) {
+      var latestPreBootChange = pendingPreBootChange;
+      pendingPreBootChange = undefined;
+      applyForeignSettingsChange(latestPreBootChange);
     }
     boot();
   });
