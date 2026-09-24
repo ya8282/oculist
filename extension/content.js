@@ -822,6 +822,10 @@
     effectHorseman: 'Galloping Throw',
     effectTentacleRise: 'Tentacle Rise',
     effectReanimate: 'Reanimation Jolt',
+    effectBatFlight: 'Bat Flight',
+    effectWandCast: 'Wand Cast',
+    effectArrowShot: 'Arrow Shot',
+    effectVineSwing: 'Vine Swing',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -940,7 +944,11 @@
     jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
     horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
     tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
-    reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' }
+    reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
+    batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
+    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' },
+    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'halloween' },
+    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -5122,6 +5130,2527 @@
     // animateTentacleRise's own removeRiseWrap() uses.
     function removeReanimateWrap() { reanimateWrap.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeReanimateWrap);
+  }
+
+  // oculist-nq1x.9: promotes fxBatFlight (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the eighth entry in the Halloween pack. A bat flies in along
+  // an erratic weave, vanishes into a rising mist column, and a cloaked head-and-shoulders
+  // figure fades in beside the match (or, when neither side fits, above it, or -- last
+  // resort -- below it, never over it). Never a whole body: a full human figure is the
+  // tallest thing in this epic, and oculist-1ta.1's own close reason records the same "head
+  // with no body" cut the Cheshire cat took for the same reason.
+  //
+  // RULE 9 EXCEPTION (oculist-i8zu, decided 2026-09-23): the shipped lastMouseX/find-bar/
+  // viewport start-point cascade animateTrail uses is deliberately NOT used here. The bat's
+  // start point stays pinned to the chosen landing side -- on-screen, 4-40px inside that
+  // side's own viewport edge for a left/right landing, or endX with endY +/- 220 for an
+  // above/below landing (effects-playground.html:4134-4137, :4150-4152) -- because the
+  // flight's whole x-range has to stay on the landing side for the WHOLE flight, not just at
+  // arrival (effects-playground.html:3880-3881, :4129-4132): a cursor or find-bar start could
+  // put the launch point on the wrong side of the match, or directly above/below it, and walk
+  // the flight path across the match mid-transit, which rule 10 forbids. Rule 9's other half
+  // -- the mirrored branch must work for real, not just compile -- still applies and is
+  // tested below (the left-fallback test).
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): BAT_* and the
+  // figure's CAPE/SKIN/HAIR/IRIS tones are fixed, like Bone Assembly's ivory or Galloping
+  // Throw's amber -- there is no separate flash/UI-accent element here for
+  // getEffectiveColors().beacon to drive (same reasoning animateHorseman's own header gives
+  // for itself).
+  //
+  // Lite Mode (rule 7): a no-op. There is no filter, no box-shadow and no decorative glow
+  // layer anywhere in this effect to cut -- the cel-shaded tones ARE the character art
+  // (oculist-1ta.10's own redesign; dropping them would reintroduce the "reads as a cut-out"
+  // regression it fixed), the mist column IS the transformation (oculist-1ta.1's own
+  // "payoff, not decoration"), and the wing flap is the one flicker this effect has, which
+  // rule 7 explicitly keeps as "the effect's defining beat". Same reasoning
+  // animateHorseman's/animateBoneAssembly's own header comments give for themselves.
+  // settings.performanceMode is deliberately never read below.
+  //
+  // oculist-1ta.8's mist fade-anchor fix (transform-origin flips to 50% 0% ONLY for the
+  // 'below' landing, so the fade-out's scaleY(1.25) overshoot grows away from the match
+  // instead of tinting it) and oculist-1ta.14's mouth/hair-outline fixes are ported
+  // byte-for-byte, not redrawn.
+  function animateBatFlight(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = rect.left + rect.width / 2, mcy = rect.top + rect.height / 2; // viewport space (rule 2)
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Fixed screen-px clearance margins, unaffected by beaconScale -- same discipline
+    // animateReanimate's own GAP comment describes for itself.
+    var INSET = 40;
+    var GAP = 10;
+
+    var BAT_OUTLINE = '#0a0612';
+    var BAT_BASE = '#3a2b52';
+    var BAT_SHADOW = '#20172f';
+    var BAT_HIGHLIGHT = '#6b5786';
+    var BAT_STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var BAT_VB_W = 120, BAT_VB_H = 70;
+    var BAT_ASPECT = BAT_VB_W / BAT_VB_H;
+    var BAT_W = 90 * beaconScale, BAT_H = BAT_W / BAT_ASPECT;
+    var BODY_CX = 60, BODY_CY = 40, BODY_RX = 12, BODY_RY = 10;
+
+    // Wing membrane outlines -- angular, swept-back silhouette (oculist-1ta.10's own retry,
+    // ported verbatim: a soft symmetric fan read as a bowtie/moth at production size).
+    var WING_OUT_L = 'M 48 34 L 6 20 L 18 30 L 10 38 L 20 42 L 16 48 L 48 46 Z';
+    var WING_OUT_R = 'M 72 34 L 114 20 L 102 30 L 110 38 L 100 42 L 104 48 L 72 46 Z';
+    var WING_TUCKED_L = 'M 48 36 L 38 30 L 40 36 L 34 40 L 40 44 L 48 44 Z';
+    var WING_TUCKED_R = 'M 72 36 L 82 30 L 80 36 L 86 40 L 80 44 L 72 44 Z';
+
+    var EAR_L = '42,32 38,16 50,30', EAR_L_D = 'M 42 32 L 38 16 L 50 30 Z';
+    var EAR_R = '78,32 82,16 70,30', EAR_R_D = 'M 78 32 L 82 16 L 70 30 Z';
+
+    var OUT_PATCH = {
+      lHi: { cx: 21, cy: 30, rx: 8, ry: 7 }, lSh: { cx: 33, cy: 38, rx: 8, ry: 6 },
+      rHi: { cx: 87, cy: 30, rx: 8, ry: 7 }, rSh: { cx: 99, cy: 38, rx: 8, ry: 6 }
+    };
+    var TUCKED_PATCH = {
+      lHi: { cx: 39, cy: 34, rx: 4, ry: 4 }, lSh: { cx: 43, cy: 40, rx: 4, ry: 4 },
+      rHi: { cx: 77, cy: 34, rx: 4, ry: 4 }, rSh: { cx: 81, cy: 40, rx: 4, ry: 4 }
+    };
+
+    // Fixed id prefix, not per-invocation unique -- animate() always cancels and removes the
+    // previous beacon before mounting a new one, so two live copies of this effect's own ids
+    // never coexist (same reasoning the prototype's own uid comment gives).
+    var uid = 'bf_';
+
+    var batDefs = document.createElementNS(NS, 'defs');
+    var bodyClipId = uid + 'body';
+    var bodyClip = document.createElementNS(NS, 'clipPath');
+    bodyClip.setAttribute('id', bodyClipId);
+    var bodyClipShape = document.createElementNS(NS, 'ellipse');
+    bodyClipShape.setAttribute('cx', String(BODY_CX));
+    bodyClipShape.setAttribute('cy', String(BODY_CY));
+    bodyClipShape.setAttribute('rx', String(BODY_RX));
+    bodyClipShape.setAttribute('ry', String(BODY_RY));
+    bodyClip.appendChild(bodyClipShape);
+    batDefs.appendChild(bodyClip);
+
+    // Builds one cel-shaded frame: each wing/ear gets a base tone plus its own highlight AND
+    // shadow patch (three discrete tones), then the body. Every shape carries a BAT_OUTLINE
+    // stroke darker than its fill (rule: a defining outline on every solid form).
+    function buildBatFrame(leftWingD, rightWingD, patch, idSuffix) {
+      var g = document.createElementNS(NS, 'g');
+
+      function shape(tag, attrs, parent) {
+        var el = document.createElementNS(NS, tag);
+        for (var k in attrs) el.setAttribute(k, attrs[k]);
+        (parent || g).appendChild(el);
+        return el;
+      }
+
+      function clipFor(id, d) {
+        var clip = document.createElementNS(NS, 'clipPath');
+        clip.setAttribute('id', id);
+        shape('path', { d: d }, clip);
+        batDefs.appendChild(clip);
+        return id;
+      }
+
+      var leftClipId = clipFor(uid + 'wl' + idSuffix, leftWingD);
+      var rightClipId = clipFor(uid + 'wr' + idSuffix, rightWingD);
+      var earLClipId = clipFor(uid + 'el' + idSuffix, EAR_L_D);
+      var earRClipId = clipFor(uid + 'er' + idSuffix, EAR_R_D);
+
+      shape('path', { d: leftWingD, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('path', { d: rightWingD, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('ellipse', { cx: patch.lHi.cx, cy: patch.lHi.cy, rx: patch.lHi.rx, ry: patch.lHi.ry, fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + leftClipId + ')' });
+      shape('ellipse', { cx: patch.lSh.cx, cy: patch.lSh.cy, rx: patch.lSh.rx, ry: patch.lSh.ry, fill: BAT_SHADOW, 'clip-path': 'url(#' + leftClipId + ')' });
+      shape('ellipse', { cx: patch.rHi.cx, cy: patch.rHi.cy, rx: patch.rHi.rx, ry: patch.rHi.ry, fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + rightClipId + ')' });
+      shape('ellipse', { cx: patch.rSh.cx, cy: patch.rSh.cy, rx: patch.rSh.rx, ry: patch.rSh.ry, fill: BAT_SHADOW, 'clip-path': 'url(#' + rightClipId + ')' });
+
+      shape('polygon', { points: EAR_L, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2', style: BAT_STROKE });
+      shape('polygon', { points: EAR_R, fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2', style: BAT_STROKE });
+      shape('ellipse', { cx: '42', cy: '22', rx: '4', ry: '5', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + earLClipId + ')' });
+      shape('ellipse', { cx: '46', cy: '26', rx: '4', ry: '5', fill: BAT_SHADOW, 'clip-path': 'url(#' + earLClipId + ')' });
+      shape('ellipse', { cx: '74', cy: '22', rx: '4', ry: '5', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + earRClipId + ')' });
+      shape('ellipse', { cx: '78', cy: '26', rx: '4', ry: '5', fill: BAT_SHADOW, 'clip-path': 'url(#' + earRClipId + ')' });
+
+      shape('ellipse', { cx: String(BODY_CX), cy: String(BODY_CY), rx: String(BODY_RX), ry: String(BODY_RY), fill: BAT_BASE, stroke: BAT_OUTLINE, 'stroke-width': '2.5', style: BAT_STROKE });
+      shape('ellipse', { cx: '56', cy: '37', rx: '5', ry: '4', fill: BAT_HIGHLIGHT, 'clip-path': 'url(#' + bodyClipId + ')' });
+      shape('ellipse', { cx: '64', cy: '43', rx: '6', ry: '4', fill: BAT_SHADOW, 'clip-path': 'url(#' + bodyClipId + ')' });
+
+      shape('circle', { cx: '54', cy: '37', r: '2.2', fill: '#0d0d0f' });
+      shape('circle', { cx: '66', cy: '37', r: '2.2', fill: '#0d0d0f' });
+      shape('circle', { cx: '53.3', cy: '36.3', r: '1.4', fill: '#ffffff' });
+      shape('circle', { cx: '65.3', cy: '36.3', r: '1.4', fill: '#ffffff' });
+
+      return g;
+    }
+
+    var FIG_VB_W = 90, FIG_VB_H = 110;
+    var FIG_ASPECT = FIG_VB_W / FIG_VB_H;
+    var CAPE = '#3b0764', CAPE_OUTLINE = '#150826';
+    var CAPE_HI = '#7c3aed', CAPE_SHADE = '#26043f';
+    var SKIN = '#e9ded2', SKIN_OUTLINE = '#2b1a12';
+    var SKIN_HI = '#fff8ee', SKIN_SHADE = '#a3856a';
+    var HAIR = '#0d0d0f';
+    var IRIS = '#7c3aed'; // ties the eye color to the cape's own highlight tone
+    var NOSE = '#f472b6';
+
+    var figHeight = Math.max(56, Math.min(100, 3.0 * rect.height)) * beaconScale;
+    var figWidth = figHeight * FIG_ASPECT;
+
+    // Landing position: beside the match (right, then left), falling back to above it, then
+    // (last resort) below -- never over it. Every candidate side is tried UNCLAMPED and only
+    // used if its full box (padded by GAP) already fits on screen without touching the match
+    // -- a post-hoc clamp is what oculist-1ta.1 fixed (clamping a beside-position back inside
+    // the viewport could drag it onto the match itself near an edge).
+    var MIST_PAD = 10;
+    var CLEAR_HALF_X = Math.max(figWidth / 2 + MIST_PAD, BAT_W / 2);
+    var CLEAR_HALF_Y = figHeight / 2 + MIST_PAD;
+
+    var sideRight = { x: rect.right + GAP + CLEAR_HALF_X, y: mcy, side: 'right' };
+    sideRight.fits = sideRight.x + CLEAR_HALF_X <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - CLEAR_HALF_X, y: mcy, side: 'left' };
+    sideLeft.fits = sideLeft.x - CLEAR_HALF_X >= 4;
+
+    var vCenterX = Math.max(CLEAR_HALF_X + 4, Math.min(vw - CLEAR_HALF_X - 4, mcx));
+    var above = { x: vCenterX, y: rect.top - GAP - CLEAR_HALF_Y, side: 'above' };
+    above.fits = above.y - CLEAR_HALF_Y >= 4;
+    var below = { x: vCenterX, y: rect.bottom + GAP + CLEAR_HALF_Y, side: 'below' };
+    below.fits = below.y + CLEAR_HALF_Y <= vh - 4;
+
+    var useRight = mcx >= vw / 2;
+    var preferredSide = useRight ? sideRight : sideLeft;
+    var secondarySide = useRight ? sideLeft : sideRight;
+    // above.fits is checked before below.fits: beside-or-above, never over the match; below
+    // is a last resort kept only so a landing position always exists.
+    var landing = preferredSide.fits ? preferredSide
+      : secondarySide.fits ? secondarySide
+      : above.fits ? above
+      : below;
+
+    var endX = landing.x, endY = landing.y; // viewport space
+    var startX, startY, dx, dy; // viewport space
+
+    if (landing.side === 'right' || landing.side === 'left') {
+      // Approach from the same side as the landing side, so the bat's x stays on that side
+      // of the match for the WHOLE flight (linear interpolation of two same-side values
+      // never crosses to the other side) -- not just at the final rest position.
+      var onRight = landing.side === 'right';
+      startX = onRight
+        ? Math.min(vw - 4, Math.max(vw - INSET, rect.right + GAP + BAT_W / 2))
+        : Math.max(4, Math.min(INSET, rect.left - GAP - BAT_W / 2));
+      startY = Math.max(INSET, mcy - 130);
+      dx = endX - startX;
+      if (Math.abs(dx) < 80) {
+        // Degenerate case: the chosen edge is too close to read as a flight. Push the
+        // launch point further out on the same side (away from the match, which only ever
+        // increases clearance).
+        startX = onRight ? Math.min(vw - 4, endX + 140) : Math.max(4, endX - 140);
+        dx = endX - startX;
+      }
+      dy = endY - startY;
+    } else {
+      // Above/below fallback: approach vertically, converging on endX so the weave (applied
+      // to y below) can't walk the bat sideways into the match while it is still well clear
+      // vertically.
+      startX = endX;
+      var onAbove = landing.side === 'above';
+      startY = onAbove ? Math.max(4, endY - 220) : Math.min(vh - 4, endY + 220);
+      dy = endY - startY;
+      if (Math.abs(dy) < 80) {
+        startY = onAbove ? Math.max(4, endY - 140) : Math.min(vh - 4, endY + 140);
+        dy = endY - startY;
+      }
+      dx = endX - startX;
+    }
+
+    // Erratic, non-parabolic approach: two summed sine weaves, damped toward 0 near arrival
+    // so the landing point itself is exact and the path never overshoots back across the
+    // match's edge. Hand-authored constants (rule 11: no Math.random anywhere).
+    var FLY_DUR = 900;
+    var STEPS = 40;
+    var WEAVE_AMP = 22, WEAVE_CYCLES = 3.5, WEAVE_PHASE = 0.6;
+    var JITTER_AMP = 8, JITTER_CYCLES = 9, JITTER_PHASE = 1.3;
+
+    // Document coordinates (rule 2): SCROLL_X/SCROLL_Y are added exactly once, at the point
+    // each viewport-space value is actually written into this path string or a left/top --
+    // animateHorseman's own offset-path precedent.
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var pathPts = [];
+    for (var i = 0; i <= STEPS; i++) {
+      var frac = i / STEPS;
+      var damp = 1 - frac * 0.85;
+      var weave = WEAVE_AMP * Math.sin(frac * WEAVE_CYCLES * 2 * Math.PI + WEAVE_PHASE) * damp;
+      var jitter = JITTER_AMP * Math.sin(frac * JITTER_CYCLES * 2 * Math.PI + JITTER_PHASE) * damp;
+      var px = startX + dx * frac; // viewport space
+      var py = startY + dy * frac + weave + jitter; // viewport space
+      pathPts.push([px + SCROLL_X, py + SCROLL_Y]); // document space
+    }
+    pathPts[STEPS] = [endX + SCROLL_X, endY + SCROLL_Y]; // exact landing, immune to float rounding
+
+    var pathStr = 'M ' + pathPts.map(function (p) { return p[0] + ' ' + p[1]; }).join(' L ');
+
+    // ── Bat ──────────────────────────────────────────────────────────────────────────
+    var batAnims = [];
+    function trackBat(a) { batAnims.push(a); return a; }
+
+    var batEl = document.createElement('div');
+    batEl.className = 'oc-beacon oc-beacon-transient';
+    batEl.setAttribute('data-batflight', 'bat');
+    batEl.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + BAT_W + 'px', 'height:' + BAT_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
+      'opacity:1'
+    ].join(';');
+    document.documentElement.appendChild(batEl);
+
+    var batSvg = document.createElementNS(NS, 'svg');
+    batSvg.setAttribute('width', String(BAT_W));
+    batSvg.setAttribute('height', String(BAT_H));
+    batSvg.setAttribute('viewBox', '0 0 ' + BAT_VB_W + ' ' + BAT_VB_H);
+    batSvg.style.cssText = 'display:block;overflow:visible;';
+    batSvg.appendChild(batDefs);
+    batEl.appendChild(batSvg);
+
+    var frameOutG = buildBatFrame(WING_OUT_L, WING_OUT_R, OUT_PATCH, 'Out');
+    frameOutG.setAttribute('data-bf-part', 'wing-out');
+    var frameTuckedG = buildBatFrame(WING_TUCKED_L, WING_TUCKED_R, TUCKED_PATCH, 'Tucked');
+    frameTuckedG.setAttribute('data-bf-part', 'wing-tucked');
+    batSvg.appendChild(frameOutG);
+    batSvg.appendChild(frameTuckedG);
+
+    // Discrete swap, not a squash: each frame is fully opaque for its half of the period and
+    // fully transparent for the other -- a flip-book, not an interpolation (a sub-part squash
+    // rendered invisibly on animateFlappy's first wing pass). Hung on frameOutG/frameTuckedG
+    // (child nodes of batSvg) but tracked into batEl's own __waapiAnims below (rule 4).
+    var FLAP_PERIOD = 130;
+    var FLAP_ITER = Math.ceil(FLY_DUR / FLAP_PERIOD);
+    trackBat(frameOutG.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 1, offset: 0.49 },
+      { opacity: 0, offset: 0.5 },
+      { opacity: 0, offset: 1 }
+    ], { duration: FLAP_PERIOD * durFactor, iterations: FLAP_ITER, fill: 'forwards' }));
+    trackBat(frameTuckedG.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 0, offset: 0.49 },
+      { opacity: 1, offset: 0.5 },
+      { opacity: 1, offset: 1 }
+    ], { duration: FLAP_PERIOD * durFactor, iterations: FLAP_ITER, fill: 'forwards' }));
+
+    trackBat(batEl.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: FLY_DUR * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // ── Mist column ──────────────────────────────────────────────────────────────────
+    // Every raw ms constant below stays UNSCALED, used only for offset RATIOS (rule 6:
+    // durations/delays are the only thing multiplied by durFactor, at the .animate() call
+    // itself) -- animateHorseman's own timeline-comment precedent.
+    var MIST_DELAY = FLY_DUR - 180;
+    var MIST_GROW_DUR = 260;
+    var MIST_HOLD = 150;
+    var MIST_FADE_DUR = 320;
+    var MIST_TOTAL_DUR = MIST_GROW_DUR + MIST_HOLD + MIST_FADE_DUR; // 730
+
+    // oculist-1ta.8: for the 'below' landing only, the fade-out's overshoot anchor flips to
+    // the box's TOP edge so scaleY(1.25)'s extra 0.25*mistH grows downward, away from the
+    // match, instead of upward into it. Every other landing keeps the base 50% 100% anchor
+    // through both the grow-in and the fade-out, byte-identical to before this special case.
+    var mistFadeOrigin = landing.side === 'below' ? '50% 0%' : '50% 100%';
+
+    var mistW = figWidth + MIST_PAD * 2, mistH = figHeight + MIST_PAD * 2;
+    var mistEl = document.createElement('div');
+    mistEl.className = 'oc-beacon oc-beacon-transient';
+    mistEl.setAttribute('data-batflight', 'mist');
+    mistEl.style.cssText = [
+      'position:absolute',
+      'left:' + (endX - mistW / 2 + SCROLL_X) + 'px', 'top:' + (endY - mistH / 2 + SCROLL_Y) + 'px',
+      'width:' + mistW + 'px', 'height:' + mistH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'background:' +
+        'radial-gradient(ellipse 60% 38% at 50% 18%, rgba(148,144,168,0.85), rgba(148,144,168,0) 70%),' +
+        'radial-gradient(ellipse 70% 42% at 50% 50%, rgba(120,114,150,0.8), rgba(120,114,150,0) 70%),' +
+        'radial-gradient(ellipse 64% 40% at 50% 82%, rgba(96,90,128,0.75), rgba(96,90,128,0) 70%)',
+      'transform-origin:50% 100%',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(mistEl);
+
+    // Grow-in and fade-out are ONE .animate() call (not two stacked on the same properties)
+    // -- oculist-7x3j's own compositing fix, ported as-is: two separate calls keyframing the
+    // same properties on one element block compositing.
+    var mistAnims = [];
+    mistAnims.push(mistEl.animate([
+      { offset: 0, opacity: 0, transform: 'scaleY(0.35)', transformOrigin: '50% 100%', easing: 'ease-out' },
+      { offset: MIST_GROW_DUR / MIST_TOTAL_DUR, opacity: 0.9, transform: 'scaleY(1)', transformOrigin: '50% 100%', easing: 'linear' },
+      { offset: (MIST_GROW_DUR + MIST_HOLD) / MIST_TOTAL_DUR, opacity: 0.9, transform: 'scaleY(1)', transformOrigin: mistFadeOrigin, easing: 'ease-in' },
+      { offset: 1, opacity: 0, transform: 'scaleY(1.25)', transformOrigin: mistFadeOrigin }
+    ], { duration: MIST_TOTAL_DUR * durFactor, delay: MIST_DELAY * durFactor, fill: 'forwards' }));
+
+    // Bat vanishes into the rising mist rather than cross-fading straight into the figure --
+    // a direct cross-fade of two sprites this small reads as a smudge, not a transformation.
+    var BAT_FADE_DELAY = MIST_DELAY + 40;
+    var BAT_FADE_DUR = 220;
+    trackBat(batEl.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: BAT_FADE_DUR * durFactor, delay: BAT_FADE_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    batEl.__waapiAnims = batAnims;
+    function removeBatEl() { batEl.remove(); }
+    Promise.allSettled(batAnims.map(function (a) { return a.finished; })).then(removeBatEl);
+
+    mistEl.__waapiAnims = mistAnims;
+    function removeMistEl() { mistEl.remove(); }
+    Promise.allSettled(mistAnims.map(function (a) { return a.finished; })).then(removeMistEl);
+
+    // ── Figure ───────────────────────────────────────────────────────────────────────
+    var figWrap = document.createElement('div');
+    figWrap.className = 'oc-beacon oc-beacon-transient';
+    figWrap.setAttribute('data-batflight', 'figure');
+    figWrap.setAttribute('data-bf-side', landing.side);
+    figWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (endX - figWidth / 2 + SCROLL_X) + 'px', 'top:' + (endY - figHeight / 2 + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(figWrap);
+
+    var figSvg = document.createElementNS(NS, 'svg');
+    figSvg.setAttribute('width', String(figWidth));
+    figSvg.setAttribute('height', String(figHeight));
+    figSvg.setAttribute('viewBox', '0 0 ' + FIG_VB_W + ' ' + FIG_VB_H);
+    figSvg.style.cssText = 'display:block;overflow:visible;';
+    figWrap.appendChild(figSvg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var figDefs = document.createElementNS(NS, 'defs');
+    figSvg.appendChild(figDefs);
+    function figClip(id, d) {
+      var clip = document.createElementNS(NS, 'clipPath');
+      clip.setAttribute('id', id);
+      addShape('path', { d: d }, clip);
+      figDefs.appendChild(clip);
+      return id;
+    }
+
+    // Collar -- apex y=26, well below the head's top (y=12), and offset in x outside the
+    // head's own span, so it reads as a popped collar beside the neck, not a spike above the
+    // skull (oculist-1ta.1's own "horned imp" defect).
+    var collarLD = 'M 10 64 L 16 26 L 28 56 Z';
+    var collarRD = 'M 80 64 L 74 26 L 62 56 Z';
+    var collarLClip = figClip(uid + 'collarL', collarLD);
+    var collarRClip = figClip(uid + 'collarR', collarRD);
+    addShape('polygon', { points: '10,64 16,26 28,56', fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    addShape('polygon', { points: '80,64 74,26 62,56', fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    addShape('ellipse', { cx: '16', cy: '39', rx: '5', ry: '9', fill: CAPE_HI, 'clip-path': 'url(#' + collarLClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '22', cy: '51', rx: '5', ry: '9', fill: CAPE_SHADE, 'clip-path': 'url(#' + collarLClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '68', cy: '39', rx: '5', ry: '9', fill: CAPE_HI, 'clip-path': 'url(#' + collarRClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '74', cy: '51', rx: '5', ry: '9', fill: CAPE_SHADE, 'clip-path': 'url(#' + collarRClip + ')' }, figSvg);
+    var capeBodyD = 'M 14 108 C 16 78 22 60 30 56 L 60 56 C 68 60 74 78 76 108 Z';
+    addShape('path', { d: capeBodyD, fill: CAPE, stroke: CAPE_OUTLINE, 'stroke-width': '3' }, figSvg);
+    var capeClip = figClip(uid + 'cape', capeBodyD);
+    addShape('path', {
+      d: 'M 14 108 C 16 78 22 60 30 56 L 40 58 C 32 64 28 80 26 106 Z',
+      fill: CAPE_HI, 'clip-path': 'url(#' + capeClip + ')'
+    }, figSvg);
+    addShape('path', {
+      d: 'M 60 56 C 68 60 74 78 76 108 L 64 106 C 66 80 62 62 50 58 Z',
+      fill: CAPE_SHADE, 'clip-path': 'url(#' + capeClip + ')'
+    }, figSvg);
+    // Head -- drawn after the collar/cape so it paints on top, at the viewBox's top edge.
+    var headD = 'M 45 33 m -18 0 a 18 21 0 1 0 36 0 a 18 21 0 1 0 -36 0';
+    addShape('ellipse', { cx: '45', cy: '33', rx: '18', ry: '21', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '2.5' }, figSvg);
+    var headClip = figClip(uid + 'head', headD);
+    addShape('ellipse', { cx: '27', cy: '28', rx: '11', ry: '16', fill: SKIN_HI, 'clip-path': 'url(#' + headClip + ')' }, figSvg);
+    addShape('ellipse', { cx: '61', cy: '40', rx: '11', ry: '17', fill: SKIN_SHADE, 'clip-path': 'url(#' + headClip + ')' }, figSvg);
+    // oculist-1ta.14: the hair outline was dropped rather than lightened, since HAIR is
+    // already near-black and there is no darker shade left to draw a real outline in -- the
+    // fill alone already reads as a distinct dark shape against both the page and SKIN.
+    addShape('path', {
+      d: 'M 27 24 Q 45 8 63 24 Q 63 16 45 12 Q 27 16 27 24 Z',
+      fill: HAIR
+    }, figSvg);
+    addShape('ellipse', { cx: '37', cy: '34', rx: '3.6', ry: '4.4', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, figSvg);
+    addShape('ellipse', { cx: '53', cy: '34', rx: '3.6', ry: '4.4', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, figSvg);
+    addShape('circle', { cx: '37', cy: '35.2', r: '1.8', fill: IRIS }, figSvg);
+    addShape('circle', { cx: '53', cy: '35.2', r: '1.8', fill: IRIS }, figSvg);
+    addShape('polygon', { points: '43,44 47,44 45,48', fill: NOSE }, figSvg);
+    // oculist-1ta.14: the mouth moved up 3 units, clear of the head outline's own stroke
+    // band, so it reads as a distinct feature instead of fusing into the chin line.
+    addShape('path', { d: 'M 39 48 Q 45 51 51 48', fill: 'none', stroke: HAIR, 'stroke-width': '1.6', style: 'stroke-linecap:round;' }, figSvg);
+
+    // Fade-in and final fade-out are ONE .animate() call, same compositing reasoning as the
+    // mist column above (oculist-mu91's own precedent for a figure fade-in/out pair).
+    var FIGURE_FADE_DELAY = MIST_DELAY + MIST_GROW_DUR - 60;
+    var FIGURE_FADE_DUR = 260;
+    var FIGURE_HOLD_AFTER = 600;
+    var FIGURE_FINAL_FADE_DELAY = FIGURE_FADE_DELAY + FIGURE_FADE_DUR + FIGURE_HOLD_AFTER;
+    var FIGURE_FINAL_FADE_DUR = 300;
+    var FIGURE_TOTAL_DUR = FIGURE_FINAL_FADE_DELAY + FIGURE_FINAL_FADE_DUR - FIGURE_FADE_DELAY;
+
+    var figAnim = figWrap.animate([
+      { offset: 0, opacity: 0, transform: 'scale(0.85)', easing: 'ease-out' },
+      { offset: FIGURE_FADE_DUR / FIGURE_TOTAL_DUR, opacity: 1, transform: 'scale(1)', easing: 'linear' },
+      { offset: (FIGURE_FADE_DUR + FIGURE_HOLD_AFTER) / FIGURE_TOTAL_DUR, opacity: 1, transform: 'scale(1)', easing: 'ease-in' },
+      { offset: 1, opacity: 0, transform: 'scale(1)' }
+    ], { duration: FIGURE_TOTAL_DUR * durFactor, delay: FIGURE_FADE_DELAY * durFactor, fill: 'forwards' });
+
+    figWrap.__waapiAnims = [figAnim];
+    function removeFigWrap() { figWrap.remove(); }
+    figAnim.finished.then(removeFigWrap).catch(removeFigWrap);
+  }
+
+  // oculist-nq1x.10: promotes fxWandCast (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the ninth entry in the Halloween pack. A sparkling amber
+  // fairy lands beside the match (right by default, left if the right side has no room), casts
+  // through three wand poses, and launches six sparkles from the wand tip that swirl the match
+  // on an orbiting ellipse before fading -- never above/below (see MISSING-REQUIREMENT below).
+  //
+  // NO ABOVE/BELOW FALLBACK, BY DESIGN (oculist-nq1x.10's own MISSING-REQUIREMENT note): unlike
+  // animateBatFlight's beside-then-above-then-below chooser, this effect has no above/below
+  // placement at all -- the wand pose art and the sparkle travel bezier both assume the figure
+  // sits BESIDE the match (the bezier's control point is keyed off the wand tip's own x and
+  // rect.bottom; the orbit's landing-angle bias assumes the wand launches from the same side its
+  // sparkles land on). When neither side has full clearance, this does NOT fall back to
+  // above/below and does NOT suppress on that alone -- it still tries sideRight, then suppresses
+  // (mounts nothing at all) ONLY if the actual clamped painted bounds of the figure genuinely
+  // overlap #match (oculist-giy7). A synthetic full-width #match (the standard FORCED-LANDING
+  // harness rows) therefore suppresses on every one of those rows unconditionally -- unfalsifiable
+  // by construction for this key, the same reclassification Tentacle Rise's own vacuous-green risk
+  // needed (oculist-ke53/4k8y); this suite proves real (non-vacuous) placement and real suppression
+  // separately via a live element census, not just a clean pixel-diff.
+  //
+  // NO START-POINT CASCADE, RULE 9 EXCEPTION (oculist-i8zu, DECIDED 2026-09-23, oculist-nq1x.10's
+  // own RULE 9 DECIDED note): the shipped lastMouseX/find-bar/viewport start-point cascade
+  // animateTrail uses is deliberately NOT used here. Every sparkle launches from the wand tip
+  // (wandTipScreen, itself derived from the figure's own placement, which keeps the travel clear
+  // of #match per rule 10) -- a cursor or find-bar origin would detach the sparkles from the
+  // figure that casts them. Rule 9's other half -- the mirrored branch must work for real, not
+  // just compile -- still applies and is tested below.
+  //
+  // SIX PRIOR OCCLUSION DEFECTS, all closed, ported forward rather than re-derived: oculist-tvqw
+  // (the rx floor below is NOT the strictly-derived (rect.width/2 + MARGIN)/cos(30deg) form --
+  // deliberately kept as MARGIN/cos(30deg) alone, a measured trade, see the rx comment below),
+  // oculist-giy7 (the side-selection fallback suppresses on the ACTUAL clamped painted bounds,
+  // never on sideRight.fits/sideLeft.fits alone), oculist-wkfc (a sparkle's launch stays invisible
+  // until the sampled travel path first visually clears #match -- revealTravelT below), oculist-73l6
+  // (+1px of ORBIT_EDGE_MARGIN for a simultaneous-both-axes corner case), oculist-3dd8 (DOES
+  // apply here, corrected after review: scroll goes through fadeActiveBeacons(), an immediate
+  // teardown with no stale-clip window, but RESIZE does not -- content.js's own handleResize
+  // only reaches cancelBeacons() via repositionActiveOverlays() after a 100ms debounce that a
+  // continuous resize drag keeps resetting, so backWrap's static clip-path hole can go stale
+  // against a reflowed #match for the whole drag. Ported the prototype's own hard cut: backWrap
+  // tears itself down on the FIRST resize event, ahead of the debounced cancelBeacons() -- see
+  // backWrap's own comment below), oculist-mbmy (the engagement-threshold framing for when
+  // rxViewportCap actually differs from rawRx). A redraw or "cleanup" that restores any of the
+  // cut/fixed beats these close reasons describe is a regression, not an improvement.
+  //
+  // Fixed identity palette (oculist-1ta.30's own accent-amber recolor, rule 6's own license,
+  // "the pumpkin's orange"): OUTLINE/AMBER/SPARK_* are fixed literals, like Bat Flight's BAT_*
+  // tones -- there is no separate flash/UI-accent element here for getEffectiveColors().beacon to
+  // drive.
+  //
+  // Lite Mode (rule 7): a no-op, the same reasoning Bat Flight's/Tentacle Rise's own header
+  // comments give for themselves. There is no filter, no box-shadow and no decorative glow layer
+  // anywhere in this effect's shipped art -- every "glow" mentioned in the geometry comments below
+  // is a historical clearance-margin name, not a rendered CSS effect -- and the wand-pose swap plus
+  // the orbiting sparkle swirl ARE the effect's defining beats, not decorative flicker to cut.
+  // settings.performanceMode is deliberately never read below.
+  function animateWandCast(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var mcy = rect.top + rect.height / 2; // viewport space (rule 2)
+    var vw = window.innerWidth, vh = window.innerHeight;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    var OUTLINE = '#6f4608';
+    var AMBER = '#f59e0b';
+    var SPARK_CORE = '#fff6d8';
+    var SPARK_MID = '#ffd76a';
+    var SPARK_EDGE = '#c98a1c';
+    var STROKE = 'stroke-linejoin:round;stroke-linecap:round;';
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    function shape(d, fill, parent, stroke, width, part) {
+      var attrs = { d: d, fill: fill };
+      if (stroke) {
+        attrs.stroke = stroke;
+        attrs['stroke-width'] = String(width);
+        attrs.style = STROKE;
+      }
+      if (part) attrs['data-wc-part'] = part;
+      return svgEl('path', attrs, parent);
+    }
+
+    // ── Fairy art, local viewBox coordinates. Canonical drawing always reaches with the wand
+    // toward local -x -- see toScreen() below for why that one convention covers both landing
+    // sides without a second set of coordinates. ──
+    var VB_W = 40, VB_H = 52;
+    var SHOULDER = [20, 17];
+    var TIP_BACK = [16, -10];
+    var TIP_MID = [-4, 4];
+    var TIP_CAST = [-16, 18];
+    var WAND_TIP_LOCAL = TIP_CAST;
+    var TIP_RADIUS_LOCAL = 2.5;
+
+    // Furthest local reach toward the match (wand tip at cast) and away from it (the wing's own
+    // outer tip) -- the same GAP/REACH_INWARD/REACH_OUTWARD side-selection idiom animateReanimate
+    // uses, so the figure never lands close enough to occlude the glyphs and never picks a side
+    // it doesn't actually fit on.
+    var ANCHOR_X = 20;
+    var REACH_INWARD_LOCAL = ANCHOR_X - (WAND_TIP_LOCAL[0] - 1); // 37
+    var REACH_OUTWARD_LOCAL = 30; // wing's own rightmost point, see wingUpper below
+
+    // figHeight carries beaconScale (rule 6) BEFORE the placement/clearance math below is
+    // derived from it, the same "scale before computing placement" discipline animateReanimate's
+    // own figHeight comment describes.
+    var figHeight = Math.max(34, Math.min(48, 1.5 * rect.height)) * beaconScale;
+    var scale = figHeight / VB_H;
+    var figWidth = VB_W * scale;
+    var GAP = 14;
+    var REACH_INWARD = REACH_INWARD_LOCAL * scale + 3;
+    var REACH_OUTWARD = REACH_OUTWARD_LOCAL * scale + 3;
+
+    // ── Side selection: right by default, mirror to the left only if the right doesn't fit,
+    // exactly animateReanimate's/animateTentacleRise's own "never above/below" convention. ──
+    var sideRight = { x: rect.right + GAP + REACH_INWARD };
+    sideRight.fits = sideRight.x + REACH_OUTWARD <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - REACH_INWARD };
+    sideLeft.fits = sideLeft.x - REACH_OUTWARD >= 4;
+    // "Fits" is the full REACH_INWARD/REACH_OUTWARD comfort budget, not mere non-overlap -- when
+    // neither side clears it, sideRight is still kept as the fallback landing (oculist-giy7):
+    // whether it is actually safe to draw is decided below, from the real painted bounds, not
+    // from these two flags alone.
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+    var onRight = landing === sideRight;
+    var mirrored = !onRight;
+
+    // Hard viewport clamp on top of the side-selection math above, so a narrow viewport
+    // (320x900/360x900) can never push the fairy off-screen.
+    var figLeft = Math.max(4, Math.min(vw - 4 - figWidth, landing.x - ANCHOR_X * scale));
+    var figTop = Math.max(4, Math.min(vh - 4 - figHeight, mcy - figHeight / 2));
+
+    // oculist-giy7/wkfc: suppress ONLY if the ACTUAL clamped painted bounds overlap #match --
+    // not merely because sideRight.fits/sideLeft.fits above are both false (those flags require
+    // the full comfort budget; the clamp above can still land clear of #match even when that
+    // budget doesn't fit). This is figure-only, geometry-driven, keyed off the actual local art
+    // extrema after scale/mirroring -- not the viewport size or a scenario name. When it fires,
+    // the entire flanking figure AND its sparkles are suppressed for this render (no above/below
+    // fallback exists for this effect, see this function's own header comment).
+    var PAINT_MIN_X = TIP_CAST[0] - TIP_RADIUS_LOCAL;
+    var PAINT_MAX_X = 50; // wingUpper's outer point
+    var PAINT_MIN_Y = TIP_BACK[1] - TIP_RADIUS_LOCAL;
+    var PAINT_MAX_Y = 46; // body's lowest point
+    var paintLeft = figLeft + (mirrored ? VB_W - PAINT_MAX_X : PAINT_MIN_X) * scale;
+    var paintRight = figLeft + (mirrored ? VB_W - PAINT_MIN_X : PAINT_MAX_X) * scale;
+    var paintTop = figTop + PAINT_MIN_Y * scale;
+    var paintBottom = figTop + PAINT_MAX_Y * scale;
+    if (paintLeft < rect.right && paintRight > rect.left &&
+        paintTop < rect.bottom && paintBottom > rect.top) {
+      return;
+    }
+
+    // Local (lx,ly) -> viewport px. The wrapper div is mirrored with transform:scaleX(-1)
+    // (transform-origin defaults to the box's own center), so a mirrored local point reflects
+    // across figWidth/2 rather than simply negating -- the one formula every screen-space use of
+    // the local art (the wand tip, below) has to go through.
+    function toScreen(lx, ly) {
+      var ux = mirrored ? (figWidth - lx * scale) : (lx * scale);
+      return [figLeft + ux, figTop + ly * scale]; // viewport space
+    }
+
+    function visualClearsMatch(px, py, reach) {
+      return px + reach <= rect.left || px - reach >= rect.right ||
+        py + reach <= rect.top || py - reach >= rect.bottom;
+    }
+
+    // Document coordinates (rule 2): SCROLL_X/SCROLL_Y are added exactly once, at the point each
+    // viewport-space value is actually written into a left/top or a transform -- animateBatFlight's
+    // own offset-path precedent.
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    // ── Figure ───────────────────────────────────────────────────────────────────────────
+    var wrapAnims = [];
+    function trackWrap(a) { wrapAnims.push(a); return a; }
+
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient';
+    wrap.setAttribute('data-wandcast', 'figure');
+    wrap.setAttribute('data-wc-side', onRight ? 'right' : 'left');
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + (figLeft + SCROLL_X) + 'px', 'top:' + (figTop + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0',
+      mirrored ? 'transform:scaleX(-1);' : ''
+    ].join(';');
+    document.documentElement.appendChild(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(figWidth));
+    svg.setAttribute('height', String(figHeight));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:visible;';
+    wrap.appendChild(svg);
+
+    // Core (head/body/wings) is shared across every wand pose -- only the arm+wand group swaps,
+    // the same "shared core, swap the limb" idiom animateHorseman uses for its gallop/rear frames.
+    var core = svgEl('g', { 'data-wc-core': '' }, svg);
+    shape('M25 18 C30 7 42 -3 48 -3 Q52 -2 48 6 Q46 10 43 12 Q47 12 43 16 Q37 20 25 18Z', SPARK_CORE, core, SPARK_EDGE, 2, 'wing-upper');
+    shape('M26 21 Q39 19 46 23 Q50 27 43 29 Q44 33 38 32 Q32 30 26 21Z', SPARK_CORE, core, SPARK_EDGE, 2, 'wing-lower');
+    shape('M29 22 Q37 22 38 27 Q34 27 29 22Z', SPARK_MID, core);
+    shape('M30 29 Q39 32 40 41 Q36 39 31 34Z', AMBER, core, OUTLINE, 2, 'leg-back');
+    shape('M24 30 L30 31 Q34 38 35 45 Q30 42 25 36Z', AMBER, core, OUTLINE, 2, 'leg-front');
+    shape('M21 16 Q18 17 19 24 Q20 31 23 36 L26 30 L30 32 L30 28 Q34 30 36 28 Q34 24 27 21 L25 16Z', AMBER, core, OUTLINE, 2, 'tunic');
+    shape('M21 19 Q20 24 23 30 L24 27 Q22 22 23 19Z', SPARK_MID, core);
+    shape('M20 3 Q15 7 17 13 Q18 17 23 17 Q27 16 27 11 L26 4Z', SPARK_MID, core, OUTLINE, 2, 'profile');
+    shape('M17 10 Q14 3 20 0 Q24 -2 28 -1 L30 -3 Q31 0 28 1 Q33 1 34 7 Q35 10 38 9 Q36 14 31 12 Q32 16 25 18 Q29 14 26 11 Q21 10 19 5Z', AMBER, core, OUTLINE, 2, 'bob');
+    shape('M21 2 Q28 0 31 5 Q27 3 23 4Z', SPARK_MID, core);
+
+    function addArmPose(name, tip, hand, arm) {
+      var g = svgEl('g', { 'data-wc-pose': name }, svg);
+      var shaft = 'M' + hand.join(' ') + ' L' + tip.join(' ');
+      shape(shaft, 'none', g, OUTLINE, 2.8, 'wand');
+      shape(shaft, 'none', g, SPARK_MID, 1.2);
+      shape('M' + SHOULDER.join(' ') + arm, AMBER, g, OUTLINE, 1.5, 'arm');
+      var star = svgEl('g', { transform: 'translate(' + tip.join(' ') + ')', 'data-wc-part': 'tip' }, g);
+      shape('M0 -2.5 L.8 -.8 L2.5 0 L.8 .8 L0 2.5 L-.8 .8 L-2.5 0 L-.8 -.8Z', SPARK_EDGE, star);
+      shape('M0 -1.7 L.55 -.55 L1.7 0 L.55 .55 L0 1.7 L-.55 .55 L-1.7 0 L-.55 -.55Z', SPARK_CORE, star);
+      return g;
+    }
+    var poseBack = addArmPose('windup', TIP_BACK, [15, 3], ' Q14 15 12 6 Q10 2 13 1 Q16 0 17 4 L16 6 Q17 11 22 13Z');
+    var poseMid = addArmPose('diagonal', TIP_MID, [6, 12], ' Q13 17 8 14 Q4 15 4 11 Q4 8 7 10 L9 12 Q15 14 21 13Z');
+    var poseCast = addArmPose('cast', TIP_CAST, [1, 18], ' Q10 20 3 20 Q-1 21 -1 18 Q-1 15 2 16 L5 17 L20 14Z');
+    poseMid.style.opacity = '0';
+    poseCast.style.opacity = '0';
+
+    // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, at the
+    // .animate() call itself, so relative timing is preserved exactly, matching animateReanimate's
+    // own "raw * durFactor" idiom. ──
+    var ENTRY_DUR = 150;
+    var POSE_HOLD = 150;
+    var T_POSE_MID = ENTRY_DUR + POSE_HOLD;      // 300
+    var CAST_START = T_POSE_MID + POSE_HOLD;     // 450, wand reaches the match-facing pose
+    var TRAVEL_DUR = 260;
+    var ANGULAR_SPEED = 0.5; // deg/ms, constant across every sparkle
+    var ORBIT_MIN_SWEEP = 380; // > 360 so every sparkle completes a full lap
+    // Hand-authored, irregular on purpose (rule 11: no Math.random anywhere) -- six launches
+    // from the wand tip across the wave's final hold.
+    var CAST_STAGGER = [0, 55, 95, 150, 185, 230];
+    var STAGGER_MAX = 230;
+    var ORBIT_STOP_T = CAST_START + STAGGER_MAX + TRAVEL_DUR + ORBIT_MIN_SWEEP / ANGULAR_SPEED; // 1700
+    var FADE_DUR = 200;
+    var DUR = ORBIT_STOP_T + FADE_DUR + 60;
+
+    trackWrap(poseBack.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1, delay: (T_POSE_MID - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseMid.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1, delay: (T_POSE_MID - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseMid.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1, delay: (CAST_START - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseCast.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1, delay: (CAST_START - 1) * durFactor, fill: 'forwards' }));
+
+    // Entry fade-in and the end-of-life fade-out are ONE animation, not two -- a separate fade-in
+    // call would still be active (fill:'forwards') when this one starts at the same delay:0, and
+    // WAAPI's default 'replace' composite would let the later-added animation win, snapping the
+    // fairy to fully opaque at t=0 instead of fading it in (animateBatFlight's own mist/figure
+    // precedent for this compositing rule).
+    trackWrap(wrap.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: ENTRY_DUR / DUR },
+      { opacity: 1, offset: ORBIT_STOP_T / DUR },
+      { opacity: 0, offset: 1 }
+    ], { duration: DUR * durFactor, fill: 'forwards', easing: 'linear' }));
+
+    var wandTipScreen = toScreen(WAND_TIP_LOCAL[0], WAND_TIP_LOCAL[1]); // viewport space
+    var SPARK_SIZE = 12 * beaconScale;
+    var SPARK_HALF = SPARK_SIZE / 2;
+    var SPARK_VISUAL_REACH = SPARK_HALF + 4 * beaconScale;
+
+    // ── Orbit ellipse. Centered DOWN_BIAS below the match's own vertical middle so the ellipse's
+    // lower (front) extreme clears well past rect.bottom while its upper (back) extreme dips just
+    // inside rect.top -- the back arc's own visibility there is handled entirely by backWrap's
+    // clip-path, below. padX/DOWN_BIAS/ry ratios cover the front sparkle's own visual extent, not
+    // just its center point (measured via occlusion-sweep.js in the prototype). ──
+    var mcx = rect.left + rect.width / 2;
+    var padX = 22 * beaconScale;
+    var rawRx = rect.width / 2 + padX;
+    var DOWN_BIAS = 0.32 * rect.height;
+    var ry = 0.78 * rect.height;
+    var ecx = mcx, ecy = mcy + DOWN_BIAS;
+
+    // oculist-tvqw/oculist-giy7/oculist-mbmy: rx is floored at the match's own half width plus a
+    // clearance term (NOT the strictly-derived (rect.width/2 + MARGIN)/cos(30deg) form -- see this
+    // function's own header comment; DECISION, keep as-is) and capped so the ellipse's own
+    // horizontal extreme still clears the viewport edge at a narrow viewport. ORBIT_EDGE_MARGIN
+    // scales with beaconScale (it derives from the sparkle's own half-size); the 320x900/360x900
+    // edge-clamp cases these defects were filed against are exercised below.
+    var ORBIT_EDGE_MARGIN = 18 * beaconScale; // half of SPARK_SIZE + slack (oculist-73l6: +1px margin for a simultaneous-both-axes corner case, then oculist-1ta.30's SPARK_SIZE=12 re-derivation to 18)
+    var LANDING_MIN_DEG_FROM_HORIZONTAL = 30; // must match THETA0_RIGHT's own bound, below
+    var rxViewportCap = Math.min(ecx - ORBIT_EDGE_MARGIN, (vw - ORBIT_EDGE_MARGIN) - ecx);
+    var matchClearanceFloor = rect.width / 2 +
+      ORBIT_EDGE_MARGIN / Math.cos(LANDING_MIN_DEG_FROM_HORIZONTAL * Math.PI / 180);
+    var rx = Math.max(matchClearanceFloor, Math.min(rawRx, rxViewportCap));
+
+    function ellipsePoint(deg) {
+      var rad = deg * Math.PI / 180;
+      return [ecx + rx * Math.cos(rad), ecy + ry * Math.sin(rad)]; // viewport space
+    }
+    // y = ecy + ry*sin(theta): sin>=0 means the point sits AT OR BELOW the ellipse's own center,
+    // i.e. the lower/front arc.
+    function isFrontDeg(deg) {
+      var rad = ((deg % 360) + 360) % 360 * Math.PI / 180;
+      return Math.sin(rad) >= 0;
+    }
+
+    // Landing angles are restricted to [30,120] degrees, biased to the fairy's own side (a
+    // quadratic bezier is bounded by the convex hull of its control points, not by each point's
+    // individual clearance -- a wider range let the hull sweep back across #match even though
+    // every control point was individually clear). [30,120] keeps every landing point on the SAME
+    // side as the wand tip's own launch.
+    var THETA0_RIGHT = [120, 105, 90, 70, 50, 30];
+    var THETA0 = onRight ? THETA0_RIGHT : THETA0_RIGHT.map(function (d) { return 180 - d; });
+
+    function buildAngleCheckpoints(theta0, sweep, stepDeg) {
+      var end = theta0 + sweep;
+      var angles = [theta0];
+      var cur = theta0;
+      while (cur < end - 1e-6) {
+        var next = Math.min(cur + stepDeg, end);
+        var k = Math.floor(cur / 180) + 1;
+        while (k * 180 < next - 1e-6) {
+          if (k * 180 > cur + 1e-6) { angles.push(k * 180); cur = k * 180; }
+          k++;
+        }
+        angles.push(next);
+        cur = next;
+      }
+      return angles;
+    }
+
+    // Every point below (wand tip, bezier samples, ellipse points) is the sparkle's intended
+    // CENTER in viewport space. frontEl is mounted directly on document.documentElement at
+    // left:0;top:0 (document-space origin), so ITS translate needs SCROLL_X/SCROLL_Y added --
+    // animateBatFlight's own offset-path precedent, added here exactly once.
+    function centerTranslateDoc(px, py) {
+      return 'translate(' + (px - SPARK_HALF + SCROLL_X) + 'px,' + (py - SPARK_HALF + SCROLL_Y) + 'px)';
+    }
+    // backEl (the back-arc ghost) is instead a CHILD of backWrap, whose own box is already
+    // anchored at document (SCROLL_X, SCROLL_Y) -- see backWrap's own left/top below -- so
+    // backEl's local origin already coincides with the viewport's own top-left. Routing its
+    // translate through centerTranslateDoc (as the figure/frontEl do) would add the scroll
+    // offset a SECOND time, walking every ghost sparkle scrollY px too far down the document
+    // and off the clip-path's own punched hole (review defect 1, measured at scrollY=1668: front
+    // sparkles at viewport y~391-404, ghosts at y~2054-2072, one scrollY off). This helper stays
+    // in plain viewport space, with no scroll term at all.
+    function centerTranslateLocal(px, py) {
+      return 'translate(' + (px - SPARK_HALF) + 'px,' + (py - SPARK_HALF) + 'px)';
+    }
+
+    function sparkVisual(index) {
+      var glyph = document.createElementNS(NS, 'svg');
+      glyph.setAttribute('xmlns', NS);
+      glyph.setAttribute('width', '12'); glyph.setAttribute('height', '12');
+      glyph.setAttribute('viewBox', '0 0 12 12');
+      glyph.setAttribute('data-wc-spark', ['star', 'diamond', 'burst'][index % 3]);
+      glyph.style.display = 'block';
+      var d = [
+        'M6 1 L7.8 4.2 L11 6 L7.8 7.8 L6 11 L4.2 7.8 L1 6 L4.2 4.2Z',
+        'M6 1 Q7.5 4.5 11 6 Q7.5 7.5 6 11 Q4.5 7.5 1 6 Q4.5 4.5 6 1Z',
+        'M5 2 Q5 1 6 1 Q7 1 7 2 L7 4.2 L9.5 2.8 Q11 2 11 3.5 Q11 4 10.5 4.4 L8 6 L10.5 7.6 Q11 8 11 8.5 Q11 10 9.5 9.2 L7 7.8 L7 10 Q7 11 6 11 Q5 11 5 10 L5 7.8 L2.5 9.2 Q1 10 1 8.5 Q1 8 1.5 7.6 L4 6 L1.5 4.4 Q1 4 1 3.5 Q1 2 2.5 2.8 L5 4.2Z'
+      ][index % 3];
+      shape(d, SPARK_EDGE, glyph);
+      var mid = shape(d, SPARK_MID, glyph);
+      mid.setAttribute('transform', 'translate(6 6) scale(.75) translate(-6 -6)');
+      var coreShape = shape(d, SPARK_CORE, glyph);
+      coreShape.setAttribute('transform', 'translate(6 6) scale(.55) translate(-6 -6)');
+      return glyph;
+    }
+
+    // ── Back-arc clipping wrapper. One absolute, full-viewport-sized element anchored at the
+    // current viewport's own document-space origin (rule 2 -- animateReanimate's own
+    // reanimateWrap idiom), with a STATIC evenodd clip-path: an outer loop tracing the viewport
+    // and an inner loop tracing #match's own rect (viewport-relative, i.e. relative to this div's
+    // own local box, which starts at the viewport's top-left), bridged into a single continuous
+    // point list -- the standard "keyhole" technique for punching a hole with one polygon. Every
+    // back-arc ghost below is a plain DOM child of this wrapper, not its own top-level mounted
+    // element -- so its animations are tracked onto backWrap.__waapiAnims (rule 4: "animations on
+    // child nodes hang on the parent"), and removing backWrap removes them.
+    //
+    // oculist-3dd8 DOES apply here (corrected after review). This wrapper's clip-path hole is a
+    // STATIC snapshot of the fire-time #match rect. A real user SCROLL is fine -- handleScroll()
+    // calls fadeActiveBeacons() synchronously, tearing every transient beacon down immediately,
+    // so there is no window where the stale hole could paint through. A RESIZE is not: content.js
+    // only reaches cancelBeacons() via handleResize() -> repositionActiveOverlays(), gated behind
+    // a 100ms debounce (overlayResizeTimer) that a continuous resize drag keeps resetting on every
+    // event, so #match can reflow to a new position (or size) while this hole stays punched at the
+    // old one for the whole drag -- the back-arc ghosts then paint straight over the glyphs (or
+    // leave a gap over the vacated old position). See hardCutBackWrap() below, the ported
+    // equivalent of the prototype's dissolveHardCut: it tears backWrap down on the very first
+    // resize event, ahead of the debounced cancelBeacons().
+    var CLIP_MARGIN = 2;
+    var backWrap = document.createElement('div');
+    backWrap.className = 'oc-beacon oc-beacon-transient';
+    backWrap.setAttribute('data-wandcast', 'back-clip');
+    var clipPts = [
+      '0px 0px', vw + 'px 0px', vw + 'px ' + vh + 'px', '0px ' + vh + 'px', '0px 0px',
+      (rect.left - CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px', (rect.left - CLIP_MARGIN) + 'px ' + (rect.bottom + CLIP_MARGIN) + 'px',
+      (rect.right + CLIP_MARGIN) + 'px ' + (rect.bottom + CLIP_MARGIN) + 'px', (rect.right + CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px', (rect.left - CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px'
+    ].join(', ');
+    backWrap.style.cssText = [
+      'position:absolute',
+      'left:' + SCROLL_X + 'px', 'top:' + SCROLL_Y + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'clip-path:polygon(evenodd, ' + clipPts + ')'
+    ].join(';');
+    document.documentElement.appendChild(backWrap);
+    var backWrapAnims = [];
+
+    for (var i = 0; i < THETA0.length; i++) {
+      var theta0 = THETA0[i];
+      var castStart = CAST_START + CAST_STAGGER[i];
+      var orbitDur = ORBIT_STOP_T - (castStart + TRAVEL_DUR);
+      // FADE_DUR is reserved OUT of the orbit motion (not appended after it) -- the orbit's own
+      // angle sweep only covers orbitMotionDur, and the fade-out keyframes below start exactly
+      // where that motion ends.
+      var orbitMotionDur = Math.max(0, orbitDur - FADE_DUR);
+      var sweep = ANGULAR_SPEED * orbitMotionDur;
+      var duration = TRAVEL_DUR + orbitDur;
+      var travelFrac = TRAVEL_DUR / duration;
+      var fadeFrac = (TRAVEL_DUR + orbitMotionDur) / duration;
+
+      // Travel: a quadratic bezier from the wand tip, biased to drop below the match before
+      // sweeping inward -- the control point shares the wand tip's own x (not the midpoint's),
+      // so early in the curve the sparkle is still outside the match's horizontal rect while it
+      // loses height, and only turns inward once it has already cleared rect.bottom. 1.3*height
+      // keeps every landing angle in THETA0 clear of #match by sampling the actual bezier curve,
+      // not just its three control points (a quadratic bezier is bounded by their convex hull).
+      var land = ellipsePoint(theta0);
+      var ctrl = [wandTipScreen[0], rect.bottom + 1.3 * rect.height];
+      var TRAVEL_SAMPLES = 8;
+      // Two parallel position-keyframe arrays, same offsets, same underlying px/py samples --
+      // only the translate space differs (see centerTranslateDoc/centerTranslateLocal's own
+      // comments above). posKFFront drives frontEl (document space); posKFBack drives backEl
+      // (viewport space, relative to backWrap's already-scrolled box).
+      var posKFFront = [];
+      var posKFBack = [];
+      // oculist-wkfc: a viewport clamp can leave the wand tip itself clear while a sparkle's
+      // larger box+glow still overlaps #match. Keep that launch invisible until the sampled
+      // travel path first clears.
+      var revealTravelT = visualClearsMatch(wandTipScreen[0], wandTipScreen[1], SPARK_VISUAL_REACH) ? 0 : 1;
+      var lastPx = wandTipScreen[0], lastPy = wandTipScreen[1];
+      for (var s = 0; s <= TRAVEL_SAMPLES; s++) {
+        var t = s / TRAVEL_SAMPLES;
+        var it = 1 - t;
+        var px = it * it * wandTipScreen[0] + 2 * it * t * ctrl[0] + t * t * land[0];
+        var py = it * it * wandTipScreen[1] + 2 * it * t * ctrl[1] + t * t * land[1];
+        var travelOffset = t * travelFrac;
+        posKFFront.push({ transform: centerTranslateDoc(px, py), offset: travelOffset });
+        posKFBack.push({ transform: centerTranslateLocal(px, py), offset: travelOffset });
+        if (revealTravelT === 1 && visualClearsMatch(px, py, SPARK_VISUAL_REACH)) revealTravelT = t;
+        lastPx = px; lastPy = py;
+      }
+
+      var angles = buildAngleCheckpoints(theta0, sweep, 20);
+      var revealOffset = revealTravelT * travelFrac;
+      var frontKF = [{ opacity: 0, offset: 0 }];
+      if (revealOffset > 0) frontKF.push({ opacity: 0, offset: revealOffset });
+      frontKF.push(
+        { opacity: 1, offset: Math.min(travelFrac, revealOffset + Math.min(0.04, travelFrac * 0.3)) },
+        { opacity: 1, offset: travelFrac }
+      );
+      var backKF = [{ opacity: 0, offset: 0 }, { opacity: 0, offset: travelFrac }];
+      var lastFront = 1, lastBack = 0, lastOffset = travelFrac;
+      function fracAt(deg) {
+        return sweep > 0 ? travelFrac + (deg - theta0) / ANGULAR_SPEED / duration : travelFrac;
+      }
+      for (var a = 1; a < angles.length; a++) {
+        var deg = angles[a];
+        var frac = fracAt(deg);
+        var pt = ellipsePoint(deg);
+        posKFFront.push({ transform: centerTranslateDoc(pt[0], pt[1]), offset: frac });
+        posKFBack.push({ transform: centerTranslateLocal(pt[0], pt[1]), offset: frac });
+        lastPx = pt[0]; lastPy = pt[1];
+
+        var isBoundary = Math.abs(deg % 180) < 1e-6;
+        if (isBoundary) {
+          var justBefore = isFrontDeg(deg - 0.01);
+          var justAfter = isFrontDeg(deg + 0.01);
+          var eps = Math.min(0.002, (frac - fracAt(angles[a - 1])) / 2);
+          frontKF.push({ opacity: justBefore ? 1 : 0, offset: frac - eps });
+          frontKF.push({ opacity: justAfter ? 1 : 0, offset: frac });
+          backKF.push({ opacity: justBefore ? 0 : 1, offset: frac - eps });
+          backKF.push({ opacity: justAfter ? 0 : 1, offset: frac });
+          lastFront = justAfter ? 1 : 0; lastBack = justAfter ? 0 : 1;
+        } else {
+          var front = isFrontDeg(deg) ? 1 : 0;
+          frontKF.push({ opacity: front, offset: frac });
+          backKF.push({ opacity: front ? 0 : 1, offset: frac });
+          lastFront = front; lastBack = front ? 0 : 1;
+        }
+        lastOffset = frac;
+      }
+      // Math.max guards against float rounding: fadeFrac and the loop's own last `frac` are
+      // mathematically the same instant but can differ by a ULP, enough for WAAPI's strict
+      // monotonic-offset check to reject a fractional decrease.
+      var fadeStart = Math.max(fadeFrac, lastOffset);
+      frontKF.push({ opacity: lastFront, offset: fadeStart });
+      frontKF.push({ opacity: 0, offset: 1 });
+      backKF.push({ opacity: lastBack, offset: fadeStart });
+      backKF.push({ opacity: 0, offset: 1 });
+      // Explicit hold at offset 1: WAAPI treats offset 1 as an IMPLICIT keyframe equal to the
+      // element's underlying (un-animated) value when the last explicit keyframe sits below
+      // offset 1, which would drag the sparkle back toward translate(0,0) for the final stretch
+      // of the timeline. This one keyframe, repeating the last real position, holds it there.
+      posKFFront.push({ transform: centerTranslateDoc(lastPx, lastPy), offset: 1 });
+      posKFBack.push({ transform: centerTranslateLocal(lastPx, lastPy), offset: 1 });
+
+      var frontEl = document.createElement('div');
+      frontEl.className = 'oc-beacon oc-beacon-transient';
+      frontEl.setAttribute('data-wandcast', 'spark-front');
+      frontEl.style.cssText = [
+        'position:absolute',
+        'left:0', 'top:0',
+        'width:' + SPARK_SIZE + 'px', 'height:' + SPARK_SIZE + 'px',
+        'pointer-events:none',
+        'z-index:2147483642',
+        'opacity:0'
+      ].join(';');
+      frontEl.appendChild(sparkVisual(i));
+      document.documentElement.appendChild(frontEl);
+
+      // Back-arc ghost: a plain child of backWrap (see its own comment above), not its own
+      // mounted top-level element -- no 'oc-beacon' class, no z-index override.
+      var backEl = document.createElement('div');
+      backEl.style.cssText = [
+        'position:absolute',
+        'left:0', 'top:0',
+        'width:' + SPARK_SIZE + 'px', 'height:' + SPARK_SIZE + 'px',
+        'opacity:0'
+      ].join(';');
+      backEl.appendChild(sparkVisual(i));
+      backWrap.appendChild(backEl);
+
+      var frontAnims = [];
+      frontAnims.push(frontEl.animate(posKFFront, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      frontAnims.push(frontEl.animate(frontKF, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      frontEl.__waapiAnims = frontAnims;
+      (function (el, anims) {
+        Promise.allSettled(anims.map(function (a) { return a.finished; })).then(function () { el.remove(); });
+      })(frontEl, frontAnims);
+
+      backWrapAnims.push(backEl.animate(posKFBack, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      backWrapAnims.push(backEl.animate(backKF, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+    }
+
+    backWrap.__waapiAnims = backWrapAnims;
+    Promise.allSettled(backWrapAnims.map(function (a) { return a.finished; })).then(function () { backWrap.remove(); });
+
+    // oculist-3dd8 (ported): a resize can reflow #match while backWrap's clip-path hole stays
+    // punched at the stale fire-time rect for up to the FULL length of a continuous resize drag
+    // -- content.js's own cancelBeacons() only reaches backWrap through handleResize()'s 100ms
+    // debounce (overlayResizeTimer), which a dragged edge keeps re-arming on every event. Cancel
+    // backWrap's own animations and remove it immediately on the first resize, ahead of that
+    // debounce, so the ghosts can never paint through a hole that no longer matches #match.
+    // { once: true }: after firing (or after a later resize finds backWrap already detached by
+    // the normal cancel/complete path below -- a harmless no-op), the listener self-removes; it
+    // never outlives this one beacon run.
+    function hardCutBackWrap() {
+      if (!backWrap.isConnected) return;
+      backWrap.__waapiAnims.forEach(function (a) { try { a.cancel(); } catch (e) {} });
+      backWrap.remove();
+    }
+    window.addEventListener('resize', hardCutBackWrap, { passive: true, once: true });
+
+    wrap.__waapiAnims = wrapAnims;
+    Promise.allSettled(wrapAnims.map(function (a) { return a.finished; })).then(function () { wrap.remove(); });
+  }
+
+
+  // oculist-nq1x.11: promotes fxArrowShot (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the tenth entry in the Halloween pack. An archer -- a leather
+  // bycocket hat with a red feather, Robin Hood's own signature (clean folklore, not one of the
+  // epic's three trademarked figures; Chris has explicitly overruled the generic-figure default
+  // for this one, label stays 'Arrow Shot') -- dissolves in at a viewport edge, draws and looses
+  // an arrow that arcs to the match, and concentric target rings bloom around the impact point
+  // as the arrow lands and quivers.
+  //
+  // RULE 9 EXCEPTION, DECIDED 2026-09-23 (oculist-i8zu, oculist-nq1x.11's own RULE 9 DECIDED
+  // note): the shipped lastMouseX/find-bar/viewport start-point cascade animateTrail uses is
+  // deliberately NOT used here. The arrow launches from the archer's fixed grip
+  // (launchX/launchYTop/launchYBottom below, effects-playground.html:4590-4592) -- the archer's
+  // own placement and the impact-plan chooser (oculist-aouc, oculist-q4nl) are what keep the
+  // flight and strike clear of the match (rule 10); a cursor or find-bar origin would bypass
+  // them entirely. Rule 9's other half -- the mirrored branch (top-left vs bottom-left corner)
+  // must work for real, not just compile -- still applies and is tested below.
+  //
+  // THE IMPACT-PLAN CHOOSER is the most load-bearing, least obvious part of this effect's
+  // geometry, and is ported near byte-for-byte rather than re-derived -- every prototype bead
+  // that hardened it is closed and its beats must not come back:
+  //   - oculist-1ta.11: STRIKE_GAP's rest-point inset caught the quiver rotating the arrowhead's
+  //     back corners into the match at some font sizes even under a nominally horizontal plan.
+  //   - oculist-1ta.15 / oculist-uxa0: STRIKE_GAP is exactly 8, "one pixel above a cliff" --
+  //     7 fails by 1px at font sizes 25-26 at a wide 1280x900 viewport. Never round this.
+  //   - oculist-1ta.9: the archer's corner (top-left vs bottom-left) is proven stable across
+  //     repeated fires on the same match by a closed-form margin (3.1-6.7px across all 46
+  //     left-plan scenarios), not by a runtime guard -- tested below by firing twice.
+  //   - oculist-aouc: the FORCED-LANDING fallback (when no plan clears MARGIN on any axis) is
+  //     guarded by a real painted-shape overlap oracle (paintShapeClear/paintedArcherClear/
+  //     paintedFlightClear below), not a bounding-box guess, with a capped push loop so the
+  //     flight can never reverse.
+  //   - oculist-q4nl: the fallback additionally computes a BASELINE (main's own fallback) and a
+  //     CANDIDATE (a whole-body archer clamp) and only takes the candidate when it is STRICTLY
+  //     better for the archer and NO WORSE for the flight, and never turns a forward flight
+  //     backward -- see the SELECT block's own comment below for why that guarantees zero
+  //     regressions rather than merely measuring zero.
+  //   - oculist-1ta.16: the occlusion-sweep harness itself needed the 1280x900 viewport and font
+  //     sizes 22-26 added to its own coverage before it could see the oculist-1ta.11/uxa0 defects
+  //     at all -- recorded here as a reminder that a narrow re-sweep after any future change can
+  //     silently miss this effect's own worst cases.
+  // A "cleanup" of any formula, constant or branch in this block is a regression, not an
+  // improvement -- re-run the occlusion sweep in artifacts/prototypes/occlusion-sweep.js
+  // (arrowshot) after touching any of it, the same instruction fxArrowShot's own STRIKE_GAP
+  // comment gives.
+  //
+  // MEASURED (test/arrowshot_effect.test.js's own 'forced fallback' mutation-proof note):
+  // oculist-q4nl's own candidate is independently load-bearing (proven red by mutation) on every
+  // forced-fallback fixture this suite could construct; oculist-aouc's own push loop still runs
+  // and its result still feeds the BASELINE-vs-CANDIDATE comparison, but no fixture within reach
+  // isolated it as the SOLE guard -- moving the archer (the candidate's own fix) also moves the
+  // flight's own launch point, which incidentally satisfies the push loop's own gate before it
+  // ever needs to run. Recorded here so a future change doesn't read aouc's push as provably dead
+  // code and remove it: it is exercised, just redundant with q4nl's later fix in every case
+  // measured so far.
+  //
+  // THE BYCOCKET/FEATHER GEOMETRY (oculist-1ta.17 through .20) is ported exactly as it reads at
+  // the 78px floor after four rounds of on-page measurement -- do not redraw it from the
+  // reference art or "simplify" the hat/feather path data.
+  //
+  // FORCED-FALLBACK COVERAGE: test/arrowshot-forced-below.check.js (oculist-c6pk) already proves
+  // the PROTOTYPE's own painted silhouette clears the forced-below-1 scenario via the canonical
+  // occlusion-sweep sampler; it is not duplicated here. This suite instead proves the SHIPPED
+  // port's own fallback geometry directly against the live DOM (see 'forced fallback' below).
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): every archer/arrow/
+  // target-ring tone below is a fixed literal, like Bat Flight's BAT_* or Wand Cast's AMBER --
+  // there is no separate flash/UI-accent element here for getEffectiveColors().beacon to drive.
+  // getEffectiveColors().beacon is deliberately never read below.
+  //
+  // Lite Mode (rule 7): a no-op. There is no filter, no box-shadow and no decorative glow layer
+  // anywhere in this effect's shipped art -- the cel-shaded tones ARE the character art, the
+  // draw-hold-release-flight-strike sequence is the one continuous beat this effect has (nothing
+  // to thin out without cutting the effect itself), and the target rings are a single scale/
+  // opacity entrance with no per-ring flicker. Same reasoning Bat Flight's/Wand Cast's own header
+  // comments give for themselves. settings.performanceMode is deliberately never read below.
+  //
+  // RESIZE (measured, not assumed): fxArrowShot's own prototype has no resize listener and no
+  // clip-path keyhole to port (unlike Wand Cast's oculist-3dd8) -- but every element here is
+  // positioned once, at fire time, from the pre-resize rect, and the target rings in particular
+  // stand only STRIKE_GAP/padIn clear of #match's own fire-time edges. Measured directly, not
+  // assumed clean by analogy to Bat Flight's own looser-clearance figure: test/arrowshot_
+  // effect.test.js's own 'resize mid-flight' test (a #resizeTarget fixture that reflows #match
+  // ~8px horizontally on a 16px viewport-width change, frozen mid-quiver) showed a real nonzero
+  // painted-pixel delta before the hard cut below existed -- content.js's own handleResize() only
+  // reaches cancelBeacons() via repositionActiveOverlays() after a 100ms debounce a continuous
+  // resize drag keeps resetting, the same window oculist-3dd8 closed for Wand Cast. Ported the
+  // same technique here (hardCutArrowShot below), applied to all three top-level elements instead
+  // of one clip mask, and the resize test now passes clean.
+  function animateArrowShot(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var r = rect; // viewport space (rule 2) -- kept as `r` to match the ported geometry below
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = r.left + r.width / 2, mcy = r.top + r.height / 2;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var INSET = 40;
+    // See the header comment above (oculist-1ta.15/uxa0): exactly 8, do not round.
+    var STRIKE_GAP = 8;
+    // Fixed local-unit viewBox for the flight arrow (unchanged from the prototype); ARROW_LEN/
+    // ARROW_H below are the PHYSICAL rendered footprint (rule 6: size through getBeaconScale()),
+    // arrowScale is the local-unit-to-physical-px ratio the painted-shape oracle needs.
+    var ARROW_VB_W = 58, ARROW_VB_H = 26;
+    var arrowScale = beaconScale;
+    var ARROW_LEN = ARROW_VB_W * arrowScale, ARROW_H = ARROW_VB_H * arrowScale;
+    var VB_W = 108, VB_H = 114;
+
+    // Archer sizing is corner-independent (a function of the match's own height only), computed
+    // here because the plan chooser below needs the grip's real screen offset before any corner
+    // is picked.
+    var archerH = Math.max(78, Math.min(112, 3.2 * r.height)) * beaconScale;
+    var archerW = archerH * (VB_W / VB_H);
+    var GRIP_LOCAL = { x: 100, y: 54 };
+    var scaleX = archerW / VB_W, scaleY = archerH / VB_H;
+    // Both left-side corners share x:INSET, so the launch point's x is identical either way;
+    // only y depends on which corner is picked.
+    var launchX = INSET + GRIP_LOCAL.x * scaleX;
+    var launchYTop = INSET + GRIP_LOCAL.y * scaleY;
+    var launchYBottom = (vh - INSET - archerH) + GRIP_LOCAL.y * scaleY;
+
+    // ── Impact-plan chooser (oculist-aouc, oculist-q4nl) ────────────────────────────────────
+    var MARGIN = ARROW_LEN + 8;
+    var FEATHER_OVERFLOW_LOCAL = 36.63 + 1.5;
+
+    function flightBoxGapAtT(t, lx, ly, ex, ey) {
+      var fdist = Math.hypot(ex - lx, ey - ly);
+      var fMidX = (lx + ex) / 2, fMidY = (ly + ey) / 2;
+      var fArcH = Math.max(30, Math.min(70, fdist * 0.12));
+      var fCtrlX = fMidX, fCtrlY = fMidY - fArcH;
+      var omt = 1 - t;
+      var px = omt * omt * lx + 2 * omt * t * fCtrlX + t * t * ex;
+      var py = omt * omt * ly + 2 * omt * t * fCtrlY + t * t * ey;
+      var tx = 2 * omt * (fCtrlX - lx) + 2 * t * (ex - fCtrlX);
+      var ty = 2 * omt * (fCtrlY - ly) + 2 * t * (ey - fCtrlY);
+      var ang = Math.atan2(ty, tx);
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var corners = [
+        [-ARROW_LEN, -ARROW_H / 2], [-ARROW_LEN, ARROW_H / 2],
+        [0, -ARROW_H / 2], [0, ARROW_H / 2]
+      ];
+      var boxLeft = Infinity, boxRight = -Infinity, boxTop = Infinity, boxBottom = -Infinity;
+      for (var c = 0; c < corners.length; c++) {
+        var wx = px + corners[c][0] * cosA - corners[c][1] * sinA;
+        var wy = py + corners[c][0] * sinA + corners[c][1] * cosA;
+        if (wx < boxLeft) boxLeft = wx;
+        if (wx > boxRight) boxRight = wx;
+        if (wy < boxTop) boxTop = wy;
+        if (wy > boxBottom) boxBottom = wy;
+      }
+      var dxGap = Math.max(r.left - boxRight, boxLeft - r.right, 0);
+      var dyGap = Math.max(r.top - boxBottom, boxTop - r.bottom, 0);
+      if (dxGap > 0 || dyGap > 0) return Math.hypot(dxGap, dyGap);
+      var overlapX = Math.min(boxRight, r.right) - Math.max(boxLeft, r.left);
+      var overlapY = Math.min(boxBottom, r.bottom) - Math.max(boxTop, r.top);
+      return -Math.min(overlapX, overlapY);
+    }
+
+    function sampledFlightClearance(lx, ly, ex, ey) {
+      var minGap = Infinity;
+      var SAMPLES = 240;
+      for (var i = 0; i <= SAMPLES; i++) {
+        var gap = flightBoxGapAtT(i / SAMPLES, lx, ly, ex, ey);
+        if (gap < minGap) minGap = gap;
+      }
+      return minGap;
+    }
+
+    function launchClearance(lx, ly, ex, ey) {
+      return flightBoxGapAtT(0, lx, ly, ex, ey);
+    }
+
+    var QUIVER_MIN_DEG = -10, QUIVER_MAX_DEG = 14;
+
+    function quiverBoxGapAtDeg(deg, lx, ly, ex, ey) {
+      var fdist = Math.hypot(ex - lx, ey - ly);
+      var fMidX = (lx + ex) / 2, fMidY = (ly + ey) / 2;
+      var fArcH = Math.max(30, Math.min(70, fdist * 0.12));
+      var fCtrlX = fMidX, fCtrlY = fMidY - fArcH;
+      var tx = 2 * (ex - fCtrlX), ty = 2 * (ey - fCtrlY);
+      var ang = Math.atan2(ty, tx) + deg * Math.PI / 180;
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var corners = [
+        [-ARROW_LEN, -ARROW_H / 2], [-ARROW_LEN, ARROW_H / 2],
+        [0, -ARROW_H / 2], [0, ARROW_H / 2]
+      ];
+      var boxLeft = Infinity, boxRight = -Infinity, boxTop = Infinity, boxBottom = -Infinity;
+      for (var c = 0; c < corners.length; c++) {
+        var wx = ex + corners[c][0] * cosA - corners[c][1] * sinA;
+        var wy = ey + corners[c][0] * sinA + corners[c][1] * cosA;
+        if (wx < boxLeft) boxLeft = wx;
+        if (wx > boxRight) boxRight = wx;
+        if (wy < boxTop) boxTop = wy;
+        if (wy > boxBottom) boxBottom = wy;
+      }
+      var dxGap = Math.max(r.left - boxRight, boxLeft - r.right, 0);
+      var dyGap = Math.max(r.top - boxBottom, boxTop - r.bottom, 0);
+      if (dxGap > 0 || dyGap > 0) return Math.hypot(dxGap, dyGap);
+      var overlapX = Math.min(boxRight, r.right) - Math.max(boxLeft, r.left);
+      var overlapY = Math.min(boxBottom, r.bottom) - Math.max(boxTop, r.top);
+      return -Math.min(overlapX, overlapY);
+    }
+
+    function sampledQuiverClearance(lx, ly, ex, ey) {
+      var minGap = Infinity;
+      var QUIVER_SAMPLES = 96;
+      for (var i = 0; i <= QUIVER_SAMPLES; i++) {
+        var deg = QUIVER_MIN_DEG + (QUIVER_MAX_DEG - QUIVER_MIN_DEG) * (i / QUIVER_SAMPLES);
+        var gap = quiverBoxGapAtDeg(deg, lx, ly, ex, ey);
+        if (gap < minGap) minGap = gap;
+      }
+      return minGap;
+    }
+
+    // ── Painted-shape overlap oracle (oculist-aouc RUN 7) ───────────────────────────────────
+    function paintPtRect(x, y, rr) {
+      var dx = Math.max(rr.left - x, x - rr.right, 0), dy = Math.max(rr.top - y, y - rr.bottom, 0);
+      return Math.hypot(dx, dy);
+    }
+    function paintPtSeg(px, py, ax, ay, bx, by) {
+      var vx = bx - ax, vy = by - ay;
+      var L = vx * vx + vy * vy;
+      var t = L ? ((px - ax) * vx + (py - ay) * vy) / L : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - ax - t * vx, py - ay - t * vy);
+    }
+    function paintCross(ax, ay, bx, by, cx, cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); }
+    function paintSegInter(ax, ay, bx, by, cx, cy, dx, dy) {
+      var d1 = paintCross(cx, cy, dx, dy, ax, ay), d2 = paintCross(cx, cy, dx, dy, bx, by);
+      var d3 = paintCross(ax, ay, bx, by, cx, cy), d4 = paintCross(ax, ay, bx, by, dx, dy);
+      return (d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0);
+    }
+    function paintSegRectDist(ax, ay, bx, by, rr) {
+      function inside(x, y) { return x >= rr.left && x <= rr.right && y >= rr.top && y <= rr.bottom; }
+      if (inside(ax, ay) || inside(bx, by)) return 0;
+      var edges = [
+        [rr.left, rr.top, rr.right, rr.top], [rr.right, rr.top, rr.right, rr.bottom],
+        [rr.right, rr.bottom, rr.left, rr.bottom], [rr.left, rr.bottom, rr.left, rr.top]
+      ];
+      for (var e = 0; e < edges.length; e++) {
+        if (paintSegInter(ax, ay, bx, by, edges[e][0], edges[e][1], edges[e][2], edges[e][3])) return 0;
+      }
+      var m = Math.min(paintPtRect(ax, ay, rr), paintPtRect(bx, by, rr));
+      var corners = [[rr.left, rr.top], [rr.right, rr.top], [rr.left, rr.bottom], [rr.right, rr.bottom]];
+      for (var c = 0; c < corners.length; c++) {
+        m = Math.min(m, paintPtSeg(corners[c][0], corners[c][1], ax, ay, bx, by));
+      }
+      return m;
+    }
+    function paintPtInPoly(x, y, P) {
+      var inPoly = false;
+      for (var i = 0, j = P.length - 1; i < P.length; j = i++) {
+        var xi = P[i][0], yi = P[i][1], xj = P[j][0], yj = P[j][1];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inPoly = !inPoly;
+      }
+      return inPoly;
+    }
+    function paintSatPen(P, rr) {
+      var axes = [[1, 0], [0, 1]];
+      for (var i = 0; i < P.length; i++) {
+        var j = (i + 1) % P.length;
+        var ex = P[j][0] - P[i][0], ey = P[j][1] - P[i][1];
+        var L = Math.hypot(ex, ey);
+        if (L > 1e-9) axes.push([-ey / L, ex / L]);
+      }
+      var rectCorners = [[rr.left, rr.top], [rr.right, rr.top], [rr.left, rr.bottom], [rr.right, rr.bottom]];
+      var pen = Infinity;
+      for (var a = 0; a < axes.length; a++) {
+        var nx = axes[a][0], ny = axes[a][1];
+        var a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+        for (var p = 0; p < P.length; p++) {
+          var proj = P[p][0] * nx + P[p][1] * ny;
+          if (proj < a0) a0 = proj;
+          if (proj > a1) a1 = proj;
+        }
+        for (var rc = 0; rc < rectCorners.length; rc++) {
+          var projR = rectCorners[rc][0] * nx + rectCorners[rc][1] * ny;
+          if (projR < b0) b0 = projR;
+          if (projR > b1) b1 = projR;
+        }
+        pen = Math.min(pen, Math.min(a1, b1) - Math.max(a0, b0));
+      }
+      return pen;
+    }
+    function paintShapeClear(pts, closed, rad, rr) {
+      var d = Infinity;
+      var n = pts.length;
+      var segs = closed ? n : n - 1;
+      for (var i = 0; i < segs; i++) {
+        var a = pts[i], b = pts[(i + 1) % n];
+        d = Math.min(d, paintSegRectDist(a[0], a[1], b[0], b[1], rr));
+        if (d === 0) break;
+      }
+      if (d > 0 && closed && paintPtInPoly((rr.left + rr.right) / 2, (rr.top + rr.bottom) / 2, pts)) d = 0;
+      if (d > 0) return d - rad;
+      var pen;
+      if (closed) {
+        pen = paintSatPen(pts, rr);
+      } else {
+        pen = 0;
+        for (var s = 0; s < n - 1; s++) pen = Math.max(pen, paintSatPen([pts[s], pts[s + 1]], rr));
+      }
+      return -Math.max(pen, 0) - rad;
+    }
+
+    function paintEllPts(cx, cy, rx, ry, N) {
+      var o = [];
+      for (var i = 0; i < N; i++) {
+        var a = (2 * Math.PI * i) / N;
+        o.push([cx + (rx * Math.cos(a)) / Math.cos(Math.PI / N), cy + (ry * Math.sin(a)) / Math.cos(Math.PI / N)]);
+      }
+      return o;
+    }
+    var ARCHER_PAINT = [
+      [[[3, 107], [17, 104], [23, 108], [19, 114], [2, 114]], true, 1.5, true],
+      [[[49, 105], [59, 108], [66, 111], [65, 114], [48, 114], [44, 109]], true, 1.5, true],
+      [[[20, 84], [31, 87], [18, 106], [7, 108]], true, 2, true],
+      [[[36, 87], [47, 84], [58, 107], [47, 109]], true, 2, true],
+      [[[18, 55], [50, 55], [54, 88], [41, 91], [27, 91], [14, 87]], true, 2, true],
+      [[[21, 47], [46, 47], [51, 56], [18, 56]], true, 2, true],
+      [[[29, 39], [41, 39], [41, 50], [29, 50]], true, 1.5, true],
+      [[[62, 16], [56, 22], [64, 31], [73, 43], [60, 54], [73, 65], [64, 77], [56, 86], [62, 92]], false, 6, false],
+      [[[57, 49], [63, 49], [63, 59], [57, 59]], true, 1, false],
+      [[[62, 16], [58, 54], [62, 92]], false, 1.6, false],
+      [[[62, 16], [34, 50], [62, 92]], false, 1.6, false],
+      [[[44, 56], [51, 53], [51, 61], [44, 63]], true, 1.8, true],
+      [[[51, 53], [62, 51], [62, 58], [51, 61]], true, 1.8, true],
+      [[[20, 55], [8, 59], [1, 54], [5, 45], [23, 49]], true, 1.8, true],
+      [[[1, 54], [5, 45], [12, 41], [30, 47], [34, 48], [34, 54]], true, 1.5, true],
+      [paintEllPts(60, 54, 4, 4, 24), true, 1.5, false],
+      [paintEllPts(34, 50, 4, 4, 24), true, 1.5, false],
+      [[[19, 36], [21, 25], [24, 18], [35, 15], [46, 18], [49, 25], [46, 37], [41, 45], [25, 47]], true, 2, true],
+      [[[26, 35], [28, 20], [38, 16], [45, 21], [49, 27], [50, 32], [46, 34], [45, 40], [36, 44], [28, 42]], true, 2, true],
+      [[[14, 20], [28, 20], [18, 14], [5, 12]], true, 2, true],
+      [[[26, 19], [50, 18], [60, 27], [45, 27]], true, 2, true],
+      [[[14, 20], [17, 9], [30, 7], [43, 8], [49, 19]], true, 2, true],
+      [[[18, 16], [10, 5], [1, 2], [5, 15], [16, 20]], true, 1.5, true]
+    ];
+    for (var archerDx = 0; archerDx >= -24; archerDx -= 24) {
+      ARCHER_PAINT.push([[[58 + archerDx, 54], [92 + archerDx, 54]], false, 2.4, false]);
+      ARCHER_PAINT.push([[[92 + archerDx, 50], [100 + archerDx, 54], [92 + archerDx, 58]], true, 1, false]);
+      ARCHER_PAINT.push([[[60 + archerDx, 54], [50 + archerDx, 47], [56 + archerDx, 54]], true, 1, false]);
+      ARCHER_PAINT.push([[[60 + archerDx, 54], [50 + archerDx, 61], [56 + archerDx, 54]], true, 1, false]);
+    }
+    function paintedArcherClear(archerTopVal) {
+      var s = archerH / VB_H;
+      var m = Infinity;
+      for (var i = 0; i < ARCHER_PAINT.length; i++) {
+        var shape = ARCHER_PAINT[i];
+        var pts = shape[0].map(function (pt) { return [INSET + pt[0] * s, archerTopVal + pt[1] * s]; });
+        var rad = shape[3] ? shape[2] / 2 : (shape[2] * s) / 2;
+        m = Math.min(m, paintShapeClear(pts, shape[1], rad, r));
+      }
+      return m;
+    }
+
+    var FEATHER_HAT_PAINT = [
+      [[[14, 20], [28, 20], [18, 14], [5, 12]], true, 2],
+      [[[26, 19], [50, 18], [60, 27], [45, 27]], true, 2],
+      [[[14, 20], [17, 9], [30, 7], [43, 8], [49, 19]], true, 2],
+      [[[18, 16], [10, 5], [1, 2], [5, 15], [16, 20]], true, 1.5]
+    ];
+    function paintedFeatherHatClear(archerTopVal) {
+      var s = archerH / VB_H;
+      var m = Infinity;
+      for (var i = 0; i < FEATHER_HAT_PAINT.length; i++) {
+        var shape = FEATHER_HAT_PAINT[i];
+        var pts = shape[0].map(function (pt) { return [INSET + pt[0] * s, archerTopVal + pt[1] * s]; });
+        m = Math.min(m, paintShapeClear(pts, shape[1], shape[2] / 2, r));
+        if (m <= 0) return m;
+      }
+      return m;
+    }
+
+    // Local-unit points (relative to the arrow's own anchor at (ARROW_VB_W, ARROW_VB_H/2), i.e.
+    // (58,13)); scaled by arrowScale wherever they're actually used below, mirroring how
+    // ARCHER_PAINT's own points get scaled by `s` above.
+    var ARROW_PAINT = [
+      [[[4, 11], [48, 11], [48, 15], [4, 15]], 0.3],
+      [[[48, 6], [58, 13], [48, 20]], 0.5],
+      [[[14, 13], [1, 1], [9, 13]], 0.5],
+      [[[14, 13], [1, 25], [9, 13]], 0.5]
+    ].map(function (shape) {
+      return [shape[0].map(function (pt) { return [pt[0] - ARROW_VB_W, pt[1] - ARROW_VB_H / 2]; }), shape[1]];
+    });
+    // `best` seeds an early-out via a true lower bound (any painted shape here is at most
+    // 61*arrowScale from (px,py)); the per-shape exit right after only fires when !exhaustive.
+    function paintedArrowAt(px, py, ang, best, exhaustive) {
+      var farGap = paintPtRect(px, py, r);
+      var REACH = 61 * arrowScale;
+      if (farGap > REACH && farGap - REACH > best) return best;
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var m = best;
+      for (var i = 0; i < ARROW_PAINT.length; i++) {
+        var shape = ARROW_PAINT[i];
+        var pts = shape[0].map(function (pt) {
+          var lx = pt[0] * arrowScale, ly = pt[1] * arrowScale;
+          return [px + lx * cosA - ly * sinA, py + lx * sinA + ly * cosA];
+        });
+        m = Math.min(m, paintShapeClear(pts, true, shape[1] * arrowScale, r));
+        if (!exhaustive && m <= 0) return m;
+      }
+      return m;
+    }
+    function paintedFlightClear(lx, ly, ex, ey, exhaustive, N, Q) {
+      var d = Math.hypot(ex - lx, ey - ly);
+      var mx = (lx + ex) / 2, my = (ly + ey) / 2;
+      var arcH = Math.max(30, Math.min(70, d * 0.12));
+      var cx = mx, cy = my - arcH;
+      var m = Infinity;
+      var SAMPLES = N || 240;
+      for (var i = 0; i <= SAMPLES; i++) {
+        var t = i / SAMPLES, u = 1 - t;
+        var px = u * u * lx + 2 * u * t * cx + t * t * ex;
+        var py = u * u * ly + 2 * u * t * cy + t * t * ey;
+        var tx = 2 * u * (cx - lx) + 2 * t * (ex - cx);
+        var ty = 2 * u * (cy - ly) + 2 * t * (ey - cy);
+        m = paintedArrowAt(px, py, Math.atan2(ty, tx), m, exhaustive);
+        if (!exhaustive && m <= 0) return m;
+      }
+      var baseAng = Math.atan2(2 * (ey - cy), 2 * (ex - cx));
+      var QUIVER_SAMPLES = Q || 96;
+      for (var q = 0; q <= QUIVER_SAMPLES; q++) {
+        var deg = QUIVER_MIN_DEG + (QUIVER_MAX_DEG - QUIVER_MIN_DEG) * (q / QUIVER_SAMPLES);
+        m = paintedArrowAt(ex, ey, baseAng + (deg * Math.PI) / 180, m, exhaustive);
+        if (!exhaustive && m <= 0) return m;
+      }
+      return m;
+    }
+
+    var leftEndX = r.left - STRIKE_GAP, leftEndY = mcy;
+    var topEndX = mcx, topEndY = r.top - STRIKE_GAP;
+    var bottomEndX = mcx, bottomEndY = r.bottom + STRIKE_GAP;
+    var leftDx = leftEndX - launchX;
+    var topDy = topEndY - launchYTop;
+    var bottomDy = launchYBottom - bottomEndY;
+
+    var plan, corner, endX, endY;
+    var archerYAdjust = 0;
+    if (leftDx > MARGIN) {
+      plan = 'left'; endX = leftEndX; endY = leftEndY;
+      corner = Math.abs(leftEndY - launchYTop) <= Math.abs(leftEndY - launchYBottom) ? 'top-left' : 'bottom-left';
+    } else if (topDy > MARGIN) {
+      plan = 'top'; corner = 'top-left'; endX = topEndX; endY = topEndY;
+    } else if (bottomDy > MARGIN) {
+      plan = 'bottom'; corner = 'bottom-left'; endX = bottomEndX; endY = bottomEndY;
+    } else {
+      if (leftDx >= topDy && leftDx >= bottomDy) {
+        plan = 'left'; corner = 'top-left'; endX = leftEndX; endY = leftEndY;
+      } else if (topDy >= bottomDy) {
+        plan = 'top'; corner = 'top-left'; endX = topEndX; endY = topEndY;
+      } else {
+        plan = 'bottom'; corner = 'bottom-left'; endX = bottomEndX; endY = bottomEndY;
+      }
+
+      var nominalArcherTop = corner === 'top-left' ? INSET : (vh - INSET - archerH);
+      var nominalArcherClear = paintedArcherClear(nominalArcherTop);
+      var archerOverlap = nominalArcherClear <= 0;
+      var endX0 = endX, endY0 = endY;
+      var nominalLaunchYForCorner = corner === 'top-left' ? launchYTop : launchYBottom;
+
+      function pushFlightIfNeeded(archerYAdjustIn, gateLaunchY) {
+        var fbLaunchY = nominalLaunchYForCorner + archerYAdjustIn;
+        var endX = endX0, endY = endY0;
+        var paintedFlightOverlapHere = paintedFlightClear(launchX, gateLaunchY, endX, endY) <= 0;
+        if (paintedFlightOverlapHere) {
+          var SAMPLE_SLOP = 4;
+          var unpushedPaintedFlightClear = paintedFlightClear(launchX, fbLaunchY, endX, endY);
+          var forwardOfLaunch =
+            plan === 'left' ? leftEndX > launchX :
+            plan === 'top' ? topEndY > fbLaunchY :
+            bottomEndY < fbLaunchY;
+          if (forwardOfLaunch && launchClearance(launchX, fbLaunchY, endX, endY) >= MARGIN + SAMPLE_SLOP) {
+            var pushed = 0;
+            var bestEndX = endX, bestEndY = endY, bestGap = -Infinity;
+            var capped = false;
+            var prevGap = -Infinity;
+            for (var guard = 0; guard < 40; guard++) {
+              var gap = Math.min(
+                launchClearance(launchX, fbLaunchY, endX, endY),
+                sampledFlightClearance(launchX, fbLaunchY, endX, endY),
+                sampledQuiverClearance(launchX, fbLaunchY, endX, endY)
+              );
+              if (gap > bestGap) { bestGap = gap; bestEndX = endX; bestEndY = endY; }
+              if (gap >= MARGIN + SAMPLE_SLOP) break;
+              if (capped) break;
+              if (gap <= prevGap) break;
+              prevGap = gap;
+              pushed += (MARGIN + SAMPLE_SLOP - gap) + SAMPLE_SLOP;
+              if (plan === 'left') {
+                endX = leftEndX - pushed;
+                var floorX = Math.min(launchX + STRIKE_GAP, leftEndX);
+                if (endX < floorX) { endX = floorX; capped = true; }
+              } else if (plan === 'top') {
+                endY = topEndY - pushed;
+                var floorY = Math.min(fbLaunchY + STRIKE_GAP, topEndY);
+                if (endY < floorY) { endY = floorY; capped = true; }
+              } else {
+                endY = bottomEndY + pushed;
+                var ceilY = Math.max(fbLaunchY - STRIKE_GAP, bottomEndY);
+                if (endY > ceilY) { endY = ceilY; capped = true; }
+              }
+            }
+            if (bestGap < MARGIN + SAMPLE_SLOP) { endX = bestEndX; endY = bestEndY; }
+          }
+          if (paintedFlightClear(launchX, fbLaunchY, endX, endY) < unpushedPaintedFlightClear) {
+            endX = plan === 'left' ? leftEndX : (plan === 'top' ? topEndX : bottomEndX);
+            endY = plan === 'left' ? leftEndY : (plan === 'top' ? topEndY : bottomEndY);
+          }
+        }
+        return { endX: endX, endY: endY };
+      }
+
+      var archerYAdjustBase = 0;
+      var paintedFeatherHatOverlapBase = corner === 'bottom-left' && paintedFeatherHatClear(nominalArcherTop) <= 0;
+      if (paintedFeatherHatOverlapBase) {
+        var nominalFeatherTop = nominalArcherTop - FEATHER_OVERFLOW_LOCAL * scaleY;
+        var archerGapBase = nominalFeatherTop - r.bottom;
+        if (archerGapBase < MARGIN) archerYAdjustBase = MARGIN - archerGapBase;
+      }
+      var pushedBase = pushFlightIfNeeded(archerYAdjustBase, nominalLaunchYForCorner);
+      var endXBase = pushedBase.endX, endYBase = pushedBase.endY;
+      var launchYBase = nominalLaunchYForCorner + archerYAdjustBase;
+
+      var archerClearBase = paintedArcherClear(nominalArcherTop + archerYAdjustBase);
+      var baselineOverlap = archerClearBase <= 0 ||
+        paintedFlightClear(launchX, launchYBase, endXBase, endYBase) <= 0;
+
+      var archerYAdjustCand = 0;
+      if (archerOverlap || baselineOverlap) {
+        var aboveCandidate = r.top - STRIKE_GAP - archerH;
+        var belowCandidate = r.bottom + STRIKE_GAP + FEATHER_OVERFLOW_LOCAL * scaleY;
+        var aboveFits = aboveCandidate >= 0 && aboveCandidate + archerH <= vh;
+        var belowFits = belowCandidate >= 0 && belowCandidate + archerH <= vh;
+        var nearerCandidate =
+          Math.abs(aboveCandidate - nominalArcherTop) <= Math.abs(belowCandidate - nominalArcherTop)
+            ? aboveCandidate : belowCandidate;
+        var chosenTop;
+        if (aboveFits && belowFits) chosenTop = nearerCandidate;
+        else if (aboveFits) chosenTop = aboveCandidate;
+        else if (belowFits) chosenTop = belowCandidate;
+        else chosenTop = nearerCandidate;
+        var candidateAdjust = chosenTop - nominalArcherTop;
+        if (paintedArcherClear(nominalArcherTop + candidateAdjust) > nominalArcherClear) {
+          archerYAdjustCand = candidateAdjust;
+        }
+      }
+      var archerClearCand = paintedArcherClear(nominalArcherTop + archerYAdjustCand);
+
+      function forwardSign(ex, ey, ly) {
+        return plan === 'left' ? Math.sign(ex - launchX) : plan === 'top' ? Math.sign(ey - ly) : -Math.sign(ey - ly);
+      }
+      var takeCandidate = false;
+      var endXCand, endYCand, launchYCand;
+      if (baselineOverlap && archerClearCand > archerClearBase) {
+        var pushedCand = pushFlightIfNeeded(archerYAdjustCand, nominalLaunchYForCorner + archerYAdjustCand);
+        endXCand = pushedCand.endX; endYCand = pushedCand.endY;
+        launchYCand = nominalLaunchYForCorner + archerYAdjustCand;
+        var flightClearBase = paintedFlightClear(launchX, launchYBase, endXBase, endYBase, true, 480, 96);
+        var flightClearCand = paintedFlightClear(launchX, launchYCand, endXCand, endYCand, true, 480, 96);
+        var newlyBackward =
+          forwardSign(endXBase, endYBase, launchYBase) > 0 &&
+          forwardSign(endXCand, endYCand, launchYCand) <= 0;
+        takeCandidate = flightClearCand >= flightClearBase && !newlyBackward;
+      }
+
+      if (takeCandidate) {
+        archerYAdjust = archerYAdjustCand;
+        endX = endXCand;
+        endY = endYCand;
+      } else {
+        archerYAdjust = archerYAdjustBase;
+        endX = endXBase;
+        endY = endYBase;
+      }
+    }
+
+    var archerLeft = INSET;
+    var archerTop = (corner === 'top-left' ? INSET : (vh - INSET - archerH)) + archerYAdjust;
+    var launchY = (corner === 'top-left' ? launchYTop : launchYBottom) + archerYAdjust;
+
+    // ── Archer sprite (vector, not pixel-grid) ──────────────────────────────────────────────
+    var ARCHER_BODY = '#294b36', ARCHER_BODY_OUTLINE = '#111a13';
+    var ARCHER_BODY_HI = '#50765a', ARCHER_BODY_SHADOW = '#173022';
+    var LEG_BASE = '#22352b', LEG_OUTLINE = '#0d1510';
+    var LEG_HI = '#3f5e49', LEG_SHADOW = '#13231a';
+    var BOOT_BASE = '#5a351b', BOOT_OUTLINE = '#1d1007', BOOT_HI = '#8b5b2e', BOOT_SHADOW = '#2b180b';
+    var SKIN = '#f2bd78', SKIN_OUTLINE = '#4f2d16';
+    var SKIN_HI = '#ffd79b', SKIN_SHADOW = '#b8783d';
+    var COLLAR = '#5a351b', COLLAR_OUTLINE = '#1d1007';
+    var COLLAR_HI = '#8b5b2e', COLLAR_SHADOW = '#2b180b';
+    var IRIS = '#3a2a18';
+    var HAT_BASE = '#6f431d', HAT_OUTLINE = '#211205';
+    var HAT_HI = '#a9672a', HAT_SHADOW = '#3d230f';
+    var FEATHER_COLOR = '#c92f3a', FEATHER_HI = '#ef5b64', FEATHER_OUTLINE = '#410d12';
+    var BOW_COLOR = '#8a541f', BOW_HI = '#c18438', BOW_OUTLINE = '#241307';
+    var STRING_COLOR = '#1a1a1e';
+    var ARROW_SHAFT = '#8a5a2c', ARROW_SHAFT_HI = '#c98f4e', ARROW_SHAFT_SHADOW = '#5c3a1a', ARROW_SHAFT_OUTLINE = '#3a2410';
+    var ARROWHEAD_COLOR = '#4b4b52', ARROWHEAD_HI = '#8d8d97', ARROWHEAD_SHADOW = '#222226', ARROWHEAD_OUTLINE = '#0f0f11';
+    var FLETCH_COLOR = '#c92f3a', FLETCH_HI = '#ef5b64', FLETCH_SHADOW = '#7e1921', FLETCH_OUTLINE = '#410d12';
+    var ARCHER_STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var archerAnims = [];
+
+    var archerWrap = document.createElement('div');
+    archerWrap.className = 'oc-beacon oc-beacon-transient';
+    archerWrap.setAttribute('data-arrowshot', 'archer');
+    archerWrap.setAttribute('data-arrowshot-plan', plan);
+    archerWrap.setAttribute('data-arrowshot-corner', corner);
+    archerWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (archerLeft + SCROLL_X) + 'px', 'top:' + (archerTop + SCROLL_Y) + 'px',
+      'width:' + archerW + 'px', 'height:' + archerH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(archerWrap);
+
+    var archerSvg = document.createElementNS(NS, 'svg');
+    archerSvg.setAttribute('width', String(archerW));
+    archerSvg.setAttribute('height', String(archerH));
+    archerSvg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    archerSvg.style.cssText = 'display:block;overflow:visible;';
+    archerWrap.appendChild(archerSvg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var bootLD = 'M 3 107 L 17 104 L 23 108 L 19 114 L 2 114 Z';
+    var bootRD = 'M 49 105 L 59 108 L 66 111 L 65 114 L 48 114 L 44 109 Z';
+    addShape('path', { d: bootLD, fill: BOOT_BASE, stroke: BOOT_OUTLINE, 'stroke-width': '1', style: ARCHER_STROKE }, archerSvg);
+    addShape('path', { d: bootRD, fill: BOOT_BASE, stroke: BOOT_OUTLINE, 'stroke-width': '1', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '3,107 17,104 20,106 7,110', fill: BOOT_HI }, archerSvg);
+    addShape('polygon', { points: '7,110 20,106 23,108 19,114 13,114', fill: BOOT_BASE }, archerSvg);
+    addShape('polygon', { points: '2,114 7,110 13,114', fill: BOOT_SHADOW }, archerSvg);
+    addShape('polygon', { points: '49,105 59,108 62,110 47,109', fill: BOOT_HI }, archerSvg);
+    addShape('polygon', { points: '47,109 62,110 66,111 65,114 53,114', fill: BOOT_BASE }, archerSvg);
+    addShape('polygon', { points: '48,114 47,109 53,114', fill: BOOT_SHADOW }, archerSvg);
+
+    var legLD = 'M 20 84 L 31 87 L 18 106 L 7 108 Z';
+    var legRD = 'M 36 87 L 47 84 L 58 107 L 47 109 Z';
+    addShape('path', { d: legLD, fill: LEG_BASE, stroke: LEG_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('path', { d: legRD, fill: LEG_BASE, stroke: LEG_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '20,84 25,86 13,106 7,108', fill: LEG_HI }, archerSvg);
+    addShape('polygon', { points: '25,86 31,87 18,106 13,106', fill: LEG_SHADOW }, archerSvg);
+    addShape('polygon', { points: '36,87 41,85 52,107 47,109', fill: LEG_HI }, archerSvg);
+    addShape('polygon', { points: '41,85 47,84 58,107 52,107', fill: LEG_SHADOW }, archerSvg);
+
+    var torsoD = 'M 18 55 L 50 55 L 49 80 L 54 88 L 41 91 L 34 84 L 27 91 L 14 87 L 19 79 Z';
+    addShape('path', { d: torsoD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '18,55 28,55 27,91 14,87 19,79', fill: ARCHER_BODY_HI }, archerSvg);
+    addShape('polygon', { points: '41,55 50,55 49,80 54,88 41,91 34,84', fill: ARCHER_BODY_SHADOW }, archerSvg);
+    addShape('rect', { x: '17', y: '78', width: '34', height: '7', rx: '1', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('rect', { x: '31', y: '78.5', width: '7', height: '6', rx: '1', fill: HAT_HI, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+
+    var collarD = 'M 21 47 L 46 47 L 51 56 L 18 56 Z';
+    addShape('path', { d: collarD, fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '21,47 32,47 27,56 18,56', fill: COLLAR_HI }, archerSvg);
+    addShape('polygon', { points: '38,47 46,47 51,56 43,56', fill: COLLAR_SHADOW }, archerSvg);
+
+    addShape('rect', { x: '29', y: '39', width: '12', height: '11', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+
+    var bowD = 'M 62 16 Q 56 22 64 31 Q 73 43 60 54 Q 73 65 64 77 Q 56 86 62 92';
+    addShape('path', { d: bowD, stroke: BOW_OUTLINE, 'stroke-width': '6', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('path', { d: bowD, stroke: BOW_COLOR, 'stroke-width': '4', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('path', { d: 'M 61.5 17 Q 57.5 22 64 31 Q 69 40 61 51', stroke: BOW_HI, 'stroke-width': '1.2', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('rect', { x: '57', y: '49', width: '6', height: '10', rx: '2', fill: COLLAR, stroke: BOW_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('line', { x1: '57.5', y1: '52', x2: '62.5', y2: '52', stroke: COLLAR_HI, 'stroke-width': '1' }, archerSvg);
+    addShape('line', { x1: '57.5', y1: '56', x2: '62.5', y2: '56', stroke: COLLAR_SHADOW, 'stroke-width': '1' }, archerSvg);
+
+    var stringRest = addShape('path', { d: 'M 62 16 L 58 54 L 62 92', stroke: STRING_COLOR, 'stroke-width': '1.6', fill: 'none', opacity: '1' }, archerSvg);
+    var stringDrawn = addShape('path', { d: 'M 62 16 L 34 50 L 62 92', stroke: STRING_COLOR, 'stroke-width': '1.6', fill: 'none', opacity: '0' }, archerSvg);
+
+    var sleeveD = 'M 44 56 L 51 53 L 62 51 L 62 58 L 51 61 L 44 63 Z';
+    addShape('path', { d: sleeveD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '1.8', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '44,56 51,53 56,52 53,58 45,61', fill: ARCHER_BODY_HI }, archerSvg);
+    addShape('polygon', { points: '56,52 62,51 62,58 51,61 53,58', fill: ARCHER_BODY_SHADOW }, archerSvg);
+    addShape('rect', { x: '54', y: '50.5', width: '7', height: '9', rx: '1', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '60', cy: '54', r: '4', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('ellipse', { cx: '58.5', cy: '52.5', rx: '1.6', ry: '1.3', fill: SKIN_HI }, archerSvg);
+
+    var drawSleeveD = 'M 20 55 L 8 59 L 1 54 L 5 45 L 23 49 Z';
+    addShape('path', { d: drawSleeveD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '1.8', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '5,45 12,41 30,47 34,48 34,54 28,53 11,51 1,54', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '15,42 29,47 28,53 13,51', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '34', cy: '50', r: '4', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('ellipse', { cx: '33', cy: '48.8', rx: '1.4', ry: '1', fill: SKIN_HI }, archerSvg);
+
+    var nockedArrow = document.createElementNS(NS, 'g');
+    archerSvg.appendChild(nockedArrow);
+    addShape('line', { x1: '58', y1: '54', x2: '92', y2: '54', stroke: ARROW_SHAFT, 'stroke-width': '2.4' }, nockedArrow);
+    addShape('polygon', { points: '92,50 100,54 92,58', fill: ARROWHEAD_COLOR, stroke: ARROWHEAD_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+    addShape('polygon', { points: '60,54 50,47 56,54', fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+    addShape('polygon', { points: '60,54 50,61 56,54', fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+
+    var hairD = 'M 21 25 Q 24 18 35 15 Q 46 15 49 25 L 46 37 L 41 45 L 31 43 L 25 47 L 25 40 L 19 36 Z';
+    addShape('path', { d: hairD, fill: '#171612', stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var headD = 'M 28 20 Q 38 16 45 21 L 49 27 L 45 29 L 50 32 L 46 34 Q 45 40 36 44 Q 28 42 26 35 Z';
+    addShape('path', { d: headD, fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '28,20 36,18 33,42 28,39 26,35', fill: SKIN_HI }, archerSvg);
+    addShape('polygon', { points: '43,21 49,27 45,29 50,32 46,34 45,40 40,42', fill: SKIN_SHADOW }, archerSvg);
+    addShape('path', { d: 'M 38 25 Q 42 23 45 26', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1.4', style: 'stroke-linecap:round;' }, archerSvg);
+    addShape('ellipse', { cx: '42', cy: '27', rx: '2.2', ry: '2.6', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '43', cy: '27.5', r: '1.2', fill: IRIS }, archerSvg);
+    addShape('path', { d: 'M 43 36 Q 46 37 48 35.5', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1.2', style: 'stroke-linecap:round;' }, archerSvg);
+
+    var brimBackD = 'M 14 20 L 28 20 L 18 14 L 5 12 Z';
+    addShape('path', { d: brimBackD, fill: HAT_BASE, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var brimFrontD = 'M 26 19 L 50 18 L 60 27 L 45 27 Z';
+    addShape('path', { d: brimFrontD, fill: HAT_HI, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var crownD = 'M 14 20 Q 17 7 30 7 Q 43 8 49 19 Z';
+    addShape('path', { d: crownD, fill: HAT_BASE, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '30,7 43,8 49,19 37,19', fill: HAT_SHADOW }, archerSvg);
+    addShape('polygon', { points: '14,20 17,10 25,8 24,19', fill: HAT_HI }, archerSvg);
+    var featherD = 'M 18 16 L 10 5 L 1 2 L 5 15 L 16 20 Z';
+    addShape('path', { d: featherD, fill: FEATHER_COLOR, stroke: FEATHER_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '1,2 10,5 7,10 3,8', fill: FEATHER_HI }, archerSvg);
+    addShape('polygon', { points: '11,13 18,16 16,20 12,17', fill: FLETCH_SHADOW }, archerSvg);
+
+    // ── Flight arrow ─────────────────────────────────────────────────────────────────────────
+    var arrowSvg = document.createElementNS(NS, 'svg');
+    arrowSvg.setAttribute('width', String(ARROW_LEN));
+    arrowSvg.setAttribute('height', String(ARROW_H));
+    arrowSvg.setAttribute('viewBox', '0 0 ' + ARROW_VB_W + ' ' + ARROW_VB_H);
+    arrowSvg.style.cssText = 'display:block;overflow:visible;';
+    addShape('rect', { x: '4', y: '11', width: '44', height: '4', fill: ARROW_SHAFT, stroke: ARROW_SHAFT_OUTLINE, 'stroke-width': '0.6' }, arrowSvg);
+    addShape('rect', { x: '4', y: '11', width: '44', height: '1.3', fill: ARROW_SHAFT_HI }, arrowSvg);
+    addShape('rect', { x: '4', y: '13.7', width: '44', height: '1.3', fill: ARROW_SHAFT_SHADOW }, arrowSvg);
+    var arrowheadD = 'M 48 6 L 58 13 L 48 20 Z';
+    addShape('path', { d: arrowheadD, fill: ARROWHEAD_COLOR, stroke: ARROWHEAD_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    var arrowDefs = document.createElementNS(NS, 'defs');
+    arrowSvg.insertBefore(arrowDefs, arrowSvg.firstChild);
+    // Renamed from the prototype's own retried id (oculist-1ta.11 retry): unique across every id
+    // this function and the archer's own addShape() calls mint.
+    var arrowheadClip = document.createElementNS(NS, 'clipPath');
+    arrowheadClip.setAttribute('id', 'as_arrowhead');
+    addShape('path', { d: arrowheadD }, arrowheadClip);
+    arrowDefs.appendChild(arrowheadClip);
+    addShape('polygon', { points: '48,7 57,13 48,11.5', fill: ARROWHEAD_HI, 'clip-path': 'url(#as_arrowhead)' }, arrowSvg);
+    addShape('polygon', { points: '48,19 57,13 48,14.5', fill: ARROWHEAD_SHADOW, 'clip-path': 'url(#as_arrowhead)' }, arrowSvg);
+    var fletchTopD = 'M 14 13 L 1 1 L 9 13 Z';
+    var fletchBotD = 'M 14 13 L 1 25 L 9 13 Z';
+    addShape('path', { d: fletchTopD, fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    addShape('path', { d: fletchBotD, fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    addShape('polygon', { points: '1,1 9.58,8.92 6.28,8.92', fill: FLETCH_HI }, arrowSvg);
+    addShape('polygon', { points: '6.28,8.92 9.58,8.92 11.92,11.08 7.72,11.08', fill: FLETCH_COLOR }, arrowSvg);
+    addShape('polygon', { points: '7.72,11.08 11.92,11.08 14,13 9,13', fill: FLETCH_SHADOW }, arrowSvg);
+    addShape('polygon', { points: '9,13 14,13 11.92,14.92 7.72,14.92', fill: FLETCH_SHADOW }, arrowSvg);
+    addShape('polygon', { points: '7.72,14.92 11.92,14.92 9.58,17.08 6.28,17.08', fill: FLETCH_COLOR }, arrowSvg);
+    addShape('polygon', { points: '6.28,17.08 9.58,17.08 1,25', fill: FLETCH_HI }, arrowSvg);
+
+    var dx = endX - launchX, dy = endY - launchY;
+    var dist = Math.hypot(dx, dy);
+    var midX = (launchX + endX) / 2, midY = (launchY + endY) / 2;
+    var ARC_HEIGHT = Math.max(30, Math.min(70, dist * 0.12));
+    var ctrlX = midX, ctrlY = midY - ARC_HEIGHT;
+    var pathStr = 'M ' + (launchX + SCROLL_X) + ' ' + (launchY + SCROLL_Y) +
+      ' Q ' + (ctrlX + SCROLL_X) + ' ' + (ctrlY + SCROLL_Y) +
+      ' ' + (endX + SCROLL_X) + ' ' + (endY + SCROLL_Y);
+
+    var arrowAnims = [];
+
+    var flightArrow = document.createElement('div');
+    flightArrow.className = 'oc-beacon oc-beacon-transient';
+    flightArrow.setAttribute('data-arrowshot', 'arrow');
+    flightArrow.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + ARROW_LEN + 'px', 'height:' + ARROW_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:100% 50%', 'offset-rotate:auto',
+      'transform-origin:100% 50%',
+      'opacity:0'
+    ].join(';');
+    flightArrow.appendChild(arrowSvg);
+    document.documentElement.appendChild(flightArrow);
+
+    // ── Target rings ─────────────────────────────────────────────────────────────────────────
+    var SQRT2 = Math.SQRT2;
+    var w2 = r.width / 2, h2 = r.height / 2;
+    var padIn = 16 * beaconScale, padMid = 32 * beaconScale, padOut = 48 * beaconScale, ringStroke = 8 * beaconScale;
+    var rxIn = w2 * SQRT2 + padIn, ryIn = h2 * SQRT2 + padIn;
+    var rxMid = w2 * SQRT2 + padMid, ryMid = h2 * SQRT2 + padMid;
+    var rxOut = w2 * SQRT2 + padOut, ryOut = h2 * SQRT2 + padOut;
+    var boxHalfW = rxOut + ringStroke, boxHalfH = ryOut + ringStroke;
+    var targetW = boxHalfW * 2, targetH = boxHalfH * 2;
+
+    var targetAnims = [];
+
+    var targetEl = document.createElement('div');
+    targetEl.className = 'oc-beacon oc-beacon-transient';
+    targetEl.setAttribute('data-arrowshot', 'target');
+    targetEl.style.cssText = [
+      'position:absolute',
+      'left:' + (mcx - boxHalfW + SCROLL_X) + 'px', 'top:' + (mcy - boxHalfH + SCROLL_Y) + 'px',
+      'width:' + targetW + 'px', 'height:' + targetH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(targetEl);
+
+    var targetSvg = document.createElementNS(NS, 'svg');
+    targetSvg.setAttribute('width', String(targetW));
+    targetSvg.setAttribute('height', String(targetH));
+    targetSvg.setAttribute('viewBox', '0 0 ' + targetW + ' ' + targetH);
+    targetSvg.style.cssText = 'display:block;overflow:visible;';
+    targetEl.appendChild(targetSvg);
+
+    function addRing(rx, ry, color) {
+      addShape('ellipse', {
+        cx: String(boxHalfW), cy: String(boxHalfH), rx: String(rx), ry: String(ry),
+        fill: 'none', stroke: color, 'stroke-width': String(ringStroke)
+      }, targetSvg);
+    }
+    addRing(rxOut, ryOut, '#264893');
+    addRing(rxMid, ryMid, '#c62828');
+    addRing(rxIn, ryIn, '#e8b93a');
+
+    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
+    // Every raw ms constant below stays UNSCALED, used only for offset RATIOS -- rule 6: only
+    // the final duration/delay at each .animate() call is multiplied by durFactor.
+    var APPEAR_DUR = 200;
+    var DRAW_START = 300;
+    var DRAW_DUR = 200, HOLD = 130, RELEASE_DUR = 90;
+    var DRAW_PHASE = DRAW_DUR + HOLD + RELEASE_DUR;
+    var RELEASE_TIME = DRAW_START + DRAW_DUR + HOLD;
+    var FLIGHT_DUR = 620;
+    var ARRIVAL = RELEASE_TIME + FLIGHT_DUR;
+    var QUIVER_DUR = 420;
+    var HOLD_AFTER = 200;
+    var FADE_OUT_DELAY = ARRIVAL + QUIVER_DUR + HOLD_AFTER;
+    var FADE_OUT_DUR = 280;
+
+    // Beat 1: archer dissolves in.
+    archerAnims.push(archerWrap.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: APPEAR_DUR * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 2: nock-draw-release. String and arrow snap through rest -> drawn -> rest across one
+    // shared timeline, so they always agree on phase. Hung on archerWrap's own __waapiAnims
+    // (rule 4: animations on child nodes hang on the parent).
+    var f1 = DRAW_DUR / DRAW_PHASE, f2 = (DRAW_DUR + HOLD) / DRAW_PHASE;
+    archerAnims.push(stringRest.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 0, offset: f1 },
+      { opacity: 0, offset: f2 },
+      { opacity: 1, offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(stringDrawn.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: f1 },
+      { opacity: 1, offset: f2 },
+      { opacity: 0, offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(nockedArrow.animate([
+      { transform: 'translateX(0px)', offset: 0 },
+      { transform: 'translateX(-24px)', offset: f1 },
+      { transform: 'translateX(-24px)', offset: f2 },
+      { transform: 'translateX(0px)', offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(nockedArrow.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 1, offset: f2 - 0.02 },
+      { opacity: 0, offset: f2 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+
+    // Beat 3: the arrow arcs to the target. Appear instantly at release, then travel.
+    arrowAnims.push(flightArrow.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: 1, delay: RELEASE_TIME * durFactor, fill: 'forwards' }));
+    arrowAnims.push(flightArrow.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: FLIGHT_DUR * durFactor, delay: RELEASE_TIME * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 4: the target dissolves in at the match, ahead of the arrow.
+    targetAnims.push(targetEl.animate([
+      { opacity: 0, transform: 'scale(1.15)' },
+      { opacity: 1, transform: 'scale(1)' }
+    ], { duration: 240 * durFactor, delay: (RELEASE_TIME + 60) * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 5: strike -- a damped rotational quiver about the embedded tip.
+    arrowAnims.push(flightArrow.animate([
+      { transform: 'rotate(0deg)', offset: 0 },
+      { transform: 'rotate(14deg)', offset: 0.15 },
+      { transform: 'rotate(-10deg)', offset: 0.35 },
+      { transform: 'rotate(6deg)', offset: 0.55 },
+      { transform: 'rotate(-3deg)', offset: 0.75 },
+      { transform: 'rotate(0deg)', offset: 1 }
+    ], { duration: QUIVER_DUR * durFactor, delay: ARRIVAL * durFactor, fill: 'forwards' }));
+
+    // Beat 6: archer, bow (part of the archer sprite), arrow and target all dissolve out together.
+    archerAnims.push(archerWrap.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+    arrowAnims.push(flightArrow.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+    targetAnims.push(targetEl.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    archerWrap.__waapiAnims = archerAnims;
+    var archerDone = Promise.allSettled(archerAnims.map(function (a) { return a.finished; })).then(function () { archerWrap.remove(); });
+
+    flightArrow.__waapiAnims = arrowAnims;
+    var arrowDone = Promise.allSettled(arrowAnims.map(function (a) { return a.finished; })).then(function () { flightArrow.remove(); });
+
+    targetEl.__waapiAnims = targetAnims;
+    var targetDone = Promise.allSettled(targetAnims.map(function (a) { return a.finished; })).then(function () { targetEl.remove(); });
+
+    // RESIZE HARD CUT, measured not assumed (see the header comment's own RESIZE note): every
+    // element above is positioned once, at fire time, from the pre-resize rect -- the target
+    // rings in particular sit only STRIKE_GAP/padIn clear of #match's own fire-time edges.
+    // content.js's own handleResize() only reaches cancelBeacons() via repositionActiveOverlays()
+    // after a 100ms debounce (overlayResizeTimer) that a continuous resize drag keeps resetting,
+    // so a reflowed #match can end up under this stale, still-mounted geometry for the whole
+    // drag. Measured directly (test/arrowshot_effect.test.js's own 'resize mid-flight' test): an
+    // 8px horizontal reflow during a frozen mid-quiver frame left a nonzero painted-pixel delta
+    // on #match before this hard cut existed. Tear every element down on the FIRST resize event,
+    // ahead of the debounce -- same technique oculist-3dd8 ported for Wand Cast's own clip-path
+    // hole, applied here to all three top-level elements instead of one clip mask.
+    function hardCutArrowShot() {
+      window.removeEventListener('resize', hardCutArrowShot);
+      [archerWrap, flightArrow, targetEl].forEach(function (el) {
+        if (!el.isConnected) return;
+        (el.__waapiAnims || []).forEach(function (a) { try { a.cancel(); } catch (e) {} });
+        el.remove();
+      });
+    }
+    window.addEventListener('resize', hardCutArrowShot, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case), the listener would
+    // otherwise outlive it, leaked on window forever and keeping archerWrap/flightArrow/targetEl
+    // reachable after they've already been removed. Explicitly remove it once every element has
+    // finished on its own (natural completion) or been cancelled (destroyBeacon() calls .cancel()
+    // on every __waapiAnims entry, which settles archerDone/arrowDone/targetDone immediately) --
+    // this covers both paths hardCutArrowShot's own early removeEventListener does not reach.
+    Promise.all([archerDone, arrowDone, targetDone]).then(function () {
+      window.removeEventListener('resize', hardCutArrowShot);
+    });
+  }
+
+
+  // oculist-nq1x.12: promotes fxVineSwing (artifacts/prototypes/effects-playground.html:6426)
+  // into extension/content.js as the eleventh entry in the Halloween pack. A vine-swinging
+  // figure swoops in on a vine anchored off-screen above, releases near the bottom of the arc,
+  // and carries on to land beside the match on a short ballistic hop while the riderless vine
+  // swings on past and fades. RIGHTS: a generic public-domain jungle-swinger silhouette; the
+  // label names the motion, never a character (oculist-1ta.4's own DONE-CRITERIA / the epic's
+  // naming convention -- "Tarzan" is a live trademark).
+  //
+  // PLACEMENT, corrected (oculist-nq1x.12, oculist-8qrc, amended 2026-09-23): there is NO
+  // above/below decision in this effect. The vine is UNCONDITIONALLY anchored off-screen above
+  // -- PIVOT_Y starts at PIVOT_Y_BASE (above the viewport top by construction) -- there is no
+  // below option and nothing to fall back to. The only placement freedom is LEFT vs RIGHT
+  // LANDING SIDE, chosen the same "right by default, mirror left only if it doesn't fit" way
+  // animateReanimate/animateWandCast/animateTentacleRise choose theirs. When the match sits
+  // near the viewport TOP, the code does not switch sides -- it shortens the vine length L
+  // toward L_FLOOR (below which "it no longer reads as a swing") and, if that alone is not
+  // enough, pushes PIVOT_Y further off-screen, so releaseFeetY (the deepest point of the WHOLE
+  // swing arc) is clamped by construction to never exceed r.top - SAFE_MARGIN, for any r.top.
+  // oculist-1ta.4's own close reason confirms this clamp was tested and holds ("min clearance
+  // 13.86px in the near-top-of-viewport probe"). This clamp -- computed from the PRE-SCROLL
+  // viewport rect per contract rule 2, since "does the figure fit" is a viewport question even
+  // though every element below is positioned in document space -- is the first thing this
+  // file's own test asserts.
+  //
+  // RULE 9 EXCEPTION (oculist-i8zu, the same class fxArrowShot/fxWandCast/fxBatFlight already
+  // carry, see their own header comments): the shipped lastMouseX/find-bar/viewport
+  // start-point cascade animateTrail uses is deliberately NOT used here. Every geometric input
+  // to the swing -- Px (the vine's own pivot x, chosen by the side-selection math below),
+  // PIVOT_Y and L (both derived from #match's own rect and the viewport, see the clamp above)
+  // -- comes from the match's own geometry, never from the cursor or the find bar. A
+  // cursor-driven pivot would detach the vine from its own physics (theta(t) is defined about a
+  // fixed pivot) and could walk the swept arc across #match, which rule 10 forbids. Rule 9's
+  // other half -- the mirrored branch must work for real, not just compile -- still applies:
+  // the left-landing side is a genuine mirrored branch (theta0's sign, onRight, buildFigure's
+  // own mirror transform) and is tested below (the left-fallback test), not merely documented.
+  //
+  // OCCLUSION (verify the WHOLE arc, not just arrival): REACH_TOWARD/REACH_AWAY below are
+  // derived by sampling every degree of the swing's own entry sweep (theta in
+  // [-theta0Mag, 0]) against the figure's own rotating bounding corners, the same
+  // fxReanimate-derived REACH_INWARD/OUTWARD idiom animateReanimate's/animateWandCast's own
+  // header comments describe -- so the whole arc, not just the landing point, stays clear of
+  // #match. The vine itself never needs a separate sample: it is a straight segment from the
+  // pivot to the figure's own grip, strictly INSIDE the figure's own bounding-corner envelope
+  // at every sampled angle (the figure's own box always extends further from the pivot than
+  // the vine's attachment point at y=L), so the figure's own sweep bounds it too.
+  // REACH_TOWARD/REACH_AWAY are accepted as an undetectable gap by this file's own test suite
+  // (no fixture here makes the runway-based term lose to `r.right + GAP + REACH_TOWARD` --
+  // see test/vineswing_effect.test.js's own mutation-proof note on the 'normal placement'
+  // test). What actually protects #match for the WHOLE swing, independent of REACH_TOWARD's
+  // own horizontal value, is VERTICAL: releaseFeetY -- the deepest point the entire rotating
+  // arc ever reaches -- is clamped by construction (see the PLACEMENT note above) to stay at or
+  // above r.top - SAFE_MARGIN for any r.top, so the swinging figure can never descend far
+  // enough to reach #match's own row regardless of how close it swings horizontally.
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): SKIN/HAIR/SASH/
+  // CLOTH/VINE/LEAF are fixed literals, the same "no separate flash/UI-accent element" reasoning
+  // animateBatFlight's/animateWandCast's own header comments give for themselves -- there is no
+  // UI-accent element here for getEffectiveColors().beacon to drive.
+  //
+  // Lite Mode (rule 7): a no-op, the same reasoning animateWandCast's/animateBatFlight's own
+  // header comments give for themselves. There is no filter, no box-shadow and no decorative
+  // glow layer anywhere in this effect's shipped art -- the pendulum swing, the release at the
+  // bottom of the arc, and the real ballistic landing hop ARE the effect's defining beats, not
+  // decorative flicker to cut. settings.performanceMode is deliberately never read below.
+  //
+  // RESIZE, measured, load-bearing: every element below is positioned once, at fire time, from
+  // the pre-resize rect, and content.js's own handleResize() only reaches cancelBeacons() via
+  // repositionActiveOverlays() after a 100ms debounce a continuous resize drag keeps resetting
+  // -- so a reflowed #match can sit under this stale, still-mounted geometry for the whole
+  // drag. A shrinking-viewport reflow that moves #match AWAY from the landing side (see
+  // test/vineswing_effect.test.js's own 'resize mid-swing' test) shows zero delta regardless of
+  // the hard cut, because the gap between the stale figure and the match only widens -- that is
+  // not evidence of safety. The load-bearing case is a WIDENING reflow that moves #match TOWARD
+  // the fixed, fire-time landing position (the resize test's own fixture: fired at a narrower
+  // viewport, paused mid-hold, then widened, which shifts the centred #match ~40px toward the
+  // right-side landing figure): with hardCutVineSwing() below removed, that closes the gap
+  // enough for the stale, still-mounted landing figure to paint over #match's own new position
+  // -- max painted-pixel delta 206 on #match's rect, measured directly. With the hard cut in
+  // place, delta is 0. Torn down on the FIRST resize event, ahead of the debounce -- see
+  // hardCutVineSwing() below.
+  function animateVineSwing(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var r = rect; // viewport space (rule 2)
+    var mcy = r.top + r.height / 2;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    // Fixed screen-px geometry, unaffected by beaconScale -- same discipline animateReanimate's/
+    // animateBatFlight's own GAP comments describe for themselves. Only the figure/vine SIZES
+    // further down (figHeight, vine stroke widths, leaf size) scale directly with beaconScale.
+    var GAP = 14; // match-rect clearance floor (brief asks >=12px; a little headroom over the bare minimum, unlike fxArrowShot's STRIKE_GAP=8 cliff)
+    var SAFE_MARGIN = 12; // brief's clearance floor: the vine's deepest reach must stay this far above r.top
+    var L_FLOOR = 120; // below this the vine no longer reads as a swing -- push PIVOT_Y up instead of shortening past it
+    var DROP = 56; // visual fall distance (feet-to-feet) from release to the match's own vertical center
+    var PIVOT_Y_BASE = -70; // baseline, above the viewport top; may be pushed further up below for tight-viewport clearance
+
+    var SKIN = '#e39a52', SKIN_OUTLINE = '#572b16', SKIN_HI = '#f6bd78', SKIN_SHADE = '#b86a32';
+    var HAIR = '#21150f', HAIR_OUTLINE = '#100906';
+    var SASH = '#9d6523', SASH_HI = '#c88b38', SASH_SHADE = '#684018';
+    var CLOTH = '#6d421f', CLOTH_HI = '#9a6430', CLOTH_OUTLINE = '#160d08';
+    var VINE = '#4a7a2e', VINE_OUTLINE = '#243d16', VINE_HI = '#6ea23f';
+    var LEAF = '#5c8f34', LEAF_OUTLINE = '#2c4517', LEAF_HI = '#7fb44e';
+    var STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+
+    // ── Figure authoring grid -- used identically for the swinging figure and the
+    // post-release landing figure (identical artwork); both are nested <svg viewBox="0 0
+    // VB_W VB_H"> elements built by the same buildFigure() below. figHeight carries
+    // beaconScale (rule 6) BEFORE the placement/clearance math below is derived from it --
+    // the same "scale before computing placement" discipline animateReanimate's/
+    // animateWandCast's own figHeight comments describe.
+    var VB_W = 40, VB_H = 56;
+    var figHeight = 1.2 * Math.max(36, Math.min(48, 2.0 * r.height)) * beaconScale;
+    var figWidth = figHeight * (VB_W / VB_H);
+    var FACE_ANCHOR_Y = 16;
+
+    // Two hand-authored silhouettes in a shared 40x56 authoring grid, ported byte-for-byte
+    // from the prototype's own v2 character sheet (oculist-n8m0/oculist-38nv) -- broad
+    // regions survive the 36px floor without gradients, filters, clip ids, or a runtime
+    // raster asset.
+    function buildFigure(svg, mirrored, pose) {
+      var g = svgEl('g', {}, svg);
+      if (mirrored) g.setAttribute('transform', 'translate(' + VB_W + ',0) scale(-1,1)');
+
+      function shape(tag, attrs) { return svgEl(tag, attrs, g); }
+
+      if (pose === 'land') {
+        shape('path', { d: 'M 21 24 C 16 24 11 26 7 29 L 3 28 L 1 32 L 7 34 C 13 32 17 30 22 29 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-back' });
+        shape('path', { d: 'M 20 35 C 14 36 8 40 6 46 L 10 50 C 13 45 17 42 23 41 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-back' });
+        shape('path', { d: 'M 7 46 C 4 49 2 53 3 56 L 14 56 C 16 54 13 52 9 51 L 10 47 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'foot-back' });
+        shape('path', { d: 'M 18 22 C 22 18 28 20 32 26 L 29 36 C 26 40 19 39 15 34 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE });
+        shape('path', { d: 'M 20 21 C 25 23 28 27 30 33 L 24 38 C 22 33 19 29 15 27 Z', fill: SASH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'sash' });
+        shape('path', { d: 'M 15 34 L 30 34 L 32 40 L 22 42 L 13 45 L 12 39 Z', fill: CLOTH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.7', style: STROKE, 'data-vs-part': 'waist-cloth' });
+        shape('path', { d: 'M 14 37 L 18 35 L 17 41 L 13 43 Z', fill: CLOTH_HI });
+        shape('path', { d: 'M 25 35 C 32 35 37 39 36 44 C 35 48 31 50 28 52 L 25 49 C 29 46 31 44 29 41 L 23 40 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-front' });
+        shape('path', { d: 'M 28 49 C 27 52 27 55 29 56 L 39 56 C 40 54 37 52 33 51 L 33 49 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'foot-front' });
+        shape('path', { d: 'M 29 24 C 33 28 33 35 35 41 L 33 49 L 36 56 L 40 55 L 38 49 L 39 40 C 37 32 34 26 31 23 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-front' });
+      } else {
+        shape('path', { d: 'M 18 23 C 14 24 11 27 7 29 L 3 28 L 1 32 L 7 34 C 12 32 17 30 21 27 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-back' });
+        shape('path', { d: 'M 17 36 C 12 39 9 45 11 50 C 12 53 15 54 17 51 L 21 44 L 24 39 Z', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-back' });
+        shape('path', { d: 'M 18 21 C 22 19 27 21 29 26 L 28 39 C 24 42 18 41 14 37 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE });
+        shape('path', { d: 'M 22 21 C 25 24 27 29 28 35 L 23 39 C 22 34 19 29 16 26 Z', fill: SASH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'sash' });
+        shape('path', { d: 'M 14 36 L 29 36 L 31 42 L 23 44 L 17 49 L 11 48 L 14 41 Z', fill: CLOTH, stroke: CLOTH_OUTLINE, 'stroke-width': '1.7', style: STROKE, 'data-vs-part': 'waist-cloth' });
+        shape('path', { d: 'M 14 37 L 17 37 L 15 43 L 12 46 Z', fill: CLOTH_HI });
+        shape('path', { d: 'M 24 37 C 29 34 35 36 35 41 C 35 45 30 48 27 50 L 25 54 C 24 56 20 55 20 52 L 21 45 L 18 42 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.8', style: STROKE, 'data-vs-part': 'leg-front' });
+        shape('path', { d: 'M 24 22 C 24 17 22 11 20 4 L 17 4 C 17 12 18 19 20 25 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, 'data-vs-part': 'arm-front' });
+        shape('path', { d: 'M 16 -3 C 18 -5 21 -4 22 -2 L 22 1 L 20 4 L 17 4 L 15 1 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: STROKE, 'data-vs-part': 'grip' });
+        shape('path', { d: 'M 17 -2 L 20 -3 L 21 -1', fill: 'none', stroke: SKIN_HI, 'stroke-width': '1.1', style: STROKE });
+      }
+
+      var headTransform = pose === 'land' ? 'translate(0,5)' : '';
+      shape('path', { d: 'M 18 9 C 14 8 11 10 12 13 L 9 15 L 13 16 L 10 19 L 16 18 C 17 22 21 24 25 22 L 29 17 L 28 11 Z', fill: HAIR, stroke: HAIR_OUTLINE, 'stroke-width': '1.7', style: STROKE, transform: headTransform, 'data-vs-part': 'hair' });
+      shape('path', { d: 'M 20 9 C 25 7 30 10 31 14 L 34 16 L 31 18 C 30 22 27 24 23 23 C 19 22 17 18 18 14 Z', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.6', style: STROKE, transform: headTransform, 'data-vs-part': 'face' });
+      shape('path', { d: 'M 19 11 C 16 9 13 9 11 11 L 14 9 L 10 9 L 15 7 L 20 8 L 24 8 L 28 11 L 25 13 L 22 11 L 20 16 L 18 14 Z', fill: HAIR, stroke: HAIR_OUTLINE, 'stroke-width': '1.5', style: STROKE, transform: headTransform });
+      shape('ellipse', { cx: '19', cy: '16', rx: '2', ry: '2.4', fill: SKIN_SHADE, stroke: SKIN_OUTLINE, 'stroke-width': '1', transform: headTransform });
+      shape('path', { d: 'M 27 14 L 29 14', fill: 'none', stroke: HAIR_OUTLINE, 'stroke-width': '1.2', style: STROKE, transform: headTransform });
+      shape('path', { d: 'M 29 20 L 31 19', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1', style: STROKE, transform: headTransform });
+      shape('path', { d: pose === 'land' ? 'M 21 23 L 25 25 L 22 28 Z' : 'M 20 23 L 24 25 L 21 28 Z', fill: SASH_HI });
+      shape('path', { d: pose === 'land' ? 'M 28 33 L 31 36 L 27 39 Z' : 'M 25 34 L 28 36 L 24 39 Z', fill: SASH_SHADE });
+    }
+
+    // ── Pendulum physics, baked once at fire time (rule 1 of the effect's own brief: geometry
+    // generated once, not per-frame). theta(t) = theta0 * cos(sqrt(g/L) * t); omega/G are
+    // solved backwards from the chosen SWING_DUR (a quarter period) so a single analytic
+    // function reproduces it, and every timing constant below stays in RAW ms here -- durFactor
+    // (rule 6) is applied only to the WAAPI duration/delay values further down, never to the
+    // physics itself, so the frame SHAPE stays correct at any Animation Speed and only its
+    // playback rate changes. ──
+    var theta0Mag = 58; // degrees
+    var SWING_DUR = 820; // ms, entry -> release (raw; scaled by durFactor only at playback)
+    var omega = (Math.PI / 2) / SWING_DUR; // quarter period == SWING_DUR, so cos() reaches 0 exactly at release
+    var G = omega * omega;
+    function thetaAt(theta0, t) { return theta0 * Math.cos(Math.sqrt(G) * t); }
+
+    var PIVOT_Y = PIVOT_Y_BASE;
+    var FIG_Y_OFFSET = 0; // vine endpoint -> grip; shared with releaseFeetY so the pose swap stays pop-free
+
+    var Lraw = (mcy - DROP) - FIG_Y_OFFSET - figHeight - PIVOT_Y;
+    var L = Math.max(200, Lraw);
+
+    // Clearance clamp (oculist-1ta.4's own finding 1, re-asserted by oculist-nq1x.12/
+    // oculist-8qrc): the 200-floor clamp above can make L LONGER than the mcy-derived value
+    // ever intended when the match sits within ~230px of the viewport top -- check the single
+    // deepest point explicitly and correct it: shorten L if that alone keeps it a real swing,
+    // otherwise keep L at the swing-length floor and push the pivot further up instead. Both
+    // r.top and the clamp math below use the PRE-SCROLL viewport rect (rule 2).
+    var releaseFeetY = PIVOT_Y + L + FIG_Y_OFFSET + figHeight;
+    if (releaseFeetY > r.top - SAFE_MARGIN) {
+      var Lsafe = (r.top - SAFE_MARGIN) - PIVOT_Y - FIG_Y_OFFSET - figHeight;
+      if (Lsafe >= L_FLOOR) {
+        L = Lsafe;
+      } else {
+        L = L_FLOOR;
+        PIVOT_Y = (r.top - SAFE_MARGIN) - L - FIG_Y_OFFSET - figHeight;
+      }
+      releaseFeetY = PIVOT_Y + L + FIG_Y_OFFSET + figHeight; // recompute at the new boundary (== r.top - SAFE_MARGIN)
+    }
+
+    // REACH sampling: bounds how far the rotating figure (its own bbox corners, relative to
+    // the pivot) can reach either toward or away from the match, across the full entry sweep
+    // theta in [-theta0Mag, 0]. Mirrors animateReanimate's/animateWandCast's own REACH_INWARD/
+    // OUTWARD pattern; by mirror symmetry these two numbers are reused as-is for a left-side
+    // landing too (just applied to the opposite side).
+    var corners = [
+      [-figWidth / 2, L], [figWidth / 2, L],
+      [-figWidth / 2, L + figHeight], [figWidth / 2, L + figHeight]
+    ];
+    var minRel = 0, maxRel = 0;
+    for (var deg = -theta0Mag; deg <= 0; deg += 1) {
+      var rad = deg * Math.PI / 180, cosT = Math.cos(rad), sinT = Math.sin(rad);
+      corners.forEach(function (c) {
+        var rel = c[0] * cosT - c[1] * sinT;
+        if (rel < minRel) minRel = rel;
+        if (rel > maxRel) maxRel = rel;
+      });
+    }
+    var REACH_TOWARD = -minRel + 2; // +2 for the 1deg sampling step
+    var REACH_AWAY = maxRel + 2;
+
+    // Side selection: the exact constant-vx ballistic runway, so the clearance-bound pivot
+    // determines the final resting point, not a later speed adjustment. Prefer right, mirror
+    // left when only left fits (never above/below -- see the header comment's PLACEMENT note).
+    var FALL_DUR = 340; // ms, raw
+    var releaseRadius = L + figHeight * FACE_ANCHOR_Y / VB_H;
+    var releaseSpeed = releaseRadius * (theta0Mag * Math.PI / 180) * omega;
+    var runway = releaseSpeed * FALL_DUR;
+    var desiredRightX = r.right + GAP + figWidth / 2;
+    var rightPx = Math.max(desiredRightX + runway, r.right + GAP + REACH_TOWARD);
+    var sideRight = { x: rightPx - runway, px: rightPx, side: 'right' };
+    sideRight.fits = sideRight.x + figWidth / 2 <= vw - 4;
+    var desiredLeftX = r.left - GAP - figWidth / 2;
+    var leftPx = Math.min(desiredLeftX - runway, r.left - GAP - REACH_TOWARD);
+    var sideLeft = { x: leftPx + runway, px: leftPx, side: 'left' };
+    sideLeft.fits = sideLeft.x - figWidth / 2 >= 4;
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+    var onRight = landing.side === 'right';
+    var landingX = landing.x;
+    var Px = landing.px;
+
+    var theta0 = onRight ? -theta0Mag : theta0Mag;
+
+    // Real release velocity at theta=0 (the bottom, where this design releases): differentiating
+    // thetaAt() and evaluating at t=SWING_DUR (omega*t=pi/2) reduces to this one-line formula;
+    // the vertical velocity is exactly zero at the bottom, so the ballistic segment below starts
+    // with that same vector -- `landingX - Px` equals vxRelease*FALL_DUR exactly, so the flight
+    // inherits the pendulum's horizontal velocity without a seam.
+    var theta0Rad = theta0 * Math.PI / 180;
+    var vxRelease = releaseRadius * theta0Rad * omega; // px/ms, signed toward the landing side
+
+    // ── Shared static wrapper: DOCUMENT coordinates (rule 2), not the prototype's
+    // position:fixed. Every child below is positioned in THIS element's own local coordinate
+    // space, which starts at the viewport's top-left exactly like the prototype's fixed-
+    // position math did -- so every viewport-space offset below (Px/PIVOT_Y/L/figWidth/
+    // figHeight) ports unchanged; only this one wrapper's own left/top carry the scroll
+    // offset. Same idiom as animateReanimate's own reanimateWrap. ──
+    var vineWrap = document.createElement('div');
+    vineWrap.className = 'oc-beacon oc-beacon-transient';
+    vineWrap.setAttribute('data-vineswing', 'vine');
+    vineWrap.setAttribute('data-vineswing-side', landing.side);
+    vineWrap.setAttribute('data-vineswing-l', String(L));
+    vineWrap.setAttribute('data-vineswing-pivot-y', String(PIVOT_Y));
+    vineWrap.setAttribute('data-vineswing-release-feet-y', String(releaseFeetY));
+    vineWrap.setAttribute('data-vineswing-px', String(Px));
+    vineWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (SCROLL_X) + 'px', 'top:' + (SCROLL_Y) + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(vineWrap);
+
+    var vineAnims = [];
+    function trackVine(a) { vineAnims.push(a); return a; }
+
+    var vineSvg = svgEl('svg', {
+      width: String(vw), height: String(vh), viewBox: '0 0 ' + vw + ' ' + vh
+    }, vineWrap);
+    vineSvg.style.cssText = 'display:block;overflow:visible;';
+
+    var vineGroup = svgEl('g', {}, vineSvg);
+    vineGroup.style.cssText = 'transform-origin:' + Px + 'px ' + PIVOT_Y + 'px;transform:rotate(' + theta0 + 'deg);';
+
+    function vShape(tag, attrs) { return svgEl(tag, attrs, vineGroup); }
+
+    // Vine: outline stroke underneath, base stroke, thin highlight offset toward the
+    // upper-left (same lit-from-upper-left rule every other shape in this effect follows).
+    // Stroke widths are SIZES (rule 6), so they scale directly with beaconScale.
+    var vineD = 'M ' + Px + ' ' + PIVOT_Y + ' L ' + Px + ' ' + (PIVOT_Y + L);
+    vShape('path', { d: vineD, fill: 'none', stroke: VINE_OUTLINE, 'stroke-width': String(7 * beaconScale), style: STROKE });
+    vShape('path', { d: vineD, fill: 'none', stroke: VINE, 'stroke-width': String(4.5 * beaconScale), style: STROKE });
+    var vineHiD = 'M ' + (Px - 1) + ' ' + PIVOT_Y + ' L ' + (Px - 1) + ' ' + (PIVOT_Y + L);
+    vShape('path', { d: vineHiD, fill: 'none', stroke: VINE_HI, 'stroke-width': String(1.4 * beaconScale), style: STROKE });
+
+    // Two leaves along the vine, alternating sides.
+    [0.38, 0.72].forEach(function (frac, i) {
+      var ly = PIVOT_Y + L * frac;
+      var side = i === 0 ? 1 : -1;
+      var lx = Px + side * 9 * beaconScale;
+      var leafSpan = 6 * beaconScale;
+      var leafD = 'M ' + Px + ' ' + ly + ' L ' + lx + ' ' + (ly - leafSpan) + ' L ' + (lx + side * leafSpan) + ' ' + ly + ' L ' + lx + ' ' + (ly + leafSpan) + ' Z';
+      vShape('path', { d: leafD, fill: LEAF, stroke: LEAF_OUTLINE, 'stroke-width': String(1.4 * beaconScale), style: STROKE });
+      vShape('ellipse', { cx: String(lx), cy: String(ly - 2 * beaconScale), rx: String(2 * beaconScale), ry: String(1.4 * beaconScale), fill: LEAF_HI });
+    });
+
+    // Swinging figure -- a nested <svg> so buildFigure()'s authoring-unit grid can be reused
+    // verbatim; positioned so its own top edge (grip level) sits at the vine's lower end, in
+    // the group's local (pre-rotation) coordinates. Rotating the group therefore always
+    // carries the figure along with the vine's end -- attachment by construction.
+    // overflow:visible lets the raised-arm fist (drawn above y=0 in the 'swing' pose) render
+    // instead of being clipped by the nested <svg>'s own box.
+    var figSwingSvg = svgEl('svg', {
+      'data-vs-pose': 'swing',
+      x: String(Px - figWidth / 2), y: String(PIVOT_Y + L + FIG_Y_OFFSET),
+      width: String(figWidth), height: String(figHeight), viewBox: '0 0 ' + VB_W + ' ' + VB_H
+    }, vineGroup);
+    figSwingSvg.style.cssText = 'overflow:visible;';
+    buildFigure(figSwingSvg, !onRight, 'swing');
+
+    // ── Landing figure -- separate top-level element, identical artwork (crouched pose),
+    // hidden until release ────────────────────────────────────────────────────────────────
+    var FALL_PAD = 8; // headroom above the landing figure's own feet within its box, for the squash animation below
+    var LAND_HEAD_DROP = 5;
+    var landingPoseLift = figHeight * LAND_HEAD_DROP / VB_H;
+    var releaseLeft = Px - figWidth / 2, releaseTop = releaseFeetY - figHeight - FALL_PAD;
+
+    var fallOuter = document.createElement('div');
+    fallOuter.className = 'oc-beacon oc-beacon-transient';
+    fallOuter.setAttribute('data-vineswing', 'landing');
+    fallOuter.style.cssText = [
+      'position:absolute',
+      'left:' + (releaseLeft + SCROLL_X) + 'px', 'top:' + (releaseTop + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + (figHeight + FALL_PAD) + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(fallOuter);
+
+    var fallAnims = [];
+    function trackFall(a) { fallAnims.push(a); return a; }
+
+    var fallInner = document.createElement('div');
+    fallInner.style.cssText = 'width:100%;height:100%;transform-origin:50% 100%;';
+    fallOuter.appendChild(fallInner);
+
+    var figFallSvg = svgEl('svg', {
+      'data-vs-pose': 'land',
+      width: String(figWidth), height: String(figHeight), viewBox: '0 0 ' + VB_W + ' ' + VB_H
+    }, fallInner);
+    figFallSvg.style.cssText = 'display:block;overflow:visible;position:absolute;left:0;top:' + (FALL_PAD - landingPoseLift) + 'px;';
+    buildFigure(figFallSvg, !onRight, 'land');
+
+    // ── Timeline: every phase boundary below is computed in RAW ms (rule 6's own "phase
+    // boundaries scaling with it [durFactor] rather than staying absolute" -- the fraction
+    // math needs the raw values so the shape of the motion is unaffected by Animation Speed;
+    // durFactor is multiplied in only at the point each value is handed to a `duration:` or
+    // `delay:` option below). ──
+    var STEP = 16; // ms, fixed integration step (raw)
+
+    // The vine's own rotation is ONE continuous sample of the same pendulum formula from
+    // entry all the way to a natural stop on the FAR side (oculist-1ta.4's own finding 1:
+    // reversing back the way it came was wrong). FAR_FRAC=0.8 stops the sample on the far
+    // side while theta is still comfortably nonzero -- the vine is still visibly moving when
+    // it fades below.
+    var FAR_FRAC = 0.8;
+    var FAR_T = Math.acos(-FAR_FRAC) / omega;
+    var SWING_TOTAL = FAR_T; // raw ms
+
+    var SQUASH_DUR = 150, HOLD_AFTER = 500, FADE_DUR = 300, FADE_IN_DUR = 120, FADE_OUT_DUR = 200; // raw ms
+
+    var RELEASE_T = SWING_DUR; // theta=0, the bottom
+    var LAND_T = RELEASE_T + FALL_DUR;
+    var SQUASH_END_T = LAND_T + SQUASH_DUR;
+    var FADE_DELAY = SQUASH_END_T + HOLD_AFTER;
+
+    var rotFrames = [];
+    var nSteps = Math.max(2, Math.round(SWING_TOTAL / STEP));
+    for (var si = 0; si <= nSteps; si++) {
+      var st = (si / nSteps) * SWING_TOTAL;
+      var sth = thetaAt(theta0, st);
+      rotFrames.push({ transform: 'rotate(' + sth.toFixed(3) + 'deg)', offset: si / nSteps });
+    }
+    rotFrames.push({ transform: 'rotate(0deg)', offset: RELEASE_T / SWING_TOTAL });
+    rotFrames.sort(function (a, b) { return a.offset - b.offset; });
+    rotFrames[rotFrames.length - 1].offset = 1; // exact end, immune to float rounding
+    trackVine(vineGroup.animate(rotFrames, { duration: SWING_TOTAL * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    // Swinging figure hides the instant release happens; the vine (now riderless) keeps
+    // going per rotFrames above, then fades.
+    var releaseFrac = RELEASE_T / SWING_TOTAL;
+    trackVine(figSwingSvg.animate([
+      { opacity: 1, offset: 0, easing: 'step-end' },
+      { opacity: 0, offset: releaseFrac },
+      { opacity: 0, offset: 1 }
+    ], { duration: SWING_TOTAL * durFactor, fill: 'forwards' }));
+
+    // Vine + figure fade in over the first FADE_IN_DUR ms (oculist-1ta.4's own finding 2: no
+    // materializing at rest -- the whole group is already moving, mid-rotation), held at full
+    // opacity through the swing, then fade out over the last FADE_OUT_DUR ms while the
+    // riderless vine is still moving.
+    var fadeInFrac = FADE_IN_DUR / SWING_TOTAL;
+    var fadeOutStartFrac = (SWING_TOTAL - FADE_OUT_DUR) / SWING_TOTAL;
+    trackVine(vineWrap.animate([
+      { opacity: 0, offset: 0, easing: 'ease-out' },
+      { opacity: 1, offset: fadeInFrac, easing: 'linear' },
+      { opacity: 1, offset: fadeOutStartFrac, easing: 'ease-in' },
+      { opacity: 0, offset: 1 }
+    ], { duration: SWING_TOTAL * durFactor, fill: 'forwards' }));
+
+    // Landing figure: hidden -> instant reveal at release -> a real projectile hop
+    // (oculist-1ta.4's own finding 3): constant horizontal velocity and a true kinematic
+    // parabola vertically (vy0*t + 0.5*g*t^2), not an eased mirror of gravity. The swing's
+    // vertical velocity at the exact theta=0 release point is exactly zero, so the ballistic
+    // segment starts with vy=0 and gravity bends that horizontal release into the landing ->
+    // squash -> held settle -> fade with the rest of the scene.
+    trackFall(fallOuter.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: 1 }
+    ], { duration: 1, delay: RELEASE_T * durFactor, fill: 'forwards' }));
+
+    var vxHop = (landingX - Px) / FALL_DUR; // px/ms, constant -- the actual release-to-landing gap over FALL_DUR (raw)
+    var vy0 = 0;
+    var TARGET_DROP = mcy - releaseFeetY + landingPoseLift;
+    var g = 2 * (TARGET_DROP - vy0 * FALL_DUR) / (FALL_DUR * FALL_DUR); // px/ms^2, raw-time-solved
+
+    var fallSteps = Math.max(2, Math.round(FALL_DUR / STEP));
+    var fallFrames = [];
+    for (var fi = 0; fi <= fallSteps; fi++) {
+      var ffrac = fi / fallSteps;
+      var ft = ffrac * FALL_DUR; // raw ms, used only to sample the physical curve's SHAPE
+      var fx = vxHop * ft;
+      var fy = vy0 * ft + 0.5 * g * ft * ft;
+      fallFrames.push({ transform: 'translate(' + fx.toFixed(2) + 'px,' + fy.toFixed(2) + 'px)', offset: ffrac });
+    }
+    trackFall(fallOuter.animate(fallFrames, { duration: FALL_DUR * durFactor, delay: RELEASE_T * durFactor, easing: 'linear', fill: 'forwards' }));
+
+    trackFall(fallInner.animate([
+      { transform: 'scale(1,1)', offset: 0 },
+      { transform: 'scale(1.18,0.78)', offset: 0.45 },
+      { transform: 'scale(0.95,1.05)', offset: 0.75 },
+      { transform: 'scale(1,1)', offset: 1 }
+    ], { duration: SQUASH_DUR * durFactor, delay: LAND_T * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    trackFall(fallOuter.animate([
+      { opacity: 1 }, { opacity: 0 }
+    ], { duration: FADE_DUR * durFactor, delay: FADE_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    vineWrap.__waapiAnims = vineAnims;
+    fallOuter.__waapiAnims = fallAnims;
+
+    // Natural completion removes each top-level element only once EVERY one of its own
+    // animations has settled (rule 5). destroyBeacon() still removes both synchronously on
+    // cancel (cancelBeacons() selects every `.oc-beacon` element, and both wrappers carry
+    // that class independently), cancelling every entry in __waapiAnims regardless of these
+    // promises -- same idiom animateReanimate's own removeReanimateWrap() uses.
+    function removeVineWrap() { vineWrap.remove(); }
+    function removeFallOuter() { fallOuter.remove(); }
+    var vineDone = Promise.allSettled(vineAnims.map(function (a) { return a.finished; })).then(removeVineWrap);
+    var fallDone = Promise.allSettled(fallAnims.map(function (a) { return a.finished; })).then(removeFallOuter);
+
+    // RESIZE HARD CUT -- see the header comment's own RESIZE note. Tear both top-level
+    // elements down on the FIRST resize event, ahead of the 100ms cancelBeacons() debounce,
+    // the same technique hardCutArrowShot()/hardCutBackWrap() already use.
+    function hardCutVineSwing() {
+      window.removeEventListener('resize', hardCutVineSwing);
+      [vineWrap, fallOuter].forEach(function (el) {
+        if (!el.isConnected) return;
+        (el.__waapiAnims || []).forEach(function (a) { try { a.cancel(); } catch (e) {} });
+        el.remove();
+      });
+    }
+    window.addEventListener('resize', hardCutVineSwing, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case), the listener would
+    // otherwise outlive it, leaked on window forever. Explicitly remove it once every element
+    // has finished on its own (natural completion) or been cancelled (destroyBeacon() calls
+    // .cancel() on every __waapiAnims entry, which settles vineDone/fallDone immediately) --
+    // this covers both paths hardCutVineSwing()'s own early removeEventListener does not
+    // reach, using allSettled-based promises throughout so a cancel rejection can never skip
+    // this cleanup.
+    Promise.all([vineDone, fallDone]).then(function () {
+      window.removeEventListener('resize', hardCutVineSwing);
+    });
   }
 
   function animateLightning(rect) {
