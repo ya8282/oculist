@@ -823,6 +823,7 @@
     effectTentacleRise: 'Tentacle Rise',
     effectReanimate: 'Reanimation Jolt',
     effectBatFlight: 'Bat Flight',
+    effectWandCast: 'Wand Cast',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -942,7 +943,8 @@
     horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
     tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
     reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
-    batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' }
+    batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
+    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -5610,6 +5612,583 @@
     function removeFigWrap() { figWrap.remove(); }
     figAnim.finished.then(removeFigWrap).catch(removeFigWrap);
   }
+
+  // oculist-nq1x.10: promotes fxWandCast (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the ninth entry in the Halloween pack. A sparkling amber
+  // fairy lands beside the match (right by default, left if the right side has no room), casts
+  // through three wand poses, and launches six sparkles from the wand tip that swirl the match
+  // on an orbiting ellipse before fading -- never above/below (see MISSING-REQUIREMENT below).
+  //
+  // NO ABOVE/BELOW FALLBACK, BY DESIGN (oculist-nq1x.10's own MISSING-REQUIREMENT note): unlike
+  // animateBatFlight's beside-then-above-then-below chooser, this effect has no above/below
+  // placement at all -- the wand pose art and the sparkle travel bezier both assume the figure
+  // sits BESIDE the match (the bezier's control point is keyed off the wand tip's own x and
+  // rect.bottom; the orbit's landing-angle bias assumes the wand launches from the same side its
+  // sparkles land on). When neither side has full clearance, this does NOT fall back to
+  // above/below and does NOT suppress on that alone -- it still tries sideRight, then suppresses
+  // (mounts nothing at all) ONLY if the actual clamped painted bounds of the figure genuinely
+  // overlap #match (oculist-giy7). A synthetic full-width #match (the standard FORCED-LANDING
+  // harness rows) therefore suppresses on every one of those rows unconditionally -- unfalsifiable
+  // by construction for this key, the same reclassification Tentacle Rise's own vacuous-green risk
+  // needed (oculist-ke53/4k8y); this suite proves real (non-vacuous) placement and real suppression
+  // separately via a live element census, not just a clean pixel-diff.
+  //
+  // NO START-POINT CASCADE, RULE 9 EXCEPTION (oculist-i8zu, DECIDED 2026-09-23, oculist-nq1x.10's
+  // own RULE 9 DECIDED note): the shipped lastMouseX/find-bar/viewport start-point cascade
+  // animateTrail uses is deliberately NOT used here. Every sparkle launches from the wand tip
+  // (wandTipScreen, itself derived from the figure's own placement, which keeps the travel clear
+  // of #match per rule 10) -- a cursor or find-bar origin would detach the sparkles from the
+  // figure that casts them. Rule 9's other half -- the mirrored branch must work for real, not
+  // just compile -- still applies and is tested below.
+  //
+  // SIX PRIOR OCCLUSION DEFECTS, all closed, ported forward rather than re-derived: oculist-tvqw
+  // (the rx floor below is NOT the strictly-derived (rect.width/2 + MARGIN)/cos(30deg) form --
+  // deliberately kept as MARGIN/cos(30deg) alone, a measured trade, see the rx comment below),
+  // oculist-giy7 (the side-selection fallback suppresses on the ACTUAL clamped painted bounds,
+  // never on sideRight.fits/sideLeft.fits alone), oculist-wkfc (a sparkle's launch stays invisible
+  // until the sampled travel path first visually clears #match -- revealTravelT below), oculist-73l6
+  // (+1px of ORBIT_EDGE_MARGIN for a simultaneous-both-axes corner case), oculist-3dd8 (DOES
+  // apply here, corrected after review: scroll goes through fadeActiveBeacons(), an immediate
+  // teardown with no stale-clip window, but RESIZE does not -- content.js's own handleResize
+  // only reaches cancelBeacons() via repositionActiveOverlays() after a 100ms debounce that a
+  // continuous resize drag keeps resetting, so backWrap's static clip-path hole can go stale
+  // against a reflowed #match for the whole drag. Ported the prototype's own hard cut: backWrap
+  // tears itself down on the FIRST resize event, ahead of the debounced cancelBeacons() -- see
+  // backWrap's own comment below), oculist-mbmy (the engagement-threshold framing for when
+  // rxViewportCap actually differs from rawRx). A redraw or "cleanup" that restores any of the
+  // cut/fixed beats these close reasons describe is a regression, not an improvement.
+  //
+  // Fixed identity palette (oculist-1ta.30's own accent-amber recolor, rule 6's own license,
+  // "the pumpkin's orange"): OUTLINE/AMBER/SPARK_* are fixed literals, like Bat Flight's BAT_*
+  // tones -- there is no separate flash/UI-accent element here for getEffectiveColors().beacon to
+  // drive.
+  //
+  // Lite Mode (rule 7): a no-op, the same reasoning Bat Flight's/Tentacle Rise's own header
+  // comments give for themselves. There is no filter, no box-shadow and no decorative glow layer
+  // anywhere in this effect's shipped art -- every "glow" mentioned in the geometry comments below
+  // is a historical clearance-margin name, not a rendered CSS effect -- and the wand-pose swap plus
+  // the orbiting sparkle swirl ARE the effect's defining beats, not decorative flicker to cut.
+  // settings.performanceMode is deliberately never read below.
+  function animateWandCast(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var mcy = rect.top + rect.height / 2; // viewport space (rule 2)
+    var vw = window.innerWidth, vh = window.innerHeight;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+
+    var OUTLINE = '#6f4608';
+    var AMBER = '#f59e0b';
+    var SPARK_CORE = '#fff6d8';
+    var SPARK_MID = '#ffd76a';
+    var SPARK_EDGE = '#c98a1c';
+    var STROKE = 'stroke-linejoin:round;stroke-linecap:round;';
+
+    function svgEl(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    function shape(d, fill, parent, stroke, width, part) {
+      var attrs = { d: d, fill: fill };
+      if (stroke) {
+        attrs.stroke = stroke;
+        attrs['stroke-width'] = String(width);
+        attrs.style = STROKE;
+      }
+      if (part) attrs['data-wc-part'] = part;
+      return svgEl('path', attrs, parent);
+    }
+
+    // ── Fairy art, local viewBox coordinates. Canonical drawing always reaches with the wand
+    // toward local -x -- see toScreen() below for why that one convention covers both landing
+    // sides without a second set of coordinates. ──
+    var VB_W = 40, VB_H = 52;
+    var SHOULDER = [20, 17];
+    var TIP_BACK = [16, -10];
+    var TIP_MID = [-4, 4];
+    var TIP_CAST = [-16, 18];
+    var WAND_TIP_LOCAL = TIP_CAST;
+    var TIP_RADIUS_LOCAL = 2.5;
+
+    // Furthest local reach toward the match (wand tip at cast) and away from it (the wing's own
+    // outer tip) -- the same GAP/REACH_INWARD/REACH_OUTWARD side-selection idiom animateReanimate
+    // uses, so the figure never lands close enough to occlude the glyphs and never picks a side
+    // it doesn't actually fit on.
+    var ANCHOR_X = 20;
+    var REACH_INWARD_LOCAL = ANCHOR_X - (WAND_TIP_LOCAL[0] - 1); // 37
+    var REACH_OUTWARD_LOCAL = 30; // wing's own rightmost point, see wingUpper below
+
+    // figHeight carries beaconScale (rule 6) BEFORE the placement/clearance math below is
+    // derived from it, the same "scale before computing placement" discipline animateReanimate's
+    // own figHeight comment describes.
+    var figHeight = Math.max(34, Math.min(48, 1.5 * rect.height)) * beaconScale;
+    var scale = figHeight / VB_H;
+    var figWidth = VB_W * scale;
+    var GAP = 14;
+    var REACH_INWARD = REACH_INWARD_LOCAL * scale + 3;
+    var REACH_OUTWARD = REACH_OUTWARD_LOCAL * scale + 3;
+
+    // ── Side selection: right by default, mirror to the left only if the right doesn't fit,
+    // exactly animateReanimate's/animateTentacleRise's own "never above/below" convention. ──
+    var sideRight = { x: rect.right + GAP + REACH_INWARD };
+    sideRight.fits = sideRight.x + REACH_OUTWARD <= vw - 4;
+    var sideLeft = { x: rect.left - GAP - REACH_INWARD };
+    sideLeft.fits = sideLeft.x - REACH_OUTWARD >= 4;
+    // "Fits" is the full REACH_INWARD/REACH_OUTWARD comfort budget, not mere non-overlap -- when
+    // neither side clears it, sideRight is still kept as the fallback landing (oculist-giy7):
+    // whether it is actually safe to draw is decided below, from the real painted bounds, not
+    // from these two flags alone.
+    var landing = sideRight.fits ? sideRight : (sideLeft.fits ? sideLeft : sideRight);
+    var onRight = landing === sideRight;
+    var mirrored = !onRight;
+
+    // Hard viewport clamp on top of the side-selection math above, so a narrow viewport
+    // (320x900/360x900) can never push the fairy off-screen.
+    var figLeft = Math.max(4, Math.min(vw - 4 - figWidth, landing.x - ANCHOR_X * scale));
+    var figTop = Math.max(4, Math.min(vh - 4 - figHeight, mcy - figHeight / 2));
+
+    // oculist-giy7/wkfc: suppress ONLY if the ACTUAL clamped painted bounds overlap #match --
+    // not merely because sideRight.fits/sideLeft.fits above are both false (those flags require
+    // the full comfort budget; the clamp above can still land clear of #match even when that
+    // budget doesn't fit). This is figure-only, geometry-driven, keyed off the actual local art
+    // extrema after scale/mirroring -- not the viewport size or a scenario name. When it fires,
+    // the entire flanking figure AND its sparkles are suppressed for this render (no above/below
+    // fallback exists for this effect, see this function's own header comment).
+    var PAINT_MIN_X = TIP_CAST[0] - TIP_RADIUS_LOCAL;
+    var PAINT_MAX_X = 50; // wingUpper's outer point
+    var PAINT_MIN_Y = TIP_BACK[1] - TIP_RADIUS_LOCAL;
+    var PAINT_MAX_Y = 46; // body's lowest point
+    var paintLeft = figLeft + (mirrored ? VB_W - PAINT_MAX_X : PAINT_MIN_X) * scale;
+    var paintRight = figLeft + (mirrored ? VB_W - PAINT_MIN_X : PAINT_MAX_X) * scale;
+    var paintTop = figTop + PAINT_MIN_Y * scale;
+    var paintBottom = figTop + PAINT_MAX_Y * scale;
+    if (paintLeft < rect.right && paintRight > rect.left &&
+        paintTop < rect.bottom && paintBottom > rect.top) {
+      return;
+    }
+
+    // Local (lx,ly) -> viewport px. The wrapper div is mirrored with transform:scaleX(-1)
+    // (transform-origin defaults to the box's own center), so a mirrored local point reflects
+    // across figWidth/2 rather than simply negating -- the one formula every screen-space use of
+    // the local art (the wand tip, below) has to go through.
+    function toScreen(lx, ly) {
+      var ux = mirrored ? (figWidth - lx * scale) : (lx * scale);
+      return [figLeft + ux, figTop + ly * scale]; // viewport space
+    }
+
+    function visualClearsMatch(px, py, reach) {
+      return px + reach <= rect.left || px - reach >= rect.right ||
+        py + reach <= rect.top || py - reach >= rect.bottom;
+    }
+
+    // Document coordinates (rule 2): SCROLL_X/SCROLL_Y are added exactly once, at the point each
+    // viewport-space value is actually written into a left/top or a transform -- animateBatFlight's
+    // own offset-path precedent.
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    // ── Figure ───────────────────────────────────────────────────────────────────────────
+    var wrapAnims = [];
+    function trackWrap(a) { wrapAnims.push(a); return a; }
+
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient';
+    wrap.setAttribute('data-wandcast', 'figure');
+    wrap.setAttribute('data-wc-side', onRight ? 'right' : 'left');
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + (figLeft + SCROLL_X) + 'px', 'top:' + (figTop + SCROLL_Y) + 'px',
+      'width:' + figWidth + 'px', 'height:' + figHeight + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0',
+      mirrored ? 'transform:scaleX(-1);' : ''
+    ].join(';');
+    document.documentElement.appendChild(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(figWidth));
+    svg.setAttribute('height', String(figHeight));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:visible;';
+    wrap.appendChild(svg);
+
+    // Core (head/body/wings) is shared across every wand pose -- only the arm+wand group swaps,
+    // the same "shared core, swap the limb" idiom animateHorseman uses for its gallop/rear frames.
+    var core = svgEl('g', { 'data-wc-core': '' }, svg);
+    shape('M25 18 C30 7 42 -3 48 -3 Q52 -2 48 6 Q46 10 43 12 Q47 12 43 16 Q37 20 25 18Z', SPARK_CORE, core, SPARK_EDGE, 2, 'wing-upper');
+    shape('M26 21 Q39 19 46 23 Q50 27 43 29 Q44 33 38 32 Q32 30 26 21Z', SPARK_CORE, core, SPARK_EDGE, 2, 'wing-lower');
+    shape('M29 22 Q37 22 38 27 Q34 27 29 22Z', SPARK_MID, core);
+    shape('M30 29 Q39 32 40 41 Q36 39 31 34Z', AMBER, core, OUTLINE, 2, 'leg-back');
+    shape('M24 30 L30 31 Q34 38 35 45 Q30 42 25 36Z', AMBER, core, OUTLINE, 2, 'leg-front');
+    shape('M21 16 Q18 17 19 24 Q20 31 23 36 L26 30 L30 32 L30 28 Q34 30 36 28 Q34 24 27 21 L25 16Z', AMBER, core, OUTLINE, 2, 'tunic');
+    shape('M21 19 Q20 24 23 30 L24 27 Q22 22 23 19Z', SPARK_MID, core);
+    shape('M20 3 Q15 7 17 13 Q18 17 23 17 Q27 16 27 11 L26 4Z', SPARK_MID, core, OUTLINE, 2, 'profile');
+    shape('M17 10 Q14 3 20 0 Q24 -2 28 -1 L30 -3 Q31 0 28 1 Q33 1 34 7 Q35 10 38 9 Q36 14 31 12 Q32 16 25 18 Q29 14 26 11 Q21 10 19 5Z', AMBER, core, OUTLINE, 2, 'bob');
+    shape('M21 2 Q28 0 31 5 Q27 3 23 4Z', SPARK_MID, core);
+
+    function addArmPose(name, tip, hand, arm) {
+      var g = svgEl('g', { 'data-wc-pose': name }, svg);
+      var shaft = 'M' + hand.join(' ') + ' L' + tip.join(' ');
+      shape(shaft, 'none', g, OUTLINE, 2.8, 'wand');
+      shape(shaft, 'none', g, SPARK_MID, 1.2);
+      shape('M' + SHOULDER.join(' ') + arm, AMBER, g, OUTLINE, 1.5, 'arm');
+      var star = svgEl('g', { transform: 'translate(' + tip.join(' ') + ')', 'data-wc-part': 'tip' }, g);
+      shape('M0 -2.5 L.8 -.8 L2.5 0 L.8 .8 L0 2.5 L-.8 .8 L-2.5 0 L-.8 -.8Z', SPARK_EDGE, star);
+      shape('M0 -1.7 L.55 -.55 L1.7 0 L.55 .55 L0 1.7 L-.55 .55 L-1.7 0 L-.55 -.55Z', SPARK_CORE, star);
+      return g;
+    }
+    var poseBack = addArmPose('windup', TIP_BACK, [15, 3], ' Q14 15 12 6 Q10 2 13 1 Q16 0 17 4 L16 6 Q17 11 22 13Z');
+    var poseMid = addArmPose('diagonal', TIP_MID, [6, 12], ' Q13 17 8 14 Q4 15 4 11 Q4 8 7 10 L9 12 Q15 14 21 13Z');
+    var poseCast = addArmPose('cast', TIP_CAST, [1, 18], ' Q10 20 3 20 Q-1 21 -1 18 Q-1 15 2 16 L5 17 L20 14Z');
+    poseMid.style.opacity = '0';
+    poseCast.style.opacity = '0';
+
+    // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, at the
+    // .animate() call itself, so relative timing is preserved exactly, matching animateReanimate's
+    // own "raw * durFactor" idiom. ──
+    var ENTRY_DUR = 150;
+    var POSE_HOLD = 150;
+    var T_POSE_MID = ENTRY_DUR + POSE_HOLD;      // 300
+    var CAST_START = T_POSE_MID + POSE_HOLD;     // 450, wand reaches the match-facing pose
+    var TRAVEL_DUR = 260;
+    var ANGULAR_SPEED = 0.5; // deg/ms, constant across every sparkle
+    var ORBIT_MIN_SWEEP = 380; // > 360 so every sparkle completes a full lap
+    // Hand-authored, irregular on purpose (rule 11: no Math.random anywhere) -- six launches
+    // from the wand tip across the wave's final hold.
+    var CAST_STAGGER = [0, 55, 95, 150, 185, 230];
+    var STAGGER_MAX = 230;
+    var ORBIT_STOP_T = CAST_START + STAGGER_MAX + TRAVEL_DUR + ORBIT_MIN_SWEEP / ANGULAR_SPEED; // 1700
+    var FADE_DUR = 200;
+    var DUR = ORBIT_STOP_T + FADE_DUR + 60;
+
+    trackWrap(poseBack.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1, delay: (T_POSE_MID - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseMid.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1, delay: (T_POSE_MID - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseMid.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1, delay: (CAST_START - 1) * durFactor, fill: 'forwards' }));
+    trackWrap(poseCast.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1, delay: (CAST_START - 1) * durFactor, fill: 'forwards' }));
+
+    // Entry fade-in and the end-of-life fade-out are ONE animation, not two -- a separate fade-in
+    // call would still be active (fill:'forwards') when this one starts at the same delay:0, and
+    // WAAPI's default 'replace' composite would let the later-added animation win, snapping the
+    // fairy to fully opaque at t=0 instead of fading it in (animateBatFlight's own mist/figure
+    // precedent for this compositing rule).
+    trackWrap(wrap.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: ENTRY_DUR / DUR },
+      { opacity: 1, offset: ORBIT_STOP_T / DUR },
+      { opacity: 0, offset: 1 }
+    ], { duration: DUR * durFactor, fill: 'forwards', easing: 'linear' }));
+
+    var wandTipScreen = toScreen(WAND_TIP_LOCAL[0], WAND_TIP_LOCAL[1]); // viewport space
+    var SPARK_SIZE = 12 * beaconScale;
+    var SPARK_HALF = SPARK_SIZE / 2;
+    var SPARK_VISUAL_REACH = SPARK_HALF + 4 * beaconScale;
+
+    // ── Orbit ellipse. Centered DOWN_BIAS below the match's own vertical middle so the ellipse's
+    // lower (front) extreme clears well past rect.bottom while its upper (back) extreme dips just
+    // inside rect.top -- the back arc's own visibility there is handled entirely by backWrap's
+    // clip-path, below. padX/DOWN_BIAS/ry ratios cover the front sparkle's own visual extent, not
+    // just its center point (measured via occlusion-sweep.js in the prototype). ──
+    var mcx = rect.left + rect.width / 2;
+    var padX = 22 * beaconScale;
+    var rawRx = rect.width / 2 + padX;
+    var DOWN_BIAS = 0.32 * rect.height;
+    var ry = 0.78 * rect.height;
+    var ecx = mcx, ecy = mcy + DOWN_BIAS;
+
+    // oculist-tvqw/oculist-giy7/oculist-mbmy: rx is floored at the match's own half width plus a
+    // clearance term (NOT the strictly-derived (rect.width/2 + MARGIN)/cos(30deg) form -- see this
+    // function's own header comment; DECISION, keep as-is) and capped so the ellipse's own
+    // horizontal extreme still clears the viewport edge at a narrow viewport. ORBIT_EDGE_MARGIN
+    // scales with beaconScale (it derives from the sparkle's own half-size); the 320x900/360x900
+    // edge-clamp cases these defects were filed against are exercised below.
+    var ORBIT_EDGE_MARGIN = 18 * beaconScale; // half of SPARK_SIZE + slack (oculist-73l6: +1px margin for a simultaneous-both-axes corner case, then oculist-1ta.30's SPARK_SIZE=12 re-derivation to 18)
+    var LANDING_MIN_DEG_FROM_HORIZONTAL = 30; // must match THETA0_RIGHT's own bound, below
+    var rxViewportCap = Math.min(ecx - ORBIT_EDGE_MARGIN, (vw - ORBIT_EDGE_MARGIN) - ecx);
+    var matchClearanceFloor = rect.width / 2 +
+      ORBIT_EDGE_MARGIN / Math.cos(LANDING_MIN_DEG_FROM_HORIZONTAL * Math.PI / 180);
+    var rx = Math.max(matchClearanceFloor, Math.min(rawRx, rxViewportCap));
+
+    function ellipsePoint(deg) {
+      var rad = deg * Math.PI / 180;
+      return [ecx + rx * Math.cos(rad), ecy + ry * Math.sin(rad)]; // viewport space
+    }
+    // y = ecy + ry*sin(theta): sin>=0 means the point sits AT OR BELOW the ellipse's own center,
+    // i.e. the lower/front arc.
+    function isFrontDeg(deg) {
+      var rad = ((deg % 360) + 360) % 360 * Math.PI / 180;
+      return Math.sin(rad) >= 0;
+    }
+
+    // Landing angles are restricted to [30,120] degrees, biased to the fairy's own side (a
+    // quadratic bezier is bounded by the convex hull of its control points, not by each point's
+    // individual clearance -- a wider range let the hull sweep back across #match even though
+    // every control point was individually clear). [30,120] keeps every landing point on the SAME
+    // side as the wand tip's own launch.
+    var THETA0_RIGHT = [120, 105, 90, 70, 50, 30];
+    var THETA0 = onRight ? THETA0_RIGHT : THETA0_RIGHT.map(function (d) { return 180 - d; });
+
+    function buildAngleCheckpoints(theta0, sweep, stepDeg) {
+      var end = theta0 + sweep;
+      var angles = [theta0];
+      var cur = theta0;
+      while (cur < end - 1e-6) {
+        var next = Math.min(cur + stepDeg, end);
+        var k = Math.floor(cur / 180) + 1;
+        while (k * 180 < next - 1e-6) {
+          if (k * 180 > cur + 1e-6) { angles.push(k * 180); cur = k * 180; }
+          k++;
+        }
+        angles.push(next);
+        cur = next;
+      }
+      return angles;
+    }
+
+    // Every point below (wand tip, bezier samples, ellipse points) is the sparkle's intended
+    // CENTER in viewport space. frontEl is mounted directly on document.documentElement at
+    // left:0;top:0 (document-space origin), so ITS translate needs SCROLL_X/SCROLL_Y added --
+    // animateBatFlight's own offset-path precedent, added here exactly once.
+    function centerTranslateDoc(px, py) {
+      return 'translate(' + (px - SPARK_HALF + SCROLL_X) + 'px,' + (py - SPARK_HALF + SCROLL_Y) + 'px)';
+    }
+    // backEl (the back-arc ghost) is instead a CHILD of backWrap, whose own box is already
+    // anchored at document (SCROLL_X, SCROLL_Y) -- see backWrap's own left/top below -- so
+    // backEl's local origin already coincides with the viewport's own top-left. Routing its
+    // translate through centerTranslateDoc (as the figure/frontEl do) would add the scroll
+    // offset a SECOND time, walking every ghost sparkle scrollY px too far down the document
+    // and off the clip-path's own punched hole (review defect 1, measured at scrollY=1668: front
+    // sparkles at viewport y~391-404, ghosts at y~2054-2072, one scrollY off). This helper stays
+    // in plain viewport space, with no scroll term at all.
+    function centerTranslateLocal(px, py) {
+      return 'translate(' + (px - SPARK_HALF) + 'px,' + (py - SPARK_HALF) + 'px)';
+    }
+
+    function sparkVisual(index) {
+      var glyph = document.createElementNS(NS, 'svg');
+      glyph.setAttribute('xmlns', NS);
+      glyph.setAttribute('width', '12'); glyph.setAttribute('height', '12');
+      glyph.setAttribute('viewBox', '0 0 12 12');
+      glyph.setAttribute('data-wc-spark', ['star', 'diamond', 'burst'][index % 3]);
+      glyph.style.display = 'block';
+      var d = [
+        'M6 1 L7.8 4.2 L11 6 L7.8 7.8 L6 11 L4.2 7.8 L1 6 L4.2 4.2Z',
+        'M6 1 Q7.5 4.5 11 6 Q7.5 7.5 6 11 Q4.5 7.5 1 6 Q4.5 4.5 6 1Z',
+        'M5 2 Q5 1 6 1 Q7 1 7 2 L7 4.2 L9.5 2.8 Q11 2 11 3.5 Q11 4 10.5 4.4 L8 6 L10.5 7.6 Q11 8 11 8.5 Q11 10 9.5 9.2 L7 7.8 L7 10 Q7 11 6 11 Q5 11 5 10 L5 7.8 L2.5 9.2 Q1 10 1 8.5 Q1 8 1.5 7.6 L4 6 L1.5 4.4 Q1 4 1 3.5 Q1 2 2.5 2.8 L5 4.2Z'
+      ][index % 3];
+      shape(d, SPARK_EDGE, glyph);
+      var mid = shape(d, SPARK_MID, glyph);
+      mid.setAttribute('transform', 'translate(6 6) scale(.75) translate(-6 -6)');
+      var coreShape = shape(d, SPARK_CORE, glyph);
+      coreShape.setAttribute('transform', 'translate(6 6) scale(.55) translate(-6 -6)');
+      return glyph;
+    }
+
+    // ── Back-arc clipping wrapper. One absolute, full-viewport-sized element anchored at the
+    // current viewport's own document-space origin (rule 2 -- animateReanimate's own
+    // reanimateWrap idiom), with a STATIC evenodd clip-path: an outer loop tracing the viewport
+    // and an inner loop tracing #match's own rect (viewport-relative, i.e. relative to this div's
+    // own local box, which starts at the viewport's top-left), bridged into a single continuous
+    // point list -- the standard "keyhole" technique for punching a hole with one polygon. Every
+    // back-arc ghost below is a plain DOM child of this wrapper, not its own top-level mounted
+    // element -- so its animations are tracked onto backWrap.__waapiAnims (rule 4: "animations on
+    // child nodes hang on the parent"), and removing backWrap removes them.
+    //
+    // oculist-3dd8 DOES apply here (corrected after review). This wrapper's clip-path hole is a
+    // STATIC snapshot of the fire-time #match rect. A real user SCROLL is fine -- handleScroll()
+    // calls fadeActiveBeacons() synchronously, tearing every transient beacon down immediately,
+    // so there is no window where the stale hole could paint through. A RESIZE is not: content.js
+    // only reaches cancelBeacons() via handleResize() -> repositionActiveOverlays(), gated behind
+    // a 100ms debounce (overlayResizeTimer) that a continuous resize drag keeps resetting on every
+    // event, so #match can reflow to a new position (or size) while this hole stays punched at the
+    // old one for the whole drag -- the back-arc ghosts then paint straight over the glyphs (or
+    // leave a gap over the vacated old position). See hardCutBackWrap() below, the ported
+    // equivalent of the prototype's dissolveHardCut: it tears backWrap down on the very first
+    // resize event, ahead of the debounced cancelBeacons().
+    var CLIP_MARGIN = 2;
+    var backWrap = document.createElement('div');
+    backWrap.className = 'oc-beacon oc-beacon-transient';
+    backWrap.setAttribute('data-wandcast', 'back-clip');
+    var clipPts = [
+      '0px 0px', vw + 'px 0px', vw + 'px ' + vh + 'px', '0px ' + vh + 'px', '0px 0px',
+      (rect.left - CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px', (rect.left - CLIP_MARGIN) + 'px ' + (rect.bottom + CLIP_MARGIN) + 'px',
+      (rect.right + CLIP_MARGIN) + 'px ' + (rect.bottom + CLIP_MARGIN) + 'px', (rect.right + CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px', (rect.left - CLIP_MARGIN) + 'px ' + (rect.top - CLIP_MARGIN) + 'px'
+    ].join(', ');
+    backWrap.style.cssText = [
+      'position:absolute',
+      'left:' + SCROLL_X + 'px', 'top:' + SCROLL_Y + 'px',
+      'width:' + vw + 'px', 'height:' + vh + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'clip-path:polygon(evenodd, ' + clipPts + ')'
+    ].join(';');
+    document.documentElement.appendChild(backWrap);
+    var backWrapAnims = [];
+
+    for (var i = 0; i < THETA0.length; i++) {
+      var theta0 = THETA0[i];
+      var castStart = CAST_START + CAST_STAGGER[i];
+      var orbitDur = ORBIT_STOP_T - (castStart + TRAVEL_DUR);
+      // FADE_DUR is reserved OUT of the orbit motion (not appended after it) -- the orbit's own
+      // angle sweep only covers orbitMotionDur, and the fade-out keyframes below start exactly
+      // where that motion ends.
+      var orbitMotionDur = Math.max(0, orbitDur - FADE_DUR);
+      var sweep = ANGULAR_SPEED * orbitMotionDur;
+      var duration = TRAVEL_DUR + orbitDur;
+      var travelFrac = TRAVEL_DUR / duration;
+      var fadeFrac = (TRAVEL_DUR + orbitMotionDur) / duration;
+
+      // Travel: a quadratic bezier from the wand tip, biased to drop below the match before
+      // sweeping inward -- the control point shares the wand tip's own x (not the midpoint's),
+      // so early in the curve the sparkle is still outside the match's horizontal rect while it
+      // loses height, and only turns inward once it has already cleared rect.bottom. 1.3*height
+      // keeps every landing angle in THETA0 clear of #match by sampling the actual bezier curve,
+      // not just its three control points (a quadratic bezier is bounded by their convex hull).
+      var land = ellipsePoint(theta0);
+      var ctrl = [wandTipScreen[0], rect.bottom + 1.3 * rect.height];
+      var TRAVEL_SAMPLES = 8;
+      // Two parallel position-keyframe arrays, same offsets, same underlying px/py samples --
+      // only the translate space differs (see centerTranslateDoc/centerTranslateLocal's own
+      // comments above). posKFFront drives frontEl (document space); posKFBack drives backEl
+      // (viewport space, relative to backWrap's already-scrolled box).
+      var posKFFront = [];
+      var posKFBack = [];
+      // oculist-wkfc: a viewport clamp can leave the wand tip itself clear while a sparkle's
+      // larger box+glow still overlaps #match. Keep that launch invisible until the sampled
+      // travel path first clears.
+      var revealTravelT = visualClearsMatch(wandTipScreen[0], wandTipScreen[1], SPARK_VISUAL_REACH) ? 0 : 1;
+      var lastPx = wandTipScreen[0], lastPy = wandTipScreen[1];
+      for (var s = 0; s <= TRAVEL_SAMPLES; s++) {
+        var t = s / TRAVEL_SAMPLES;
+        var it = 1 - t;
+        var px = it * it * wandTipScreen[0] + 2 * it * t * ctrl[0] + t * t * land[0];
+        var py = it * it * wandTipScreen[1] + 2 * it * t * ctrl[1] + t * t * land[1];
+        var travelOffset = t * travelFrac;
+        posKFFront.push({ transform: centerTranslateDoc(px, py), offset: travelOffset });
+        posKFBack.push({ transform: centerTranslateLocal(px, py), offset: travelOffset });
+        if (revealTravelT === 1 && visualClearsMatch(px, py, SPARK_VISUAL_REACH)) revealTravelT = t;
+        lastPx = px; lastPy = py;
+      }
+
+      var angles = buildAngleCheckpoints(theta0, sweep, 20);
+      var revealOffset = revealTravelT * travelFrac;
+      var frontKF = [{ opacity: 0, offset: 0 }];
+      if (revealOffset > 0) frontKF.push({ opacity: 0, offset: revealOffset });
+      frontKF.push(
+        { opacity: 1, offset: Math.min(travelFrac, revealOffset + Math.min(0.04, travelFrac * 0.3)) },
+        { opacity: 1, offset: travelFrac }
+      );
+      var backKF = [{ opacity: 0, offset: 0 }, { opacity: 0, offset: travelFrac }];
+      var lastFront = 1, lastBack = 0, lastOffset = travelFrac;
+      function fracAt(deg) {
+        return sweep > 0 ? travelFrac + (deg - theta0) / ANGULAR_SPEED / duration : travelFrac;
+      }
+      for (var a = 1; a < angles.length; a++) {
+        var deg = angles[a];
+        var frac = fracAt(deg);
+        var pt = ellipsePoint(deg);
+        posKFFront.push({ transform: centerTranslateDoc(pt[0], pt[1]), offset: frac });
+        posKFBack.push({ transform: centerTranslateLocal(pt[0], pt[1]), offset: frac });
+        lastPx = pt[0]; lastPy = pt[1];
+
+        var isBoundary = Math.abs(deg % 180) < 1e-6;
+        if (isBoundary) {
+          var justBefore = isFrontDeg(deg - 0.01);
+          var justAfter = isFrontDeg(deg + 0.01);
+          var eps = Math.min(0.002, (frac - fracAt(angles[a - 1])) / 2);
+          frontKF.push({ opacity: justBefore ? 1 : 0, offset: frac - eps });
+          frontKF.push({ opacity: justAfter ? 1 : 0, offset: frac });
+          backKF.push({ opacity: justBefore ? 0 : 1, offset: frac - eps });
+          backKF.push({ opacity: justAfter ? 0 : 1, offset: frac });
+          lastFront = justAfter ? 1 : 0; lastBack = justAfter ? 0 : 1;
+        } else {
+          var front = isFrontDeg(deg) ? 1 : 0;
+          frontKF.push({ opacity: front, offset: frac });
+          backKF.push({ opacity: front ? 0 : 1, offset: frac });
+          lastFront = front; lastBack = front ? 0 : 1;
+        }
+        lastOffset = frac;
+      }
+      // Math.max guards against float rounding: fadeFrac and the loop's own last `frac` are
+      // mathematically the same instant but can differ by a ULP, enough for WAAPI's strict
+      // monotonic-offset check to reject a fractional decrease.
+      var fadeStart = Math.max(fadeFrac, lastOffset);
+      frontKF.push({ opacity: lastFront, offset: fadeStart });
+      frontKF.push({ opacity: 0, offset: 1 });
+      backKF.push({ opacity: lastBack, offset: fadeStart });
+      backKF.push({ opacity: 0, offset: 1 });
+      // Explicit hold at offset 1: WAAPI treats offset 1 as an IMPLICIT keyframe equal to the
+      // element's underlying (un-animated) value when the last explicit keyframe sits below
+      // offset 1, which would drag the sparkle back toward translate(0,0) for the final stretch
+      // of the timeline. This one keyframe, repeating the last real position, holds it there.
+      posKFFront.push({ transform: centerTranslateDoc(lastPx, lastPy), offset: 1 });
+      posKFBack.push({ transform: centerTranslateLocal(lastPx, lastPy), offset: 1 });
+
+      var frontEl = document.createElement('div');
+      frontEl.className = 'oc-beacon oc-beacon-transient';
+      frontEl.setAttribute('data-wandcast', 'spark-front');
+      frontEl.style.cssText = [
+        'position:absolute',
+        'left:0', 'top:0',
+        'width:' + SPARK_SIZE + 'px', 'height:' + SPARK_SIZE + 'px',
+        'pointer-events:none',
+        'z-index:2147483642',
+        'opacity:0'
+      ].join(';');
+      frontEl.appendChild(sparkVisual(i));
+      document.documentElement.appendChild(frontEl);
+
+      // Back-arc ghost: a plain child of backWrap (see its own comment above), not its own
+      // mounted top-level element -- no 'oc-beacon' class, no z-index override.
+      var backEl = document.createElement('div');
+      backEl.style.cssText = [
+        'position:absolute',
+        'left:0', 'top:0',
+        'width:' + SPARK_SIZE + 'px', 'height:' + SPARK_SIZE + 'px',
+        'opacity:0'
+      ].join(';');
+      backEl.appendChild(sparkVisual(i));
+      backWrap.appendChild(backEl);
+
+      var frontAnims = [];
+      frontAnims.push(frontEl.animate(posKFFront, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      frontAnims.push(frontEl.animate(frontKF, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      frontEl.__waapiAnims = frontAnims;
+      (function (el, anims) {
+        Promise.allSettled(anims.map(function (a) { return a.finished; })).then(function () { el.remove(); });
+      })(frontEl, frontAnims);
+
+      backWrapAnims.push(backEl.animate(posKFBack, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+      backWrapAnims.push(backEl.animate(backKF, { duration: duration * durFactor, delay: castStart * durFactor, fill: 'forwards', easing: 'linear' }));
+    }
+
+    backWrap.__waapiAnims = backWrapAnims;
+    Promise.allSettled(backWrapAnims.map(function (a) { return a.finished; })).then(function () { backWrap.remove(); });
+
+    // oculist-3dd8 (ported): a resize can reflow #match while backWrap's clip-path hole stays
+    // punched at the stale fire-time rect for up to the FULL length of a continuous resize drag
+    // -- content.js's own cancelBeacons() only reaches backWrap through handleResize()'s 100ms
+    // debounce (overlayResizeTimer), which a dragged edge keeps re-arming on every event. Cancel
+    // backWrap's own animations and remove it immediately on the first resize, ahead of that
+    // debounce, so the ghosts can never paint through a hole that no longer matches #match.
+    // { once: true }: after firing (or after a later resize finds backWrap already detached by
+    // the normal cancel/complete path below -- a harmless no-op), the listener self-removes; it
+    // never outlives this one beacon run.
+    function hardCutBackWrap() {
+      if (!backWrap.isConnected) return;
+      backWrap.__waapiAnims.forEach(function (a) { try { a.cancel(); } catch (e) {} });
+      backWrap.remove();
+    }
+    window.addEventListener('resize', hardCutBackWrap, { passive: true, once: true });
+
+    wrap.__waapiAnims = wrapAnims;
+    Promise.allSettled(wrapAnims.map(function (a) { return a.finished; })).then(function () { wrap.remove(); });
+  }
+
 
   function animateLightning(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
