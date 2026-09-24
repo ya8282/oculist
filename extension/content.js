@@ -11423,7 +11423,27 @@
     return group;
   }
 
-  function makeRadioList(items, currentVal, onChange, disabled, groupKey) {
+  // oculist-gw7b: optional `groups` param — an ordered array of
+  // { id, label, values: [item.value, ...] } — lets a caller (the Highlight Effect field)
+  // render its items under per-pack subheadings while staying ONE radio group: every row,
+  // grouped or not, still gets the same `groupKey + ':' + value` data-oc-key, the same
+  // click handler that clears every `.oc-radio-item` list-wide via list.querySelectorAll
+  // (a descendant query, unaffected by the extra nesting), and the same disabled/opacity
+  // handling on the outer list. Callers decide sort order (both which items land in which
+  // group, and the order within each) — this function only decides where to draw the
+  // group boundaries and whether a boundary gets a subheading at all.
+  //
+  // Any item not named in `groups[].values` renders first, in the order given, with no
+  // wrapper — built-ins get no subheading (orchestrator decision, oculist-gw7b). A group
+  // whose `values` list is empty (its pack is disabled, or has nothing available right
+  // now) is skipped entirely: no heading, no empty role="group" wrapper. The heading is a
+  // plain, non-focusable <div> (not a <button>, no tabindex) so it is never a Tab stop —
+  // native Tab order still walks the flat sequence of `.oc-radio-item` buttons exactly as
+  // it did before grouping existed. Deliberately aria-labelledby (not aria-label): unlike
+  // #oc-settings-panel's own label (see its comment above, `role="dialog"` block), this
+  // heading carries no CSS text-transform, so Blink's aria-labelledby name computation
+  // reads plain sentence-case text — the transform pitfall documented there doesn't apply.
+  function makeRadioList(items, currentVal, onChange, disabled, groupKey, groups) {
     var list = document.createElement('div');
     list.className = 'oc-radio-list';
     if (disabled) {
@@ -11431,7 +11451,7 @@
       list.style.pointerEvents = 'none';
     }
 
-    items.forEach(function (item) {
+    function makeRow(item) {
       var row = document.createElement('button');
       row.className = 'oc-radio-item' + (item.value === currentVal ? ' active' : '');
       if (groupKey) row.setAttribute('data-oc-key', groupKey + ':' + item.value);
@@ -11461,11 +11481,53 @@
           onChange(item.value);
         });
       }
-      list.appendChild(row);
+      return row;
+    }
+
+    if (!groups || !groups.length) {
+      items.forEach(function (item) { list.appendChild(makeRow(item)); });
+      return list;
+    }
+
+    var grouped = {};
+    groups.forEach(function (g) {
+      g.values.forEach(function (v) { grouped[v] = g.id; });
+    });
+
+    items.forEach(function (item) {
+      if (!grouped.hasOwnProperty(item.value)) list.appendChild(makeRow(item));
+    });
+
+    groups.forEach(function (g) {
+      var groupItems = g.values
+        .map(function (v) {
+          return items.filter(function (item) { return item.value === v; })[0];
+        })
+        .filter(Boolean);
+      if (!groupItems.length) return; // disabled/empty pack: no heading, no empty group
+
+      var headingId = 'oc-radio-group-' + groupKey + '-' + g.id;
+      var heading = document.createElement('div');
+      heading.className = 'oc-radio-group-heading';
+      heading.id = headingId;
+      heading.textContent = g.label;
+      list.appendChild(heading);
+
+      var wrapper = document.createElement('div');
+      wrapper.className = 'oc-radio-group';
+      wrapper.setAttribute('role', 'group');
+      wrapper.setAttribute('aria-labelledby', headingId);
+      groupItems.forEach(function (item) { wrapper.appendChild(makeRow(item)); });
+      list.appendChild(wrapper);
     });
 
     return list;
   }
+
+  // oculist-gw7b: makeRadioList's `groups` param is exercised directly (synthetic items,
+  // including a deliberately-empty group) by the jsdom unit test — no real registry/pack
+  // fixture needed just to prove the grouping/empty-group-skip mechanics.
+  window.__ocTest.makeRadioList = makeRadioList;
 
   // oculist-tdj.2: multi-select sibling of makeRadioList above — same native-<button>-
   // per-row shape (so Enter/Space/Tab all work for free, per settings_panel_enter_
@@ -11673,22 +11735,43 @@
     var pickerEffects = availableEffects();
     for (var key in pickerEffects) {
       if (pickerEffects.hasOwnProperty(key)) {
-        effectOptions.push({ value: key, label: pickerEffects[key].label });
+        effectOptions.push({ value: key, label: pickerEffects[key].label, pack: pickerEffects[key].pack || null });
       }
     }
-    effectOptions.sort(function (a, b) {
-      return a.label.localeCompare(b.label);
+    function byEffectLabel(a, b) { return a.label.localeCompare(b.label); }
+
+    // oculist-gw7b: split into built-ins (no pack, rendered first, no subheading — see
+    // makeRadioList's banner) and one group per pack, groups ordered like knownPacks()
+    // (registry insertion order) rather than alphabetically by pack label, so a pack's
+    // position here matches its position in the pack-toggle list below. Each list is
+    // alphabetical by label within itself. availableEffects() already excludes a
+    // disabled pack's entries, so effectOptions simply has nothing left for that pack's
+    // id here — makeRadioList's own empty-group guard is what turns that into "no
+    // subheading" rather than a check made twice.
+    var effectOptionsSorted = effectOptions.filter(function (o) { return !o.pack; }).sort(byEffectLabel);
+    var effectPackGroups = knownPacks().map(function (packId) {
+      var values = effectOptions
+        .filter(function (o) { return o.pack === packId; })
+        .sort(byEffectLabel)
+        .map(function (o) { return o.value; });
+      return { id: packId, label: packLabel(packId), values: values };
+    });
+    effectPackGroups.forEach(function (g) {
+      g.values.forEach(function (v) {
+        effectOptionsSorted.push(effectOptions.filter(function (o) { return o.value === v; })[0]);
+      });
     });
 
     var constraints = getProfileConstraints();
     var effColors = getEffectiveColors();
 
     var effectField = makeSettingsField(i18n.highlightEffect, i18n.effectDesc, makeRadioList(
-      effectOptions,
+      effectOptionsSorted,
       settings.effect,
       function (v) { settings.effect = v; saveSettings(); },
       constraints.effectDisabled,
-      'effect'
+      'effect',
+      effectPackGroups
     ));
     effectField.style.marginTop = '8px';
     col1.appendChild(effectField);
@@ -13339,6 +13422,29 @@
         '  flex-shrink: 0;',
         '  width: 1em;',
         '  text-align: center;',
+        '}',
+        // oculist-gw7b: pack subheading inside .oc-radio-list (makeRadioList). No
+        // text-transform here — the aria-labelledby wiring on .oc-radio-group below reads
+        // this element's text directly for its computed accessible name, and Blink applies
+        // CSS text-transform when computing a name from a *referenced* element (see
+        // #oc-settings-panel's own aria-label comment above for the same pitfall). Do not
+        // add text-transform: uppercase (or similar) to this rule.
+        '.oc-radio-group-heading {',
+        '  font-size: .7rem;',
+        '  font-weight: 600;',
+        '  letter-spacing: 0.04em;',
+        '  color: var(--oc-subtle);',
+        '  padding: 6px 8px 2px;',
+        '  flex-shrink: 0;',
+        '}',
+        // Same flex-shrink: 0 rationale as .oc-radio-item above (oculist-dvt.5) — this
+        // wrapper is itself a flex item of the scrolling .oc-radio-list column and must not
+        // get squashed to fit.
+        '.oc-radio-group {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  gap: 2px;',
+        '  flex-shrink: 0;',
         '}',
         // oculist-tdj.2: same capped-scroll idiom as .oc-radio-list (oculist-dvt.5) —
         // this list is empty today (see knownPacks()) so it renders zero rows, but a
