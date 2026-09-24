@@ -24,7 +24,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForPopupReady, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { enableAccessibilityDomain, computedAccessibleName, waitForComputedAccessibleName } = require('./helpers/accessible_name');
 const { waitForSessionAccess } = require('./helpers/session_access');
@@ -351,6 +351,11 @@ describe('A Lite Mode chip announces the real countMatchesOnly() count, not a bl
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    // oculist-6fhj: popup.js populates #toggle-lite-mode's checked state and attaches its
+    // 'change' listener only after an internal chrome.storage.sync.get() round trip
+    // resolves — reading isChecked or clicking before that wiring lands races it (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
     const checked = await popup.isChecked('#toggle-lite-mode');
     if (checked === enabled) {
       await popup.close();

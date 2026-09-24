@@ -626,6 +626,11 @@ describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the
 
   test('viewport edges: at a small 380x220 viewport, the actual render matches the same fit computation the effect itself uses', async () => {
     await page.setViewportSize({ width: 380, height: 220 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- the scroll below is just page.evaluate() reads, fast enough that without
+    // this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire
+    // AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       const targetDocY = await page.evaluate(() => {
         const r = document.getElementById('target').getBoundingClientRect();

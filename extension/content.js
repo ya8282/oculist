@@ -1369,8 +1369,15 @@
     b.remove();
   }
 
-  function cancelBeacons() {
-    var beacons = document.querySelectorAll('.oc-beacon');
+  // sel defaults to '.oc-beacon' (every transient effect beacon AND the persistent Low Vision
+  // overlays drawActiveOverlays() also tags .oc-beacon). oculist-01sj: handleResize()'s own
+  // leading-edge cancel passes '.oc-beacon-transient' instead — the same selector
+  // fadeActiveBeacons() uses, for the same reason: that cancel has no redraw following it
+  // (that's the debounced repositionActiveOverlays(), later) to immediately replace the
+  // persistent overlays, which otherwise track scroll AND resize correctly in document
+  // coordinates on their own and must survive both.
+  function cancelBeacons(sel) {
+    var beacons = document.querySelectorAll(sel || '.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
       destroyBeacon(beacons[i]);
     }
@@ -4780,11 +4787,13 @@
   // G4 FLICKER GATE (WCAG 2.3.1, the photosensitive general flash threshold): the jolt is a
   // luminance change, so this is the one gate this effect can fail. There are exactly TWO
   // opacity pulses in the ENTIRE clip (ARC1 and ARC2 below), never more, and durFactor (rule
-  // 6) multiplies every one of ARC1_DELAY/ARC1_DUR/ARC2_DELAY/ARC2_DUR by the SAME factor,
-  // so the pulse COUNT never changes at any Animation Speed the user can pick -- only the
-  // wall-clock window they fall inside shrinks or grows. Two flashes total, anywhere in that
-  // window, is under the "no more than three flashes in any one-second period" threshold by
-  // construction, at every speed setting, without needing a per-window sampling proof.
+  // 6) scales ARC1_DELAY/ARC1_DUR/ARC2_DUR directly and ARC2_DELAY by the same factor floored
+  // against a fixed 350ms onset-to-onset minimum (oculist-kkwz), so the pulse COUNT never
+  // changes at any Animation Speed the user can pick -- only the wall-clock window they fall
+  // inside shrinks or grows (never below the 350ms floor). Two flashes total, anywhere in
+  // that window, is under the "no more than three flashes in any one-second period"
+  // threshold by construction, at every speed setting, without needing a per-window sampling
+  // proof.
   //
   // Fixed identity palette (the promotion contract's own license, "the pumpkin's orange"):
   // no neighbouring shipped character effect has set an accessibility-accent precedent that
@@ -4927,7 +4936,16 @@
       'left:' + window.scrollX + 'px', 'top:' + window.scrollY + 'px',
       'width:' + vw + 'px', 'height:' + vh + 'px',
       'pointer-events:none',
-      'z-index:2147483642'
+      'z-index:2147483642',
+      // oculist-mjv1: the degenerate placement fallback can land figLeft/elecLeft past
+      // vw (REACH_OUTWARD only guarantees the near/inward edge stays clear of #match, never
+      // that the far/outward edge fits inside the viewport). Without this, that overflow
+      // grows document.scrollWidth for the effect's whole lifetime and briefly gives the
+      // page a horizontal scrollbar. reanimateWrap already has an explicit vw x vh box (not
+      // 100%), so overflow:hidden clips the excess without the wrapper itself growing --
+      // same idiom animateLightning's/animateElectronCloud's own full-viewport container
+      // uses.
+      'overflow:hidden'
     ].join(';');
     document.documentElement.appendChild(reanimateWrap);
 
@@ -5062,14 +5080,22 @@
 
     // ── Timeline (ms) -- durFactor (rule 6) multiplies every duration/delay directly, so
     // relative timing (and the total flash count, see this function's own header comment)
-    // is preserved exactly, matching animateTentacleRise's own `raw * durFactor` idiom. ──
+    // is preserved exactly, matching animateTentacleRise's own `raw * durFactor` idiom, with
+    // one exception: ARC2_DELAY is also floored against a fixed 350ms onset spacing (see the
+    // comment just above it, oculist-kkwz). ──
     var APPEAR_DUR = 180 * durFactor;
     var DIM = 0.55;
-    // Two pulses only, spaced >=350ms apart (measured end-of-first to start-of-second) --
-    // the photosensitive-flicker gate (WCAG 2.3.1) this function's own header comment calls
-    // out by number.
+    // Two pulses only, spaced >=350ms apart onset-to-onset -- the photosensitive-flicker
+    // gate (WCAG 2.3.1) this function's own header comment calls out by number, and the
+    // >=350ms floor oculist-4v2u measured at normal speed. durFactor scales the raw 500ms
+    // onset spacing directly (rule 6), which is fine at normal (500ms) and slow (875ms) but
+    // undercuts the floor at fast (250ms) -- oculist-kkwz. Math.max floors ONLY the spacing
+    // that sets ARC2_DELAY; it is a no-op at durFactor >= 0.7 (500 * durFactor >= 350), so
+    // normal/slow are byte-for-byte unchanged, and at fast it pushes ARC2_DELAY (and every
+    // delay downstream of it: JERK_DELAY/EYES_DELAY/FADE_DELAY/DUR) later by exactly the
+    // 100ms the floor requires, rather than rescaling the whole clip.
     var ARC1_DELAY = 400 * durFactor, ARC1_DUR = 140 * durFactor;
-    var ARC2_DELAY = 900 * durFactor, ARC2_DUR = 140 * durFactor;
+    var ARC2_DELAY = ARC1_DELAY + Math.max(500 * durFactor, 350), ARC2_DUR = 140 * durFactor;
     var JERK_DELAY = ARC2_DELAY + ARC2_DUR + 150 * durFactor;
     var JERK_DUR = 320 * durFactor;
     var EYES_DELAY = JERK_DELAY + JERK_DUR - 60 * durFactor;
@@ -6179,15 +6205,25 @@
     // debounce (overlayResizeTimer), which a dragged edge keeps re-arming on every event. Cancel
     // backWrap's own animations and remove it immediately on the first resize, ahead of that
     // debounce, so the ghosts can never paint through a hole that no longer matches #match.
-    // { once: true }: after firing (or after a later resize finds backWrap already detached by
-    // the normal cancel/complete path below -- a harmless no-op), the listener self-removes; it
-    // never outlives this one beacon run.
     function hardCutBackWrap() {
+      window.removeEventListener('resize', hardCutBackWrap);
       if (!backWrap.isConnected) return;
       backWrap.__waapiAnims.forEach(function (a) { try { a.cancel(); } catch (e) {} });
       backWrap.remove();
     }
     window.addEventListener('resize', hardCutBackWrap, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case, oculist-il11), the listener
+    // would otherwise outlive it, leaked on window forever and keeping backWrap reachable after
+    // it's already been removed. Explicitly remove it once backWrap has finished on its own
+    // (natural completion) or been cancelled (destroyBeacon() calls .cancel() on every
+    // __waapiAnims entry, which settles this promise immediately) -- this covers both paths
+    // hardCutBackWrap()'s own early removeEventListener does not reach, same technique
+    // hardCutArrowShot()/hardCutVineSwing() already use.
+    Promise.allSettled(backWrapAnims.map(function (a) { return a.finished; })).then(function () {
+      window.removeEventListener('resize', hardCutBackWrap);
+    });
 
     wrap.__waapiAnims = wrapAnims;
     Promise.allSettled(wrapAnims.map(function (a) { return a.finished; })).then(function () { wrap.remove(); });
@@ -11118,10 +11154,36 @@
   // Bound to resize only, not folded into scheduleViewportMarkersUpdate — that one is
   // shared with handleScroll, which fades the overlays out on purpose, and redrawing
   // them 100ms later would resurrect what the scroll just dismissed.
+  //
+  // oculist-01sj: this used to reach cancelBeacons() only through the 100ms debounce below
+  // (overlayResizeTimer), which a continuous resize drag keeps resetting on every event — so
+  // an effect's own transient beacons could paint against a reflowed #match for the whole
+  // drag. Front sparkles are the case that exposed it: unlike backWrap/arrowShot/vineSwing,
+  // they carry no per-effect hard-cut resize listener of their own (see hardCutBackWrap's own
+  // comment), so cancelBeacons() was their only teardown path, and it never ran until the
+  // debounce settled. Cancel on the LEADING edge instead: overlayResizeTimer is null only at
+  // the start of a new burst (its own setTimeout callback nulls it back out once it fires, see
+  // below), never mid-burst, so this fires once per burst, not once per event.
+  //
+  // '.oc-beacon-transient' ONLY on that leading-edge call (review fix, same bead): the default
+  // '.oc-beacon' selector also matches the persistent Low Vision overlays (border/shape/label/
+  // magnifier) that drawActiveOverlays() tags .oc-beacon — those track resize correctly on
+  // their own and have no redraw scheduled to replace them until the debounce settles, so the
+  // full selector here would blank them for the whole drag, or for good if
+  // repositionActiveOverlays() returns early (no active match). The trailing, debounced
+  // repositionActiveOverlays() below still does the redraw once the drag settles — the final
+  // rect isn't known until then — and its own cancelBeacons() call (the default '.oc-beacon'
+  // selector) is NOT a no-op by that point: the transients are already gone, so it is what
+  // removes the persistent overlays themselves, immediately before drawActiveOverlays()
+  // redraws them in place.
   function handleResize() {
+    if (!overlayResizeTimer) cancelBeacons('.oc-beacon-transient');
     scheduleViewportMarkersUpdate();
     if (overlayResizeTimer) clearTimeout(overlayResizeTimer);
-    overlayResizeTimer = setTimeout(repositionActiveOverlays, 100);
+    overlayResizeTimer = setTimeout(function () {
+      overlayResizeTimer = null;
+      repositionActiveOverlays();
+    }, 100);
   }
 
   function handleScroll() {

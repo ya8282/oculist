@@ -23,7 +23,13 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const {
+  waitForCondition,
+  waitForContentScriptValue,
+  waitForPopupReady,
+  POLL_TIMEOUT,
+  LONG_TIMEOUT,
+} = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 const { waitForSessionAccess } = require('./helpers/session_access');
 const { waitForWorkListLoad } = require('./helpers/worklist');
@@ -274,6 +280,11 @@ describe('Lite Mode: remove-then-restore keeps count and highlights in agreement
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#toggle-lite-mode', { state: 'attached' });
+    // oculist-6fhj: popup.js populates #toggle-lite-mode's checked state and attaches its
+    // 'change' listener only after an internal chrome.storage.sync.get() round trip
+    // resolves — reading isChecked or clicking before that wiring lands races it (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
     const checked = await popup.isChecked('#toggle-lite-mode');
     if (checked === enabled) {
       await popup.close();

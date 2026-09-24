@@ -406,6 +406,11 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
 
   test('viewport edges: at a small 500x300 viewport, the rider\'s rendered box stays on screen and the match glyphs stay untouched', async () => {
     await page.setViewportSize({ width: 500, height: 300 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- the scroll below is just page.evaluate() reads, fast enough that without
+    // this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire
+    // AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       const targetDocY = await page.evaluate(() => {
         const r = document.getElementById('target').getBoundingClientRect();
