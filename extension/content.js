@@ -824,6 +824,7 @@
     effectReanimate: 'Reanimation Jolt',
     effectBatFlight: 'Bat Flight',
     effectWandCast: 'Wand Cast',
+    effectArrowShot: 'Arrow Shot',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -944,7 +945,8 @@
     tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
     reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
     batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
-    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' }
+    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' },
+    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -6189,6 +6191,965 @@
     Promise.allSettled(wrapAnims.map(function (a) { return a.finished; })).then(function () { wrap.remove(); });
   }
 
+
+  // oculist-nq1x.11: promotes fxArrowShot (artifacts/prototypes/effects-playground.html) into
+  // the shipped beacon contract, the tenth entry in the Halloween pack. An archer -- a leather
+  // bycocket hat with a red feather, Robin Hood's own signature (clean folklore, not one of the
+  // epic's three trademarked figures; Chris has explicitly overruled the generic-figure default
+  // for this one, label stays 'Arrow Shot') -- dissolves in at a viewport edge, draws and looses
+  // an arrow that arcs to the match, and concentric target rings bloom around the impact point
+  // as the arrow lands and quivers.
+  //
+  // RULE 9 EXCEPTION, DECIDED 2026-09-23 (oculist-i8zu, oculist-nq1x.11's own RULE 9 DECIDED
+  // note): the shipped lastMouseX/find-bar/viewport start-point cascade animateTrail uses is
+  // deliberately NOT used here. The arrow launches from the archer's fixed grip
+  // (launchX/launchYTop/launchYBottom below, effects-playground.html:4590-4592) -- the archer's
+  // own placement and the impact-plan chooser (oculist-aouc, oculist-q4nl) are what keep the
+  // flight and strike clear of the match (rule 10); a cursor or find-bar origin would bypass
+  // them entirely. Rule 9's other half -- the mirrored branch (top-left vs bottom-left corner)
+  // must work for real, not just compile -- still applies and is tested below.
+  //
+  // THE IMPACT-PLAN CHOOSER is the most load-bearing, least obvious part of this effect's
+  // geometry, and is ported near byte-for-byte rather than re-derived -- every prototype bead
+  // that hardened it is closed and its beats must not come back:
+  //   - oculist-1ta.11: STRIKE_GAP's rest-point inset caught the quiver rotating the arrowhead's
+  //     back corners into the match at some font sizes even under a nominally horizontal plan.
+  //   - oculist-1ta.15 / oculist-uxa0: STRIKE_GAP is exactly 8, "one pixel above a cliff" --
+  //     7 fails by 1px at font sizes 25-26 at a wide 1280x900 viewport. Never round this.
+  //   - oculist-1ta.9: the archer's corner (top-left vs bottom-left) is proven stable across
+  //     repeated fires on the same match by a closed-form margin (3.1-6.7px across all 46
+  //     left-plan scenarios), not by a runtime guard -- tested below by firing twice.
+  //   - oculist-aouc: the FORCED-LANDING fallback (when no plan clears MARGIN on any axis) is
+  //     guarded by a real painted-shape overlap oracle (paintShapeClear/paintedArcherClear/
+  //     paintedFlightClear below), not a bounding-box guess, with a capped push loop so the
+  //     flight can never reverse.
+  //   - oculist-q4nl: the fallback additionally computes a BASELINE (main's own fallback) and a
+  //     CANDIDATE (a whole-body archer clamp) and only takes the candidate when it is STRICTLY
+  //     better for the archer and NO WORSE for the flight, and never turns a forward flight
+  //     backward -- see the SELECT block's own comment below for why that guarantees zero
+  //     regressions rather than merely measuring zero.
+  //   - oculist-1ta.16: the occlusion-sweep harness itself needed the 1280x900 viewport and font
+  //     sizes 22-26 added to its own coverage before it could see the oculist-1ta.11/uxa0 defects
+  //     at all -- recorded here as a reminder that a narrow re-sweep after any future change can
+  //     silently miss this effect's own worst cases.
+  // A "cleanup" of any formula, constant or branch in this block is a regression, not an
+  // improvement -- re-run the occlusion sweep in artifacts/prototypes/occlusion-sweep.js
+  // (arrowshot) after touching any of it, the same instruction fxArrowShot's own STRIKE_GAP
+  // comment gives.
+  //
+  // MEASURED (test/arrowshot_effect.test.js's own 'forced fallback' mutation-proof note):
+  // oculist-q4nl's own candidate is independently load-bearing (proven red by mutation) on every
+  // forced-fallback fixture this suite could construct; oculist-aouc's own push loop still runs
+  // and its result still feeds the BASELINE-vs-CANDIDATE comparison, but no fixture within reach
+  // isolated it as the SOLE guard -- moving the archer (the candidate's own fix) also moves the
+  // flight's own launch point, which incidentally satisfies the push loop's own gate before it
+  // ever needs to run. Recorded here so a future change doesn't read aouc's push as provably dead
+  // code and remove it: it is exercised, just redundant with q4nl's later fix in every case
+  // measured so far.
+  //
+  // THE BYCOCKET/FEATHER GEOMETRY (oculist-1ta.17 through .20) is ported exactly as it reads at
+  // the 78px floor after four rounds of on-page measurement -- do not redraw it from the
+  // reference art or "simplify" the hat/feather path data.
+  //
+  // FORCED-FALLBACK COVERAGE: test/arrowshot-forced-below.check.js (oculist-c6pk) already proves
+  // the PROTOTYPE's own painted silhouette clears the forced-below-1 scenario via the canonical
+  // occlusion-sweep sampler; it is not duplicated here. This suite instead proves the SHIPPED
+  // port's own fallback geometry directly against the live DOM (see 'forced fallback' below).
+  //
+  // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): every archer/arrow/
+  // target-ring tone below is a fixed literal, like Bat Flight's BAT_* or Wand Cast's AMBER --
+  // there is no separate flash/UI-accent element here for getEffectiveColors().beacon to drive.
+  // getEffectiveColors().beacon is deliberately never read below.
+  //
+  // Lite Mode (rule 7): a no-op. There is no filter, no box-shadow and no decorative glow layer
+  // anywhere in this effect's shipped art -- the cel-shaded tones ARE the character art, the
+  // draw-hold-release-flight-strike sequence is the one continuous beat this effect has (nothing
+  // to thin out without cutting the effect itself), and the target rings are a single scale/
+  // opacity entrance with no per-ring flicker. Same reasoning Bat Flight's/Wand Cast's own header
+  // comments give for themselves. settings.performanceMode is deliberately never read below.
+  //
+  // RESIZE (measured, not assumed): fxArrowShot's own prototype has no resize listener and no
+  // clip-path keyhole to port (unlike Wand Cast's oculist-3dd8) -- but every element here is
+  // positioned once, at fire time, from the pre-resize rect, and the target rings in particular
+  // stand only STRIKE_GAP/padIn clear of #match's own fire-time edges. Measured directly, not
+  // assumed clean by analogy to Bat Flight's own looser-clearance figure: test/arrowshot_
+  // effect.test.js's own 'resize mid-flight' test (a #resizeTarget fixture that reflows #match
+  // ~8px horizontally on a 16px viewport-width change, frozen mid-quiver) showed a real nonzero
+  // painted-pixel delta before the hard cut below existed -- content.js's own handleResize() only
+  // reaches cancelBeacons() via repositionActiveOverlays() after a 100ms debounce a continuous
+  // resize drag keeps resetting, the same window oculist-3dd8 closed for Wand Cast. Ported the
+  // same technique here (hardCutArrowShot below), applied to all three top-level elements instead
+  // of one clip mask, and the resize test now passes clean.
+  function animateArrowShot(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var r = rect; // viewport space (rule 2) -- kept as `r` to match the ported geometry below
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = r.left + r.width / 2, mcy = r.top + r.height / 2;
+
+    var beaconScale = getBeaconScale();
+    var durFactor = getBeaconDuration(1);
+    var SCROLL_X = window.scrollX, SCROLL_Y = window.scrollY;
+
+    var INSET = 40;
+    // See the header comment above (oculist-1ta.15/uxa0): exactly 8, do not round.
+    var STRIKE_GAP = 8;
+    // Fixed local-unit viewBox for the flight arrow (unchanged from the prototype); ARROW_LEN/
+    // ARROW_H below are the PHYSICAL rendered footprint (rule 6: size through getBeaconScale()),
+    // arrowScale is the local-unit-to-physical-px ratio the painted-shape oracle needs.
+    var ARROW_VB_W = 58, ARROW_VB_H = 26;
+    var arrowScale = beaconScale;
+    var ARROW_LEN = ARROW_VB_W * arrowScale, ARROW_H = ARROW_VB_H * arrowScale;
+    var VB_W = 108, VB_H = 114;
+
+    // Archer sizing is corner-independent (a function of the match's own height only), computed
+    // here because the plan chooser below needs the grip's real screen offset before any corner
+    // is picked.
+    var archerH = Math.max(78, Math.min(112, 3.2 * r.height)) * beaconScale;
+    var archerW = archerH * (VB_W / VB_H);
+    var GRIP_LOCAL = { x: 100, y: 54 };
+    var scaleX = archerW / VB_W, scaleY = archerH / VB_H;
+    // Both left-side corners share x:INSET, so the launch point's x is identical either way;
+    // only y depends on which corner is picked.
+    var launchX = INSET + GRIP_LOCAL.x * scaleX;
+    var launchYTop = INSET + GRIP_LOCAL.y * scaleY;
+    var launchYBottom = (vh - INSET - archerH) + GRIP_LOCAL.y * scaleY;
+
+    // ── Impact-plan chooser (oculist-aouc, oculist-q4nl) ────────────────────────────────────
+    var MARGIN = ARROW_LEN + 8;
+    var FEATHER_OVERFLOW_LOCAL = 36.63 + 1.5;
+
+    function flightBoxGapAtT(t, lx, ly, ex, ey) {
+      var fdist = Math.hypot(ex - lx, ey - ly);
+      var fMidX = (lx + ex) / 2, fMidY = (ly + ey) / 2;
+      var fArcH = Math.max(30, Math.min(70, fdist * 0.12));
+      var fCtrlX = fMidX, fCtrlY = fMidY - fArcH;
+      var omt = 1 - t;
+      var px = omt * omt * lx + 2 * omt * t * fCtrlX + t * t * ex;
+      var py = omt * omt * ly + 2 * omt * t * fCtrlY + t * t * ey;
+      var tx = 2 * omt * (fCtrlX - lx) + 2 * t * (ex - fCtrlX);
+      var ty = 2 * omt * (fCtrlY - ly) + 2 * t * (ey - fCtrlY);
+      var ang = Math.atan2(ty, tx);
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var corners = [
+        [-ARROW_LEN, -ARROW_H / 2], [-ARROW_LEN, ARROW_H / 2],
+        [0, -ARROW_H / 2], [0, ARROW_H / 2]
+      ];
+      var boxLeft = Infinity, boxRight = -Infinity, boxTop = Infinity, boxBottom = -Infinity;
+      for (var c = 0; c < corners.length; c++) {
+        var wx = px + corners[c][0] * cosA - corners[c][1] * sinA;
+        var wy = py + corners[c][0] * sinA + corners[c][1] * cosA;
+        if (wx < boxLeft) boxLeft = wx;
+        if (wx > boxRight) boxRight = wx;
+        if (wy < boxTop) boxTop = wy;
+        if (wy > boxBottom) boxBottom = wy;
+      }
+      var dxGap = Math.max(r.left - boxRight, boxLeft - r.right, 0);
+      var dyGap = Math.max(r.top - boxBottom, boxTop - r.bottom, 0);
+      if (dxGap > 0 || dyGap > 0) return Math.hypot(dxGap, dyGap);
+      var overlapX = Math.min(boxRight, r.right) - Math.max(boxLeft, r.left);
+      var overlapY = Math.min(boxBottom, r.bottom) - Math.max(boxTop, r.top);
+      return -Math.min(overlapX, overlapY);
+    }
+
+    function sampledFlightClearance(lx, ly, ex, ey) {
+      var minGap = Infinity;
+      var SAMPLES = 240;
+      for (var i = 0; i <= SAMPLES; i++) {
+        var gap = flightBoxGapAtT(i / SAMPLES, lx, ly, ex, ey);
+        if (gap < minGap) minGap = gap;
+      }
+      return minGap;
+    }
+
+    function launchClearance(lx, ly, ex, ey) {
+      return flightBoxGapAtT(0, lx, ly, ex, ey);
+    }
+
+    var QUIVER_MIN_DEG = -10, QUIVER_MAX_DEG = 14;
+
+    function quiverBoxGapAtDeg(deg, lx, ly, ex, ey) {
+      var fdist = Math.hypot(ex - lx, ey - ly);
+      var fMidX = (lx + ex) / 2, fMidY = (ly + ey) / 2;
+      var fArcH = Math.max(30, Math.min(70, fdist * 0.12));
+      var fCtrlX = fMidX, fCtrlY = fMidY - fArcH;
+      var tx = 2 * (ex - fCtrlX), ty = 2 * (ey - fCtrlY);
+      var ang = Math.atan2(ty, tx) + deg * Math.PI / 180;
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var corners = [
+        [-ARROW_LEN, -ARROW_H / 2], [-ARROW_LEN, ARROW_H / 2],
+        [0, -ARROW_H / 2], [0, ARROW_H / 2]
+      ];
+      var boxLeft = Infinity, boxRight = -Infinity, boxTop = Infinity, boxBottom = -Infinity;
+      for (var c = 0; c < corners.length; c++) {
+        var wx = ex + corners[c][0] * cosA - corners[c][1] * sinA;
+        var wy = ey + corners[c][0] * sinA + corners[c][1] * cosA;
+        if (wx < boxLeft) boxLeft = wx;
+        if (wx > boxRight) boxRight = wx;
+        if (wy < boxTop) boxTop = wy;
+        if (wy > boxBottom) boxBottom = wy;
+      }
+      var dxGap = Math.max(r.left - boxRight, boxLeft - r.right, 0);
+      var dyGap = Math.max(r.top - boxBottom, boxTop - r.bottom, 0);
+      if (dxGap > 0 || dyGap > 0) return Math.hypot(dxGap, dyGap);
+      var overlapX = Math.min(boxRight, r.right) - Math.max(boxLeft, r.left);
+      var overlapY = Math.min(boxBottom, r.bottom) - Math.max(boxTop, r.top);
+      return -Math.min(overlapX, overlapY);
+    }
+
+    function sampledQuiverClearance(lx, ly, ex, ey) {
+      var minGap = Infinity;
+      var QUIVER_SAMPLES = 96;
+      for (var i = 0; i <= QUIVER_SAMPLES; i++) {
+        var deg = QUIVER_MIN_DEG + (QUIVER_MAX_DEG - QUIVER_MIN_DEG) * (i / QUIVER_SAMPLES);
+        var gap = quiverBoxGapAtDeg(deg, lx, ly, ex, ey);
+        if (gap < minGap) minGap = gap;
+      }
+      return minGap;
+    }
+
+    // ── Painted-shape overlap oracle (oculist-aouc RUN 7) ───────────────────────────────────
+    function paintPtRect(x, y, rr) {
+      var dx = Math.max(rr.left - x, x - rr.right, 0), dy = Math.max(rr.top - y, y - rr.bottom, 0);
+      return Math.hypot(dx, dy);
+    }
+    function paintPtSeg(px, py, ax, ay, bx, by) {
+      var vx = bx - ax, vy = by - ay;
+      var L = vx * vx + vy * vy;
+      var t = L ? ((px - ax) * vx + (py - ay) * vy) / L : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - ax - t * vx, py - ay - t * vy);
+    }
+    function paintCross(ax, ay, bx, by, cx, cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); }
+    function paintSegInter(ax, ay, bx, by, cx, cy, dx, dy) {
+      var d1 = paintCross(cx, cy, dx, dy, ax, ay), d2 = paintCross(cx, cy, dx, dy, bx, by);
+      var d3 = paintCross(ax, ay, bx, by, cx, cy), d4 = paintCross(ax, ay, bx, by, dx, dy);
+      return (d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0);
+    }
+    function paintSegRectDist(ax, ay, bx, by, rr) {
+      function inside(x, y) { return x >= rr.left && x <= rr.right && y >= rr.top && y <= rr.bottom; }
+      if (inside(ax, ay) || inside(bx, by)) return 0;
+      var edges = [
+        [rr.left, rr.top, rr.right, rr.top], [rr.right, rr.top, rr.right, rr.bottom],
+        [rr.right, rr.bottom, rr.left, rr.bottom], [rr.left, rr.bottom, rr.left, rr.top]
+      ];
+      for (var e = 0; e < edges.length; e++) {
+        if (paintSegInter(ax, ay, bx, by, edges[e][0], edges[e][1], edges[e][2], edges[e][3])) return 0;
+      }
+      var m = Math.min(paintPtRect(ax, ay, rr), paintPtRect(bx, by, rr));
+      var corners = [[rr.left, rr.top], [rr.right, rr.top], [rr.left, rr.bottom], [rr.right, rr.bottom]];
+      for (var c = 0; c < corners.length; c++) {
+        m = Math.min(m, paintPtSeg(corners[c][0], corners[c][1], ax, ay, bx, by));
+      }
+      return m;
+    }
+    function paintPtInPoly(x, y, P) {
+      var inPoly = false;
+      for (var i = 0, j = P.length - 1; i < P.length; j = i++) {
+        var xi = P[i][0], yi = P[i][1], xj = P[j][0], yj = P[j][1];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inPoly = !inPoly;
+      }
+      return inPoly;
+    }
+    function paintSatPen(P, rr) {
+      var axes = [[1, 0], [0, 1]];
+      for (var i = 0; i < P.length; i++) {
+        var j = (i + 1) % P.length;
+        var ex = P[j][0] - P[i][0], ey = P[j][1] - P[i][1];
+        var L = Math.hypot(ex, ey);
+        if (L > 1e-9) axes.push([-ey / L, ex / L]);
+      }
+      var rectCorners = [[rr.left, rr.top], [rr.right, rr.top], [rr.left, rr.bottom], [rr.right, rr.bottom]];
+      var pen = Infinity;
+      for (var a = 0; a < axes.length; a++) {
+        var nx = axes[a][0], ny = axes[a][1];
+        var a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+        for (var p = 0; p < P.length; p++) {
+          var proj = P[p][0] * nx + P[p][1] * ny;
+          if (proj < a0) a0 = proj;
+          if (proj > a1) a1 = proj;
+        }
+        for (var rc = 0; rc < rectCorners.length; rc++) {
+          var projR = rectCorners[rc][0] * nx + rectCorners[rc][1] * ny;
+          if (projR < b0) b0 = projR;
+          if (projR > b1) b1 = projR;
+        }
+        pen = Math.min(pen, Math.min(a1, b1) - Math.max(a0, b0));
+      }
+      return pen;
+    }
+    function paintShapeClear(pts, closed, rad, rr) {
+      var d = Infinity;
+      var n = pts.length;
+      var segs = closed ? n : n - 1;
+      for (var i = 0; i < segs; i++) {
+        var a = pts[i], b = pts[(i + 1) % n];
+        d = Math.min(d, paintSegRectDist(a[0], a[1], b[0], b[1], rr));
+        if (d === 0) break;
+      }
+      if (d > 0 && closed && paintPtInPoly((rr.left + rr.right) / 2, (rr.top + rr.bottom) / 2, pts)) d = 0;
+      if (d > 0) return d - rad;
+      var pen;
+      if (closed) {
+        pen = paintSatPen(pts, rr);
+      } else {
+        pen = 0;
+        for (var s = 0; s < n - 1; s++) pen = Math.max(pen, paintSatPen([pts[s], pts[s + 1]], rr));
+      }
+      return -Math.max(pen, 0) - rad;
+    }
+
+    function paintEllPts(cx, cy, rx, ry, N) {
+      var o = [];
+      for (var i = 0; i < N; i++) {
+        var a = (2 * Math.PI * i) / N;
+        o.push([cx + (rx * Math.cos(a)) / Math.cos(Math.PI / N), cy + (ry * Math.sin(a)) / Math.cos(Math.PI / N)]);
+      }
+      return o;
+    }
+    var ARCHER_PAINT = [
+      [[[3, 107], [17, 104], [23, 108], [19, 114], [2, 114]], true, 1.5, true],
+      [[[49, 105], [59, 108], [66, 111], [65, 114], [48, 114], [44, 109]], true, 1.5, true],
+      [[[20, 84], [31, 87], [18, 106], [7, 108]], true, 2, true],
+      [[[36, 87], [47, 84], [58, 107], [47, 109]], true, 2, true],
+      [[[18, 55], [50, 55], [54, 88], [41, 91], [27, 91], [14, 87]], true, 2, true],
+      [[[21, 47], [46, 47], [51, 56], [18, 56]], true, 2, true],
+      [[[29, 39], [41, 39], [41, 50], [29, 50]], true, 1.5, true],
+      [[[62, 16], [56, 22], [64, 31], [73, 43], [60, 54], [73, 65], [64, 77], [56, 86], [62, 92]], false, 6, false],
+      [[[57, 49], [63, 49], [63, 59], [57, 59]], true, 1, false],
+      [[[62, 16], [58, 54], [62, 92]], false, 1.6, false],
+      [[[62, 16], [34, 50], [62, 92]], false, 1.6, false],
+      [[[44, 56], [51, 53], [51, 61], [44, 63]], true, 1.8, true],
+      [[[51, 53], [62, 51], [62, 58], [51, 61]], true, 1.8, true],
+      [[[20, 55], [8, 59], [1, 54], [5, 45], [23, 49]], true, 1.8, true],
+      [[[1, 54], [5, 45], [12, 41], [30, 47], [34, 48], [34, 54]], true, 1.5, true],
+      [paintEllPts(60, 54, 4, 4, 24), true, 1.5, false],
+      [paintEllPts(34, 50, 4, 4, 24), true, 1.5, false],
+      [[[19, 36], [21, 25], [24, 18], [35, 15], [46, 18], [49, 25], [46, 37], [41, 45], [25, 47]], true, 2, true],
+      [[[26, 35], [28, 20], [38, 16], [45, 21], [49, 27], [50, 32], [46, 34], [45, 40], [36, 44], [28, 42]], true, 2, true],
+      [[[14, 20], [28, 20], [18, 14], [5, 12]], true, 2, true],
+      [[[26, 19], [50, 18], [60, 27], [45, 27]], true, 2, true],
+      [[[14, 20], [17, 9], [30, 7], [43, 8], [49, 19]], true, 2, true],
+      [[[18, 16], [10, 5], [1, 2], [5, 15], [16, 20]], true, 1.5, true]
+    ];
+    for (var archerDx = 0; archerDx >= -24; archerDx -= 24) {
+      ARCHER_PAINT.push([[[58 + archerDx, 54], [92 + archerDx, 54]], false, 2.4, false]);
+      ARCHER_PAINT.push([[[92 + archerDx, 50], [100 + archerDx, 54], [92 + archerDx, 58]], true, 1, false]);
+      ARCHER_PAINT.push([[[60 + archerDx, 54], [50 + archerDx, 47], [56 + archerDx, 54]], true, 1, false]);
+      ARCHER_PAINT.push([[[60 + archerDx, 54], [50 + archerDx, 61], [56 + archerDx, 54]], true, 1, false]);
+    }
+    function paintedArcherClear(archerTopVal) {
+      var s = archerH / VB_H;
+      var m = Infinity;
+      for (var i = 0; i < ARCHER_PAINT.length; i++) {
+        var shape = ARCHER_PAINT[i];
+        var pts = shape[0].map(function (pt) { return [INSET + pt[0] * s, archerTopVal + pt[1] * s]; });
+        var rad = shape[3] ? shape[2] / 2 : (shape[2] * s) / 2;
+        m = Math.min(m, paintShapeClear(pts, shape[1], rad, r));
+      }
+      return m;
+    }
+
+    var FEATHER_HAT_PAINT = [
+      [[[14, 20], [28, 20], [18, 14], [5, 12]], true, 2],
+      [[[26, 19], [50, 18], [60, 27], [45, 27]], true, 2],
+      [[[14, 20], [17, 9], [30, 7], [43, 8], [49, 19]], true, 2],
+      [[[18, 16], [10, 5], [1, 2], [5, 15], [16, 20]], true, 1.5]
+    ];
+    function paintedFeatherHatClear(archerTopVal) {
+      var s = archerH / VB_H;
+      var m = Infinity;
+      for (var i = 0; i < FEATHER_HAT_PAINT.length; i++) {
+        var shape = FEATHER_HAT_PAINT[i];
+        var pts = shape[0].map(function (pt) { return [INSET + pt[0] * s, archerTopVal + pt[1] * s]; });
+        m = Math.min(m, paintShapeClear(pts, shape[1], shape[2] / 2, r));
+        if (m <= 0) return m;
+      }
+      return m;
+    }
+
+    // Local-unit points (relative to the arrow's own anchor at (ARROW_VB_W, ARROW_VB_H/2), i.e.
+    // (58,13)); scaled by arrowScale wherever they're actually used below, mirroring how
+    // ARCHER_PAINT's own points get scaled by `s` above.
+    var ARROW_PAINT = [
+      [[[4, 11], [48, 11], [48, 15], [4, 15]], 0.3],
+      [[[48, 6], [58, 13], [48, 20]], 0.5],
+      [[[14, 13], [1, 1], [9, 13]], 0.5],
+      [[[14, 13], [1, 25], [9, 13]], 0.5]
+    ].map(function (shape) {
+      return [shape[0].map(function (pt) { return [pt[0] - ARROW_VB_W, pt[1] - ARROW_VB_H / 2]; }), shape[1]];
+    });
+    // `best` seeds an early-out via a true lower bound (any painted shape here is at most
+    // 61*arrowScale from (px,py)); the per-shape exit right after only fires when !exhaustive.
+    function paintedArrowAt(px, py, ang, best, exhaustive) {
+      var farGap = paintPtRect(px, py, r);
+      var REACH = 61 * arrowScale;
+      if (farGap > REACH && farGap - REACH > best) return best;
+      var cosA = Math.cos(ang), sinA = Math.sin(ang);
+      var m = best;
+      for (var i = 0; i < ARROW_PAINT.length; i++) {
+        var shape = ARROW_PAINT[i];
+        var pts = shape[0].map(function (pt) {
+          var lx = pt[0] * arrowScale, ly = pt[1] * arrowScale;
+          return [px + lx * cosA - ly * sinA, py + lx * sinA + ly * cosA];
+        });
+        m = Math.min(m, paintShapeClear(pts, true, shape[1] * arrowScale, r));
+        if (!exhaustive && m <= 0) return m;
+      }
+      return m;
+    }
+    function paintedFlightClear(lx, ly, ex, ey, exhaustive, N, Q) {
+      var d = Math.hypot(ex - lx, ey - ly);
+      var mx = (lx + ex) / 2, my = (ly + ey) / 2;
+      var arcH = Math.max(30, Math.min(70, d * 0.12));
+      var cx = mx, cy = my - arcH;
+      var m = Infinity;
+      var SAMPLES = N || 240;
+      for (var i = 0; i <= SAMPLES; i++) {
+        var t = i / SAMPLES, u = 1 - t;
+        var px = u * u * lx + 2 * u * t * cx + t * t * ex;
+        var py = u * u * ly + 2 * u * t * cy + t * t * ey;
+        var tx = 2 * u * (cx - lx) + 2 * t * (ex - cx);
+        var ty = 2 * u * (cy - ly) + 2 * t * (ey - cy);
+        m = paintedArrowAt(px, py, Math.atan2(ty, tx), m, exhaustive);
+        if (!exhaustive && m <= 0) return m;
+      }
+      var baseAng = Math.atan2(2 * (ey - cy), 2 * (ex - cx));
+      var QUIVER_SAMPLES = Q || 96;
+      for (var q = 0; q <= QUIVER_SAMPLES; q++) {
+        var deg = QUIVER_MIN_DEG + (QUIVER_MAX_DEG - QUIVER_MIN_DEG) * (q / QUIVER_SAMPLES);
+        m = paintedArrowAt(ex, ey, baseAng + (deg * Math.PI) / 180, m, exhaustive);
+        if (!exhaustive && m <= 0) return m;
+      }
+      return m;
+    }
+
+    var leftEndX = r.left - STRIKE_GAP, leftEndY = mcy;
+    var topEndX = mcx, topEndY = r.top - STRIKE_GAP;
+    var bottomEndX = mcx, bottomEndY = r.bottom + STRIKE_GAP;
+    var leftDx = leftEndX - launchX;
+    var topDy = topEndY - launchYTop;
+    var bottomDy = launchYBottom - bottomEndY;
+
+    var plan, corner, endX, endY;
+    var archerYAdjust = 0;
+    if (leftDx > MARGIN) {
+      plan = 'left'; endX = leftEndX; endY = leftEndY;
+      corner = Math.abs(leftEndY - launchYTop) <= Math.abs(leftEndY - launchYBottom) ? 'top-left' : 'bottom-left';
+    } else if (topDy > MARGIN) {
+      plan = 'top'; corner = 'top-left'; endX = topEndX; endY = topEndY;
+    } else if (bottomDy > MARGIN) {
+      plan = 'bottom'; corner = 'bottom-left'; endX = bottomEndX; endY = bottomEndY;
+    } else {
+      if (leftDx >= topDy && leftDx >= bottomDy) {
+        plan = 'left'; corner = 'top-left'; endX = leftEndX; endY = leftEndY;
+      } else if (topDy >= bottomDy) {
+        plan = 'top'; corner = 'top-left'; endX = topEndX; endY = topEndY;
+      } else {
+        plan = 'bottom'; corner = 'bottom-left'; endX = bottomEndX; endY = bottomEndY;
+      }
+
+      var nominalArcherTop = corner === 'top-left' ? INSET : (vh - INSET - archerH);
+      var nominalArcherClear = paintedArcherClear(nominalArcherTop);
+      var archerOverlap = nominalArcherClear <= 0;
+      var endX0 = endX, endY0 = endY;
+      var nominalLaunchYForCorner = corner === 'top-left' ? launchYTop : launchYBottom;
+
+      function pushFlightIfNeeded(archerYAdjustIn, gateLaunchY) {
+        var fbLaunchY = nominalLaunchYForCorner + archerYAdjustIn;
+        var endX = endX0, endY = endY0;
+        var paintedFlightOverlapHere = paintedFlightClear(launchX, gateLaunchY, endX, endY) <= 0;
+        if (paintedFlightOverlapHere) {
+          var SAMPLE_SLOP = 4;
+          var unpushedPaintedFlightClear = paintedFlightClear(launchX, fbLaunchY, endX, endY);
+          var forwardOfLaunch =
+            plan === 'left' ? leftEndX > launchX :
+            plan === 'top' ? topEndY > fbLaunchY :
+            bottomEndY < fbLaunchY;
+          if (forwardOfLaunch && launchClearance(launchX, fbLaunchY, endX, endY) >= MARGIN + SAMPLE_SLOP) {
+            var pushed = 0;
+            var bestEndX = endX, bestEndY = endY, bestGap = -Infinity;
+            var capped = false;
+            var prevGap = -Infinity;
+            for (var guard = 0; guard < 40; guard++) {
+              var gap = Math.min(
+                launchClearance(launchX, fbLaunchY, endX, endY),
+                sampledFlightClearance(launchX, fbLaunchY, endX, endY),
+                sampledQuiverClearance(launchX, fbLaunchY, endX, endY)
+              );
+              if (gap > bestGap) { bestGap = gap; bestEndX = endX; bestEndY = endY; }
+              if (gap >= MARGIN + SAMPLE_SLOP) break;
+              if (capped) break;
+              if (gap <= prevGap) break;
+              prevGap = gap;
+              pushed += (MARGIN + SAMPLE_SLOP - gap) + SAMPLE_SLOP;
+              if (plan === 'left') {
+                endX = leftEndX - pushed;
+                var floorX = Math.min(launchX + STRIKE_GAP, leftEndX);
+                if (endX < floorX) { endX = floorX; capped = true; }
+              } else if (plan === 'top') {
+                endY = topEndY - pushed;
+                var floorY = Math.min(fbLaunchY + STRIKE_GAP, topEndY);
+                if (endY < floorY) { endY = floorY; capped = true; }
+              } else {
+                endY = bottomEndY + pushed;
+                var ceilY = Math.max(fbLaunchY - STRIKE_GAP, bottomEndY);
+                if (endY > ceilY) { endY = ceilY; capped = true; }
+              }
+            }
+            if (bestGap < MARGIN + SAMPLE_SLOP) { endX = bestEndX; endY = bestEndY; }
+          }
+          if (paintedFlightClear(launchX, fbLaunchY, endX, endY) < unpushedPaintedFlightClear) {
+            endX = plan === 'left' ? leftEndX : (plan === 'top' ? topEndX : bottomEndX);
+            endY = plan === 'left' ? leftEndY : (plan === 'top' ? topEndY : bottomEndY);
+          }
+        }
+        return { endX: endX, endY: endY };
+      }
+
+      var archerYAdjustBase = 0;
+      var paintedFeatherHatOverlapBase = corner === 'bottom-left' && paintedFeatherHatClear(nominalArcherTop) <= 0;
+      if (paintedFeatherHatOverlapBase) {
+        var nominalFeatherTop = nominalArcherTop - FEATHER_OVERFLOW_LOCAL * scaleY;
+        var archerGapBase = nominalFeatherTop - r.bottom;
+        if (archerGapBase < MARGIN) archerYAdjustBase = MARGIN - archerGapBase;
+      }
+      var pushedBase = pushFlightIfNeeded(archerYAdjustBase, nominalLaunchYForCorner);
+      var endXBase = pushedBase.endX, endYBase = pushedBase.endY;
+      var launchYBase = nominalLaunchYForCorner + archerYAdjustBase;
+
+      var archerClearBase = paintedArcherClear(nominalArcherTop + archerYAdjustBase);
+      var baselineOverlap = archerClearBase <= 0 ||
+        paintedFlightClear(launchX, launchYBase, endXBase, endYBase) <= 0;
+
+      var archerYAdjustCand = 0;
+      if (archerOverlap || baselineOverlap) {
+        var aboveCandidate = r.top - STRIKE_GAP - archerH;
+        var belowCandidate = r.bottom + STRIKE_GAP + FEATHER_OVERFLOW_LOCAL * scaleY;
+        var aboveFits = aboveCandidate >= 0 && aboveCandidate + archerH <= vh;
+        var belowFits = belowCandidate >= 0 && belowCandidate + archerH <= vh;
+        var nearerCandidate =
+          Math.abs(aboveCandidate - nominalArcherTop) <= Math.abs(belowCandidate - nominalArcherTop)
+            ? aboveCandidate : belowCandidate;
+        var chosenTop;
+        if (aboveFits && belowFits) chosenTop = nearerCandidate;
+        else if (aboveFits) chosenTop = aboveCandidate;
+        else if (belowFits) chosenTop = belowCandidate;
+        else chosenTop = nearerCandidate;
+        var candidateAdjust = chosenTop - nominalArcherTop;
+        if (paintedArcherClear(nominalArcherTop + candidateAdjust) > nominalArcherClear) {
+          archerYAdjustCand = candidateAdjust;
+        }
+      }
+      var archerClearCand = paintedArcherClear(nominalArcherTop + archerYAdjustCand);
+
+      function forwardSign(ex, ey, ly) {
+        return plan === 'left' ? Math.sign(ex - launchX) : plan === 'top' ? Math.sign(ey - ly) : -Math.sign(ey - ly);
+      }
+      var takeCandidate = false;
+      var endXCand, endYCand, launchYCand;
+      if (baselineOverlap && archerClearCand > archerClearBase) {
+        var pushedCand = pushFlightIfNeeded(archerYAdjustCand, nominalLaunchYForCorner + archerYAdjustCand);
+        endXCand = pushedCand.endX; endYCand = pushedCand.endY;
+        launchYCand = nominalLaunchYForCorner + archerYAdjustCand;
+        var flightClearBase = paintedFlightClear(launchX, launchYBase, endXBase, endYBase, true, 480, 96);
+        var flightClearCand = paintedFlightClear(launchX, launchYCand, endXCand, endYCand, true, 480, 96);
+        var newlyBackward =
+          forwardSign(endXBase, endYBase, launchYBase) > 0 &&
+          forwardSign(endXCand, endYCand, launchYCand) <= 0;
+        takeCandidate = flightClearCand >= flightClearBase && !newlyBackward;
+      }
+
+      if (takeCandidate) {
+        archerYAdjust = archerYAdjustCand;
+        endX = endXCand;
+        endY = endYCand;
+      } else {
+        archerYAdjust = archerYAdjustBase;
+        endX = endXBase;
+        endY = endYBase;
+      }
+    }
+
+    var archerLeft = INSET;
+    var archerTop = (corner === 'top-left' ? INSET : (vh - INSET - archerH)) + archerYAdjust;
+    var launchY = (corner === 'top-left' ? launchYTop : launchYBottom) + archerYAdjust;
+
+    // ── Archer sprite (vector, not pixel-grid) ──────────────────────────────────────────────
+    var ARCHER_BODY = '#294b36', ARCHER_BODY_OUTLINE = '#111a13';
+    var ARCHER_BODY_HI = '#50765a', ARCHER_BODY_SHADOW = '#173022';
+    var LEG_BASE = '#22352b', LEG_OUTLINE = '#0d1510';
+    var LEG_HI = '#3f5e49', LEG_SHADOW = '#13231a';
+    var BOOT_BASE = '#5a351b', BOOT_OUTLINE = '#1d1007', BOOT_HI = '#8b5b2e', BOOT_SHADOW = '#2b180b';
+    var SKIN = '#f2bd78', SKIN_OUTLINE = '#4f2d16';
+    var SKIN_HI = '#ffd79b', SKIN_SHADOW = '#b8783d';
+    var COLLAR = '#5a351b', COLLAR_OUTLINE = '#1d1007';
+    var COLLAR_HI = '#8b5b2e', COLLAR_SHADOW = '#2b180b';
+    var IRIS = '#3a2a18';
+    var HAT_BASE = '#6f431d', HAT_OUTLINE = '#211205';
+    var HAT_HI = '#a9672a', HAT_SHADOW = '#3d230f';
+    var FEATHER_COLOR = '#c92f3a', FEATHER_HI = '#ef5b64', FEATHER_OUTLINE = '#410d12';
+    var BOW_COLOR = '#8a541f', BOW_HI = '#c18438', BOW_OUTLINE = '#241307';
+    var STRING_COLOR = '#1a1a1e';
+    var ARROW_SHAFT = '#8a5a2c', ARROW_SHAFT_HI = '#c98f4e', ARROW_SHAFT_SHADOW = '#5c3a1a', ARROW_SHAFT_OUTLINE = '#3a2410';
+    var ARROWHEAD_COLOR = '#4b4b52', ARROWHEAD_HI = '#8d8d97', ARROWHEAD_SHADOW = '#222226', ARROWHEAD_OUTLINE = '#0f0f11';
+    var FLETCH_COLOR = '#c92f3a', FLETCH_HI = '#ef5b64', FLETCH_SHADOW = '#7e1921', FLETCH_OUTLINE = '#410d12';
+    var ARCHER_STROKE = 'stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;';
+
+    var archerAnims = [];
+
+    var archerWrap = document.createElement('div');
+    archerWrap.className = 'oc-beacon oc-beacon-transient';
+    archerWrap.setAttribute('data-arrowshot', 'archer');
+    archerWrap.setAttribute('data-arrowshot-plan', plan);
+    archerWrap.setAttribute('data-arrowshot-corner', corner);
+    archerWrap.style.cssText = [
+      'position:absolute',
+      'left:' + (archerLeft + SCROLL_X) + 'px', 'top:' + (archerTop + SCROLL_Y) + 'px',
+      'width:' + archerW + 'px', 'height:' + archerH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(archerWrap);
+
+    var archerSvg = document.createElementNS(NS, 'svg');
+    archerSvg.setAttribute('width', String(archerW));
+    archerSvg.setAttribute('height', String(archerH));
+    archerSvg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    archerSvg.style.cssText = 'display:block;overflow:visible;';
+    archerWrap.appendChild(archerSvg);
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+
+    var bootLD = 'M 3 107 L 17 104 L 23 108 L 19 114 L 2 114 Z';
+    var bootRD = 'M 49 105 L 59 108 L 66 111 L 65 114 L 48 114 L 44 109 Z';
+    addShape('path', { d: bootLD, fill: BOOT_BASE, stroke: BOOT_OUTLINE, 'stroke-width': '1', style: ARCHER_STROKE }, archerSvg);
+    addShape('path', { d: bootRD, fill: BOOT_BASE, stroke: BOOT_OUTLINE, 'stroke-width': '1', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '3,107 17,104 20,106 7,110', fill: BOOT_HI }, archerSvg);
+    addShape('polygon', { points: '7,110 20,106 23,108 19,114 13,114', fill: BOOT_BASE }, archerSvg);
+    addShape('polygon', { points: '2,114 7,110 13,114', fill: BOOT_SHADOW }, archerSvg);
+    addShape('polygon', { points: '49,105 59,108 62,110 47,109', fill: BOOT_HI }, archerSvg);
+    addShape('polygon', { points: '47,109 62,110 66,111 65,114 53,114', fill: BOOT_BASE }, archerSvg);
+    addShape('polygon', { points: '48,114 47,109 53,114', fill: BOOT_SHADOW }, archerSvg);
+
+    var legLD = 'M 20 84 L 31 87 L 18 106 L 7 108 Z';
+    var legRD = 'M 36 87 L 47 84 L 58 107 L 47 109 Z';
+    addShape('path', { d: legLD, fill: LEG_BASE, stroke: LEG_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('path', { d: legRD, fill: LEG_BASE, stroke: LEG_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '20,84 25,86 13,106 7,108', fill: LEG_HI }, archerSvg);
+    addShape('polygon', { points: '25,86 31,87 18,106 13,106', fill: LEG_SHADOW }, archerSvg);
+    addShape('polygon', { points: '36,87 41,85 52,107 47,109', fill: LEG_HI }, archerSvg);
+    addShape('polygon', { points: '41,85 47,84 58,107 52,107', fill: LEG_SHADOW }, archerSvg);
+
+    var torsoD = 'M 18 55 L 50 55 L 49 80 L 54 88 L 41 91 L 34 84 L 27 91 L 14 87 L 19 79 Z';
+    addShape('path', { d: torsoD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '18,55 28,55 27,91 14,87 19,79', fill: ARCHER_BODY_HI }, archerSvg);
+    addShape('polygon', { points: '41,55 50,55 49,80 54,88 41,91 34,84', fill: ARCHER_BODY_SHADOW }, archerSvg);
+    addShape('rect', { x: '17', y: '78', width: '34', height: '7', rx: '1', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('rect', { x: '31', y: '78.5', width: '7', height: '6', rx: '1', fill: HAT_HI, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+
+    var collarD = 'M 21 47 L 46 47 L 51 56 L 18 56 Z';
+    addShape('path', { d: collarD, fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '21,47 32,47 27,56 18,56', fill: COLLAR_HI }, archerSvg);
+    addShape('polygon', { points: '38,47 46,47 51,56 43,56', fill: COLLAR_SHADOW }, archerSvg);
+
+    addShape('rect', { x: '29', y: '39', width: '12', height: '11', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+
+    var bowD = 'M 62 16 Q 56 22 64 31 Q 73 43 60 54 Q 73 65 64 77 Q 56 86 62 92';
+    addShape('path', { d: bowD, stroke: BOW_OUTLINE, 'stroke-width': '6', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('path', { d: bowD, stroke: BOW_COLOR, 'stroke-width': '4', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('path', { d: 'M 61.5 17 Q 57.5 22 64 31 Q 69 40 61 51', stroke: BOW_HI, 'stroke-width': '1.2', fill: 'none', 'stroke-linecap': 'round' }, archerSvg);
+    addShape('rect', { x: '57', y: '49', width: '6', height: '10', rx: '2', fill: COLLAR, stroke: BOW_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('line', { x1: '57.5', y1: '52', x2: '62.5', y2: '52', stroke: COLLAR_HI, 'stroke-width': '1' }, archerSvg);
+    addShape('line', { x1: '57.5', y1: '56', x2: '62.5', y2: '56', stroke: COLLAR_SHADOW, 'stroke-width': '1' }, archerSvg);
+
+    var stringRest = addShape('path', { d: 'M 62 16 L 58 54 L 62 92', stroke: STRING_COLOR, 'stroke-width': '1.6', fill: 'none', opacity: '1' }, archerSvg);
+    var stringDrawn = addShape('path', { d: 'M 62 16 L 34 50 L 62 92', stroke: STRING_COLOR, 'stroke-width': '1.6', fill: 'none', opacity: '0' }, archerSvg);
+
+    var sleeveD = 'M 44 56 L 51 53 L 62 51 L 62 58 L 51 61 L 44 63 Z';
+    addShape('path', { d: sleeveD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '1.8', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '44,56 51,53 56,52 53,58 45,61', fill: ARCHER_BODY_HI }, archerSvg);
+    addShape('polygon', { points: '56,52 62,51 62,58 51,61 53,58', fill: ARCHER_BODY_SHADOW }, archerSvg);
+    addShape('rect', { x: '54', y: '50.5', width: '7', height: '9', rx: '1', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '60', cy: '54', r: '4', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('ellipse', { cx: '58.5', cy: '52.5', rx: '1.6', ry: '1.3', fill: SKIN_HI }, archerSvg);
+
+    var drawSleeveD = 'M 20 55 L 8 59 L 1 54 L 5 45 L 23 49 Z';
+    addShape('path', { d: drawSleeveD, fill: ARCHER_BODY, stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '1.8', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '5,45 12,41 30,47 34,48 34,54 28,53 11,51 1,54', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '15,42 29,47 28,53 13,51', fill: COLLAR, stroke: COLLAR_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '34', cy: '50', r: '4', fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '1.5' }, archerSvg);
+    addShape('ellipse', { cx: '33', cy: '48.8', rx: '1.4', ry: '1', fill: SKIN_HI }, archerSvg);
+
+    var nockedArrow = document.createElementNS(NS, 'g');
+    archerSvg.appendChild(nockedArrow);
+    addShape('line', { x1: '58', y1: '54', x2: '92', y2: '54', stroke: ARROW_SHAFT, 'stroke-width': '2.4' }, nockedArrow);
+    addShape('polygon', { points: '92,50 100,54 92,58', fill: ARROWHEAD_COLOR, stroke: ARROWHEAD_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+    addShape('polygon', { points: '60,54 50,47 56,54', fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+    addShape('polygon', { points: '60,54 50,61 56,54', fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, nockedArrow);
+
+    var hairD = 'M 21 25 Q 24 18 35 15 Q 46 15 49 25 L 46 37 L 41 45 L 31 43 L 25 47 L 25 40 L 19 36 Z';
+    addShape('path', { d: hairD, fill: '#171612', stroke: ARCHER_BODY_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var headD = 'M 28 20 Q 38 16 45 21 L 49 27 L 45 29 L 50 32 L 46 34 Q 45 40 36 44 Q 28 42 26 35 Z';
+    addShape('path', { d: headD, fill: SKIN, stroke: SKIN_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '28,20 36,18 33,42 28,39 26,35', fill: SKIN_HI }, archerSvg);
+    addShape('polygon', { points: '43,21 49,27 45,29 50,32 46,34 45,40 40,42', fill: SKIN_SHADOW }, archerSvg);
+    addShape('path', { d: 'M 38 25 Q 42 23 45 26', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1.4', style: 'stroke-linecap:round;' }, archerSvg);
+    addShape('ellipse', { cx: '42', cy: '27', rx: '2.2', ry: '2.6', fill: '#ffffff', stroke: SKIN_OUTLINE, 'stroke-width': '1' }, archerSvg);
+    addShape('circle', { cx: '43', cy: '27.5', r: '1.2', fill: IRIS }, archerSvg);
+    addShape('path', { d: 'M 43 36 Q 46 37 48 35.5', fill: 'none', stroke: SKIN_OUTLINE, 'stroke-width': '1.2', style: 'stroke-linecap:round;' }, archerSvg);
+
+    var brimBackD = 'M 14 20 L 28 20 L 18 14 L 5 12 Z';
+    addShape('path', { d: brimBackD, fill: HAT_BASE, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var brimFrontD = 'M 26 19 L 50 18 L 60 27 L 45 27 Z';
+    addShape('path', { d: brimFrontD, fill: HAT_HI, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    var crownD = 'M 14 20 Q 17 7 30 7 Q 43 8 49 19 Z';
+    addShape('path', { d: crownD, fill: HAT_BASE, stroke: HAT_OUTLINE, 'stroke-width': '2', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '30,7 43,8 49,19 37,19', fill: HAT_SHADOW }, archerSvg);
+    addShape('polygon', { points: '14,20 17,10 25,8 24,19', fill: HAT_HI }, archerSvg);
+    var featherD = 'M 18 16 L 10 5 L 1 2 L 5 15 L 16 20 Z';
+    addShape('path', { d: featherD, fill: FEATHER_COLOR, stroke: FEATHER_OUTLINE, 'stroke-width': '1.5', style: ARCHER_STROKE }, archerSvg);
+    addShape('polygon', { points: '1,2 10,5 7,10 3,8', fill: FEATHER_HI }, archerSvg);
+    addShape('polygon', { points: '11,13 18,16 16,20 12,17', fill: FLETCH_SHADOW }, archerSvg);
+
+    // ── Flight arrow ─────────────────────────────────────────────────────────────────────────
+    var arrowSvg = document.createElementNS(NS, 'svg');
+    arrowSvg.setAttribute('width', String(ARROW_LEN));
+    arrowSvg.setAttribute('height', String(ARROW_H));
+    arrowSvg.setAttribute('viewBox', '0 0 ' + ARROW_VB_W + ' ' + ARROW_VB_H);
+    arrowSvg.style.cssText = 'display:block;overflow:visible;';
+    addShape('rect', { x: '4', y: '11', width: '44', height: '4', fill: ARROW_SHAFT, stroke: ARROW_SHAFT_OUTLINE, 'stroke-width': '0.6' }, arrowSvg);
+    addShape('rect', { x: '4', y: '11', width: '44', height: '1.3', fill: ARROW_SHAFT_HI }, arrowSvg);
+    addShape('rect', { x: '4', y: '13.7', width: '44', height: '1.3', fill: ARROW_SHAFT_SHADOW }, arrowSvg);
+    var arrowheadD = 'M 48 6 L 58 13 L 48 20 Z';
+    addShape('path', { d: arrowheadD, fill: ARROWHEAD_COLOR, stroke: ARROWHEAD_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    var arrowDefs = document.createElementNS(NS, 'defs');
+    arrowSvg.insertBefore(arrowDefs, arrowSvg.firstChild);
+    // Renamed from the prototype's own retried id (oculist-1ta.11 retry): unique across every id
+    // this function and the archer's own addShape() calls mint.
+    var arrowheadClip = document.createElementNS(NS, 'clipPath');
+    arrowheadClip.setAttribute('id', 'as_arrowhead');
+    addShape('path', { d: arrowheadD }, arrowheadClip);
+    arrowDefs.appendChild(arrowheadClip);
+    addShape('polygon', { points: '48,7 57,13 48,11.5', fill: ARROWHEAD_HI, 'clip-path': 'url(#as_arrowhead)' }, arrowSvg);
+    addShape('polygon', { points: '48,19 57,13 48,14.5', fill: ARROWHEAD_SHADOW, 'clip-path': 'url(#as_arrowhead)' }, arrowSvg);
+    var fletchTopD = 'M 14 13 L 1 1 L 9 13 Z';
+    var fletchBotD = 'M 14 13 L 1 25 L 9 13 Z';
+    addShape('path', { d: fletchTopD, fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    addShape('path', { d: fletchBotD, fill: FLETCH_COLOR, stroke: FLETCH_OUTLINE, 'stroke-width': '1' }, arrowSvg);
+    addShape('polygon', { points: '1,1 9.58,8.92 6.28,8.92', fill: FLETCH_HI }, arrowSvg);
+    addShape('polygon', { points: '6.28,8.92 9.58,8.92 11.92,11.08 7.72,11.08', fill: FLETCH_COLOR }, arrowSvg);
+    addShape('polygon', { points: '7.72,11.08 11.92,11.08 14,13 9,13', fill: FLETCH_SHADOW }, arrowSvg);
+    addShape('polygon', { points: '9,13 14,13 11.92,14.92 7.72,14.92', fill: FLETCH_SHADOW }, arrowSvg);
+    addShape('polygon', { points: '7.72,14.92 11.92,14.92 9.58,17.08 6.28,17.08', fill: FLETCH_COLOR }, arrowSvg);
+    addShape('polygon', { points: '6.28,17.08 9.58,17.08 1,25', fill: FLETCH_HI }, arrowSvg);
+
+    var dx = endX - launchX, dy = endY - launchY;
+    var dist = Math.hypot(dx, dy);
+    var midX = (launchX + endX) / 2, midY = (launchY + endY) / 2;
+    var ARC_HEIGHT = Math.max(30, Math.min(70, dist * 0.12));
+    var ctrlX = midX, ctrlY = midY - ARC_HEIGHT;
+    var pathStr = 'M ' + (launchX + SCROLL_X) + ' ' + (launchY + SCROLL_Y) +
+      ' Q ' + (ctrlX + SCROLL_X) + ' ' + (ctrlY + SCROLL_Y) +
+      ' ' + (endX + SCROLL_X) + ' ' + (endY + SCROLL_Y);
+
+    var arrowAnims = [];
+
+    var flightArrow = document.createElement('div');
+    flightArrow.className = 'oc-beacon oc-beacon-transient';
+    flightArrow.setAttribute('data-arrowshot', 'arrow');
+    flightArrow.style.cssText = [
+      'position:absolute',
+      'left:0', 'top:0',
+      'width:' + ARROW_LEN + 'px', 'height:' + ARROW_H + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:100% 50%', 'offset-rotate:auto',
+      'transform-origin:100% 50%',
+      'opacity:0'
+    ].join(';');
+    flightArrow.appendChild(arrowSvg);
+    document.documentElement.appendChild(flightArrow);
+
+    // ── Target rings ─────────────────────────────────────────────────────────────────────────
+    var SQRT2 = Math.SQRT2;
+    var w2 = r.width / 2, h2 = r.height / 2;
+    var padIn = 16 * beaconScale, padMid = 32 * beaconScale, padOut = 48 * beaconScale, ringStroke = 8 * beaconScale;
+    var rxIn = w2 * SQRT2 + padIn, ryIn = h2 * SQRT2 + padIn;
+    var rxMid = w2 * SQRT2 + padMid, ryMid = h2 * SQRT2 + padMid;
+    var rxOut = w2 * SQRT2 + padOut, ryOut = h2 * SQRT2 + padOut;
+    var boxHalfW = rxOut + ringStroke, boxHalfH = ryOut + ringStroke;
+    var targetW = boxHalfW * 2, targetH = boxHalfH * 2;
+
+    var targetAnims = [];
+
+    var targetEl = document.createElement('div');
+    targetEl.className = 'oc-beacon oc-beacon-transient';
+    targetEl.setAttribute('data-arrowshot', 'target');
+    targetEl.style.cssText = [
+      'position:absolute',
+      'left:' + (mcx - boxHalfW + SCROLL_X) + 'px', 'top:' + (mcy - boxHalfH + SCROLL_Y) + 'px',
+      'width:' + targetW + 'px', 'height:' + targetH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    document.documentElement.appendChild(targetEl);
+
+    var targetSvg = document.createElementNS(NS, 'svg');
+    targetSvg.setAttribute('width', String(targetW));
+    targetSvg.setAttribute('height', String(targetH));
+    targetSvg.setAttribute('viewBox', '0 0 ' + targetW + ' ' + targetH);
+    targetSvg.style.cssText = 'display:block;overflow:visible;';
+    targetEl.appendChild(targetSvg);
+
+    function addRing(rx, ry, color) {
+      addShape('ellipse', {
+        cx: String(boxHalfW), cy: String(boxHalfH), rx: String(rx), ry: String(ry),
+        fill: 'none', stroke: color, 'stroke-width': String(ringStroke)
+      }, targetSvg);
+    }
+    addRing(rxOut, ryOut, '#264893');
+    addRing(rxMid, ryMid, '#c62828');
+    addRing(rxIn, ryIn, '#e8b93a');
+
+    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
+    // Every raw ms constant below stays UNSCALED, used only for offset RATIOS -- rule 6: only
+    // the final duration/delay at each .animate() call is multiplied by durFactor.
+    var APPEAR_DUR = 200;
+    var DRAW_START = 300;
+    var DRAW_DUR = 200, HOLD = 130, RELEASE_DUR = 90;
+    var DRAW_PHASE = DRAW_DUR + HOLD + RELEASE_DUR;
+    var RELEASE_TIME = DRAW_START + DRAW_DUR + HOLD;
+    var FLIGHT_DUR = 620;
+    var ARRIVAL = RELEASE_TIME + FLIGHT_DUR;
+    var QUIVER_DUR = 420;
+    var HOLD_AFTER = 200;
+    var FADE_OUT_DELAY = ARRIVAL + QUIVER_DUR + HOLD_AFTER;
+    var FADE_OUT_DUR = 280;
+
+    // Beat 1: archer dissolves in.
+    archerAnims.push(archerWrap.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: APPEAR_DUR * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 2: nock-draw-release. String and arrow snap through rest -> drawn -> rest across one
+    // shared timeline, so they always agree on phase. Hung on archerWrap's own __waapiAnims
+    // (rule 4: animations on child nodes hang on the parent).
+    var f1 = DRAW_DUR / DRAW_PHASE, f2 = (DRAW_DUR + HOLD) / DRAW_PHASE;
+    archerAnims.push(stringRest.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 0, offset: f1 },
+      { opacity: 0, offset: f2 },
+      { opacity: 1, offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(stringDrawn.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: f1 },
+      { opacity: 1, offset: f2 },
+      { opacity: 0, offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(nockedArrow.animate([
+      { transform: 'translateX(0px)', offset: 0 },
+      { transform: 'translateX(-24px)', offset: f1 },
+      { transform: 'translateX(-24px)', offset: f2 },
+      { transform: 'translateX(0px)', offset: 1 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+    archerAnims.push(nockedArrow.animate([
+      { opacity: 1, offset: 0 },
+      { opacity: 1, offset: f2 - 0.02 },
+      { opacity: 0, offset: f2 }
+    ], { duration: DRAW_PHASE * durFactor, delay: DRAW_START * durFactor, fill: 'forwards' }));
+
+    // Beat 3: the arrow arcs to the target. Appear instantly at release, then travel.
+    arrowAnims.push(flightArrow.animate([
+      { opacity: 0 },
+      { opacity: 1 }
+    ], { duration: 1, delay: RELEASE_TIME * durFactor, fill: 'forwards' }));
+    arrowAnims.push(flightArrow.animate([
+      { offsetDistance: '0%' },
+      { offsetDistance: '100%' }
+    ], { duration: FLIGHT_DUR * durFactor, delay: RELEASE_TIME * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 4: the target dissolves in at the match, ahead of the arrow.
+    targetAnims.push(targetEl.animate([
+      { opacity: 0, transform: 'scale(1.15)' },
+      { opacity: 1, transform: 'scale(1)' }
+    ], { duration: 240 * durFactor, delay: (RELEASE_TIME + 60) * durFactor, easing: 'ease-out', fill: 'forwards' }));
+
+    // Beat 5: strike -- a damped rotational quiver about the embedded tip.
+    arrowAnims.push(flightArrow.animate([
+      { transform: 'rotate(0deg)', offset: 0 },
+      { transform: 'rotate(14deg)', offset: 0.15 },
+      { transform: 'rotate(-10deg)', offset: 0.35 },
+      { transform: 'rotate(6deg)', offset: 0.55 },
+      { transform: 'rotate(-3deg)', offset: 0.75 },
+      { transform: 'rotate(0deg)', offset: 1 }
+    ], { duration: QUIVER_DUR * durFactor, delay: ARRIVAL * durFactor, fill: 'forwards' }));
+
+    // Beat 6: archer, bow (part of the archer sprite), arrow and target all dissolve out together.
+    archerAnims.push(archerWrap.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+    arrowAnims.push(flightArrow.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+    targetAnims.push(targetEl.animate([
+      { opacity: 1 },
+      { opacity: 0 }
+    ], { duration: FADE_OUT_DUR * durFactor, delay: FADE_OUT_DELAY * durFactor, easing: 'ease-in', fill: 'forwards' }));
+
+    archerWrap.__waapiAnims = archerAnims;
+    var archerDone = Promise.allSettled(archerAnims.map(function (a) { return a.finished; })).then(function () { archerWrap.remove(); });
+
+    flightArrow.__waapiAnims = arrowAnims;
+    var arrowDone = Promise.allSettled(arrowAnims.map(function (a) { return a.finished; })).then(function () { flightArrow.remove(); });
+
+    targetEl.__waapiAnims = targetAnims;
+    var targetDone = Promise.allSettled(targetAnims.map(function (a) { return a.finished; })).then(function () { targetEl.remove(); });
+
+    // RESIZE HARD CUT, measured not assumed (see the header comment's own RESIZE note): every
+    // element above is positioned once, at fire time, from the pre-resize rect -- the target
+    // rings in particular sit only STRIKE_GAP/padIn clear of #match's own fire-time edges.
+    // content.js's own handleResize() only reaches cancelBeacons() via repositionActiveOverlays()
+    // after a 100ms debounce (overlayResizeTimer) that a continuous resize drag keeps resetting,
+    // so a reflowed #match can end up under this stale, still-mounted geometry for the whole
+    // drag. Measured directly (test/arrowshot_effect.test.js's own 'resize mid-flight' test): an
+    // 8px horizontal reflow during a frozen mid-quiver frame left a nonzero painted-pixel delta
+    // on #match before this hard cut existed. Tear every element down on the FIRST resize event,
+    // ahead of the debounce -- same technique oculist-3dd8 ported for Wand Cast's own clip-path
+    // hole, applied here to all three top-level elements instead of one clip mask.
+    function hardCutArrowShot() {
+      window.removeEventListener('resize', hardCutArrowShot);
+      [archerWrap, flightArrow, targetEl].forEach(function (el) {
+        if (!el.isConnected) return;
+        (el.__waapiAnims || []).forEach(function (a) { try { a.cancel(); } catch (e) {} });
+        el.remove();
+      });
+    }
+    window.addEventListener('resize', hardCutArrowShot, { passive: true, once: true });
+
+    // { once: true } above only removes the listener once a resize actually FIRES -- if no
+    // resize ever happens during this beacon's run (the common case), the listener would
+    // otherwise outlive it, leaked on window forever and keeping archerWrap/flightArrow/targetEl
+    // reachable after they've already been removed. Explicitly remove it once every element has
+    // finished on its own (natural completion) or been cancelled (destroyBeacon() calls .cancel()
+    // on every __waapiAnims entry, which settles archerDone/arrowDone/targetDone immediately) --
+    // this covers both paths hardCutArrowShot's own early removeEventListener does not reach.
+    Promise.all([archerDone, arrowDone, targetDone]).then(function () {
+      window.removeEventListener('resize', hardCutArrowShot);
+    });
+  }
 
   function animateLightning(rect) {
     if (!rect || rect.width === 0 || rect.height === 0) return;
