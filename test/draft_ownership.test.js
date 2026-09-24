@@ -527,6 +527,66 @@ describe('Draft input vs. active chip ownership', () => {
     assert.ok(matchTexts.every((t) => t === 'dog'), 'the live highlight registry must not still hold "cat"\'s stale ranges');
   });
 
+  // oculist-3p87: a DOM mutation while a real draft (not aliased to any chip's
+  // termRanges) is in flight must rescan the draft's own term, not the working list —
+  // the mutation observer's rescanAfterMutation() used to call performListSearch()
+  // unconditionally, which replaces oculist-match with the active chip's (here 'cat's)
+  // ranges and steals the highlight from the draft the user is actually looking at. It
+  // must also still refresh the parked chip's own termRanges/count against the mutated
+  // DOM — restoreActiveChip() (what runs once the draft clears) never rescans on its
+  // own, it only reads the cached termRanges, so a mutation skipped here would surface
+  // as a stale count/highlight the moment the draft ends, not just during it.
+  test('a DOM mutation during an in-progress draft refreshes both the draft and the parked chip (oculist-3p87)', async () => {
+    await addTerm('cat');
+    assert.strictEqual(await activeChipTerm(), 'cat');
+
+    // Type a fresh, uncommitted draft — 'dog' has 2 real matches on the page.
+    await typeDraft('dog');
+    await waitForMatchTexts('dog');
+    let matchTexts = await rangeTexts('oculist-match');
+    assert.strictEqual(matchTexts.length, 2, 'sanity check: "dog" has 2 real matches before the mutation');
+
+    // Mutate the page: add a THIRD "dog" (so the draft's own rescan is observable) AND a
+    // FOURTH "cat" (so the parked chip's rescan is observable once the draft clears — a
+    // no-op rescan there would restore the stale 3, not the mutated page's real 4).
+    const mutationBefore = await armMutationRescanCounter();
+    await page.evaluate(() => {
+      const marker = document.createElement('p');
+      marker.textContent = 'a third dog and a fourth cat appear';
+      document.body.appendChild(marker);
+    });
+    await waitForMutationRescan(mutationBefore);
+
+    matchTexts = await rangeTexts('oculist-match');
+    assert.strictEqual(
+      matchTexts.length,
+      3,
+      'the mutation rescan must refresh the draft\'s own matches (now 3 "dog"s), not leave them stale'
+    );
+    assert.ok(matchTexts.every((t) => t === 'dog'), 'oculist-match must still hold the draft\'s ranges, not the active chip\'s ("cat")');
+
+    const dimTexts = await rangeTexts('oculist-dim-match');
+    assert.strictEqual(dimTexts.length, 4, 'the parked chip\'s dim ranges must also be refreshed against the mutated DOM (now 4 "cat"s), not left stale');
+    assert.ok(dimTexts.every((t) => t === 'cat'));
+    assert.strictEqual(await activeChipTerm(), 'cat', 'the mutation rescan must not change which chip is active');
+    assert.deepStrictEqual(
+      await chipCounts(),
+      ['4'],
+      'the parked chip\'s own rendered count must already reflect the mutated page while the draft is still active'
+    );
+
+    // The draft still ends normally: clearing it restores the active chip — from the
+    // termRanges the mutation rescan refreshed above, not a stale pre-mutation cache.
+    await typeDraft('');
+    await waitForMatchTexts('cat');
+    matchTexts = await rangeTexts('oculist-match');
+    assert.strictEqual(matchTexts.length, 4, '"cat" now has 4 matches on the mutated page, not the stale pre-mutation 3');
+    assert.ok(matchTexts.every((t) => t === 'cat'), 'clearing the draft must still restore the active chip\'s own ranges');
+    assert.deepStrictEqual(await chipCounts(), ['4']);
+    const countText = (await page.locator(COUNT).textContent()).trim();
+    assert.match(countText, /^0 of 4$/, `expected the restored chip's real "0 of 4", got "${countText}"`);
+  });
+
   // oculist-l6m.7: updateDimHighlight() has three call sites — performListSearch(),
   // performDraftSearch(), and restoreActiveChip() — and Lite Mode has to guard all three,
   // not just the first. This test walks through all three in one Lite Mode session so a
