@@ -492,6 +492,12 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
     // above; a pure viewport resize afterward triggers neither a scroll-into-view nor a
     // beacon, so waiting again would only add settleNavigation()'s own fixed dead time.
     await page.setViewportSize({ width: 320, height: 900 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo()/measure() below are just page.evaluate() reads, fast
+    // enough that without this wait the trailing repositionActiveOverlays() ->
+    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
+    // down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('edgeTarget', 100);
       const before = await page.evaluate(() => document.getElementById('edgeTarget').outerHTML);
@@ -666,6 +672,12 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
     // this was the test that once brushed a ~5045ms near-miss against the unscaled 5000ms
     // POLL_TIMEOUT).
     await page.setViewportSize({ width: 500, height: 300 });
+    // A much cheaper, separate wait than settleNavigation() above: let content.js's own
+    // 100ms resize debounce (overlayResizeTimer) settle before replaying. scrollTargetTo()/
+    // measure() below are just page.evaluate() reads, fast enough that without this wait the
+    // trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER replay()'s
+    // own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('target', 100);
 
@@ -708,6 +720,10 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       await page.setViewportSize(VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+      // Let the restore resize's own 100ms debounce (overlayResizeTimer) settle too -- the
+      // NEXT test's replay() can otherwise mount its own fresh beacon inside this window and
+      // have it torn down by this restore's trailing repositionActiveOverlays() (oculist-f7vx).
+      await page.waitForTimeout(200);
     }
   });
 
