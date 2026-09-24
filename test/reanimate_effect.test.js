@@ -499,6 +499,12 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
   test('degenerate fallback (neither side fits): an extreme narrow-viewport/wide-match scenario still lands on the right and never occludes the match', async () => {
     await switchToTarget('degenerateTarget')();
     await page.setViewportSize({ width: 320, height: 900 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo()/measure() below are just page.evaluate() reads, fast
+    // enough that without this wait the trailing repositionActiveOverlays() ->
+    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
+    // down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('degenerateTarget', 100);
       const before = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
@@ -769,6 +775,11 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
     await page.setViewportSize({ width: 500, height: 300 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('target', 100);
 

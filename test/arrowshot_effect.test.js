@@ -939,6 +939,11 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
     await page.setViewportSize({ width: 500, height: 300 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       await scrollTargetTo('target', 100);
 

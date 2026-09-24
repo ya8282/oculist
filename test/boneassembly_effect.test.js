@@ -356,6 +356,11 @@ describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls
     // (nowhere near the figure's own clearance requirement), while ~500px remains to the
     // match's left, comfortably enough for the mirrored landing to fit.
     await page.setViewportSize({ width: 650, height: 800 });
+    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
+    // replaying -- without this wait the trailing repositionActiveOverlays() ->
+    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
+    // down mid-flight (oculist-f7vx).
+    await page.waitForTimeout(200);
     try {
       const geom = await replay(page, figureSnapshot);
       assert.ok(geom, 'expected a mounted figure even with the right side unavailable');
