@@ -112,6 +112,17 @@ done
 - **Description**: lead with the pain point, then grouped feature bullets, then close
   with the local-only privacy line. Pull the feature list from the newest `CHANGELOG.md`
   section so the listing and the release agree.
+  As of 1.7.0, work the pack system into that description rather than the previously listed
+  effects (the live listing still names six effects from v1.0.0 — stale, not false, and this
+  is the release that corrects it):
+
+  > On top of the twelve core effects, effects now also come in packs. Switch any pack on or
+  > off from the settings panel. The Halloween pack ships with Oculist, preloaded, free,
+  > and on by default — nothing to buy or set up to see it.
+
+  Do not name or describe individual pack effects in the listing; users discover them by
+  using the pack, and the description should stay accurate as packs change independently of
+  a store review cycle.
 - Upload the 5 screenshots in numbered order. `01-find-bar` first: the core interaction
   on a real page converts best.
 
