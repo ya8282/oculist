@@ -814,16 +814,15 @@
     effectCyberVision: 'Cyber-Vision',
 
     // Halloween pack (oculist-nq1x)
-    effectBoneAssembly: 'Bone Assembly',
+    effectBoneAssembly: 'Skeleton Trot',
     effectFlappy: 'Flappy',
-    effectCheshire: 'Cheshire',
-    // Curly apostrophe (U+2019): the docs sites match this exact character.
-    effectJackOLantern: 'Jack-o’-Lantern Flicker',
+    effectCheshire: 'Cheshire Cat',
+    effectJackOLantern: 'Pumpkin Glow',
     effectHorseman: 'Galloping Throw',
     effectTentacleRise: 'Tentacle Rise',
     effectReanimate: 'Reanimation Jolt',
-    effectBatFlight: 'Bat Flight',
-    effectWandCast: 'Wand Cast',
+    effectBatFlight: 'Vampire Bat',
+    effectWandCast: 'Fairy Cast',
     effectArrowShot: 'Arrow Shot',
     effectVineSwing: 'Vine Swing',
 
@@ -3579,8 +3578,8 @@
     var NS = 'http://www.w3.org/2000/svg';
 
     // Fixed identity palette, the same license the promotion contract names for the
-    // pumpkin's orange -- no neighbouring shipped character effect (Bone Assembly, Flappy,
-    // Cheshire) has set an accessibility-accent precedent that applies here: unlike
+    // pumpkin's orange -- no neighbouring shipped character effect (Skeleton Trot, Flappy,
+    // Cheshire Cat) has set an accessibility-accent precedent that applies here: unlike
     // animateTrail's/animateFlappy's own absorption flash, this effect has no separate
     // flash element to carry getEffectiveColors().beacon as an accent -- same reasoning
     // animateCheshire's own header comment gives for itself.
@@ -3656,7 +3655,7 @@
       // BELOW-PUMPKIN SCALE has no glyph-containment constraint -- the pumpkin merely sits
       // near the match, the same freedom animateCheshire's own cat sizing has -- so
       // getBeaconScale() multiplies the match-relative clamp directly, same pattern as
-      // Cheshire's own catHeight. The multiply happens here, before left/top/bounds are
+      // Cheshire Cat's own catHeight. The multiply happens here, before left/top/bounds are
       // computed from it, so the onScreen() fit check below sees the real final rendered
       // size rather than an unscaled one a later CSS transform would have grown past it.
       scale = Math.max(MIN_SCALE, Math.min(1, (rect.height * 2.8) / VB_H)) * beaconScale;
@@ -3680,7 +3679,7 @@
       // The shrink point is the cavity's own centre, in this element's own local px box --
       // (CAV.y + CAV.h/2) is a viewBox-unit coordinate, and scale is the single factor
       // this whole function derives everything from, so multiplying it in ONCE here
-      // converts it to a local px offset with no double-scaling (the bug class Cheshire's
+      // converts it to a local px offset with no double-scaling (the bug class Cheshire Cat's
       // own drift value hit: an SVG-user-unit value re-multiplied by beaconScale when the
       // viewBox mapping had already applied it once).
       'transform-origin:50% ' + ((CAV.y + CAV.h / 2) * scale) + 'px',
@@ -3831,9 +3830,9 @@
   // crossing it -- both carried forward from the prototype unchanged.
   //
   // Fixed identity palette (the promotion contract's own license, "the pumpkin's orange"):
-  // no neighbouring shipped character effect (Bone Assembly, Flappy, Cheshire, Jack-o'-
-  // Lantern) has established an accessibility-accent precedent that applies here, and (like
-  // Jack-o'-Lantern's own shell and Cheshire's own fur) this effect has no separate flash
+  // no neighbouring shipped character effect (Skeleton Trot, Flappy, Cheshire Cat, Pumpkin
+  // Glow) has established an accessibility-accent precedent that applies here, and (like
+  // Pumpkin Glow's own shell and Cheshire Cat's own fur) this effect has no separate flash
   // element to carry getEffectiveColors().beacon as an accent -- the burst bands are the
   // character's own fire, not a UI accent.
   //
@@ -4377,7 +4376,7 @@
   //
   // Fixed identity palette (the promotion contract's own license, "the pumpkin's
   // orange"): no neighbouring shipped character effect has set an accessibility-accent
-  // precedent that applies here, and (like Jack-o'-Lantern's shell and Horseman's ink)
+  // precedent that applies here, and (like Pumpkin Glow's shell and Horseman's ink)
   // this effect has no separate flash/accent element to carry getEffectiveColors().beacon.
   //
   // NO START-POINT CASCADE (rule 9 of the promotion contract). Tentacles rise in place,
@@ -5179,7 +5178,7 @@
   // tested below (the left-fallback test).
   //
   // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): BAT_* and the
-  // figure's CAPE/SKIN/HAIR/IRIS tones are fixed, like Bone Assembly's ivory or Galloping
+  // figure's CAPE/SKIN/HAIR/IRIS tones are fixed, like Skeleton Trot's ivory or Galloping
   // Throw's amber -- there is no separate flash/UI-accent element here for
   // getEffectiveColors().beacon to drive (same reasoning animateHorseman's own header gives
   // for itself).
@@ -5689,11 +5688,11 @@
   // cut/fixed beats these close reasons describe is a regression, not an improvement.
   //
   // Fixed identity palette (oculist-1ta.30's own accent-amber recolor, rule 6's own license,
-  // "the pumpkin's orange"): OUTLINE/AMBER/SPARK_* are fixed literals, like Bat Flight's BAT_*
+  // "the pumpkin's orange"): OUTLINE/AMBER/SPARK_* are fixed literals, like Vampire Bat's BAT_*
   // tones -- there is no separate flash/UI-accent element here for getEffectiveColors().beacon to
   // drive.
   //
-  // Lite Mode (rule 7): a no-op, the same reasoning Bat Flight's/Tentacle Rise's own header
+  // Lite Mode (rule 7): a no-op, the same reasoning Vampire Bat's/Tentacle Rise's own header
   // comments give for themselves. There is no filter, no box-shadow and no decorative glow layer
   // anywhere in this effect's shipped art -- every "glow" mentioned in the geometry comments below
   // is a historical clearance-margin name, not a rendered CSS effect -- and the wand-pose swap plus
@@ -6295,7 +6294,7 @@
   // port's own fallback geometry directly against the live DOM (see 'forced fallback' below).
   //
   // Fixed identity palette (rule 6's own license, "the pumpkin's orange"): every archer/arrow/
-  // target-ring tone below is a fixed literal, like Bat Flight's BAT_* or Wand Cast's AMBER --
+  // target-ring tone below is a fixed literal, like Vampire Bat's BAT_* or Fairy Cast's AMBER --
   // there is no separate flash/UI-accent element here for getEffectiveColors().beacon to drive.
   // getEffectiveColors().beacon is deliberately never read below.
   //
@@ -6303,19 +6302,19 @@
   // anywhere in this effect's shipped art -- the cel-shaded tones ARE the character art, the
   // draw-hold-release-flight-strike sequence is the one continuous beat this effect has (nothing
   // to thin out without cutting the effect itself), and the target rings are a single scale/
-  // opacity entrance with no per-ring flicker. Same reasoning Bat Flight's/Wand Cast's own header
+  // opacity entrance with no per-ring flicker. Same reasoning Vampire Bat's/Fairy Cast's own header
   // comments give for themselves. settings.performanceMode is deliberately never read below.
   //
   // RESIZE (measured, not assumed): fxArrowShot's own prototype has no resize listener and no
-  // clip-path keyhole to port (unlike Wand Cast's oculist-3dd8) -- but every element here is
+  // clip-path keyhole to port (unlike Fairy Cast's oculist-3dd8) -- but every element here is
   // positioned once, at fire time, from the pre-resize rect, and the target rings in particular
   // stand only STRIKE_GAP/padIn clear of #match's own fire-time edges. Measured directly, not
-  // assumed clean by analogy to Bat Flight's own looser-clearance figure: test/arrowshot_
+  // assumed clean by analogy to Vampire Bat's own looser-clearance figure: test/arrowshot_
   // effect.test.js's own 'resize mid-flight' test (a #resizeTarget fixture that reflows #match
   // ~8px horizontally on a 16px viewport-width change, frozen mid-quiver) showed a real nonzero
   // painted-pixel delta before the hard cut below existed -- content.js's own handleResize() only
   // reaches cancelBeacons() via repositionActiveOverlays() after a 100ms debounce a continuous
-  // resize drag keeps resetting, the same window oculist-3dd8 closed for Wand Cast. Ported the
+  // resize drag keeps resetting, the same window oculist-3dd8 closed for Fairy Cast. Ported the
   // same technique here (hardCutArrowShot below), applied to all three top-level elements instead
   // of one clip mask, and the resize test now passes clean.
   function animateArrowShot(rect) {
@@ -7165,7 +7164,7 @@
     // drag. Measured directly (test/arrowshot_effect.test.js's own 'resize mid-flight' test): an
     // 8px horizontal reflow during a frozen mid-quiver frame left a nonzero painted-pixel delta
     // on #match before this hard cut existed. Tear every element down on the FIRST resize event,
-    // ahead of the debounce -- same technique oculist-3dd8 ported for Wand Cast's own clip-path
+    // ahead of the debounce -- same technique oculist-3dd8 ported for Fairy Cast's own clip-path
     // hole, applied here to all three top-level elements instead of one clip mask.
     function hardCutArrowShot() {
       window.removeEventListener('resize', hardCutArrowShot);

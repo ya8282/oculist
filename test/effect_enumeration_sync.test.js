@@ -54,9 +54,9 @@ function unescapeJsStringLiteral(raw) {
 // escape-aware: it does not stop at an escaped quote (`\'`), unlike a plain
 // `[^']*` capture, which truncates on the first `\'` it meets (oculist-cfyh —
 // verified: a label written as 'Jack-o\'-Lantern Flicker' truncated to
-// 'Jack-o\'). The shipped label sidesteps this today by using a curly
-// apostrophe (U+2019) instead of an escaped straight one; this fix makes the
-// parser correct either way.
+// 'Jack-o\'). That label was renamed (oculist-ywb0, to 'Pumpkin Glow') and no
+// longer contains an apostrophe, but the parser stays escape-aware so any
+// future label with one -- straight or curly -- still parses correctly.
 function extractKeyedStringLiteral(source, key) {
   const pattern = new RegExp('\\b' + key + '\\s*:\\s*\'((?:[^\'\\\\]|\\\\.)*)\'');
   const match = source.match(pattern);
@@ -211,19 +211,19 @@ function assertPackedProseSite(fileContent, searchFrom, searchTo, packedLabels, 
 
 test('extractKeyedStringLiteral is escape-aware (oculist-cfyh)', () => {
   assert.strictEqual(
-    extractKeyedStringLiteral("plainKey: 'Bone Assembly'", 'plainKey').value,
-    'Bone Assembly'
+    extractKeyedStringLiteral("plainKey: 'Skeleton Trot'", 'plainKey').value,
+    'Skeleton Trot'
   );
   assert.strictEqual(
-    extractKeyedStringLiteral("effectJackOLantern: 'Jack-o’-Lantern Flicker'", 'effectJackOLantern')
+    extractKeyedStringLiteral("curlyKey: 'Baker’s Choice'", 'curlyKey')
       .value,
-    'Jack-o’-Lantern Flicker'
+    'Baker’s Choice'
   );
   // The regression case: an escaped straight apostrophe used to truncate the
-  // capture at "Jack-o\" under the old `[^']*` pattern.
+  // capture at "Baker\" under the old `[^']*` pattern.
   assert.strictEqual(
-    extractKeyedStringLiteral("jackKey: 'Jack-o\\'-Lantern Flicker'", 'jackKey').value,
-    "Jack-o'-Lantern Flicker"
+    extractKeyedStringLiteral("bakerKey: 'Baker\\'s Choice'", 'bakerKey').value,
+    "Baker's Choice"
   );
 });
 
