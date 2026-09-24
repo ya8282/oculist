@@ -1,4 +1,4 @@
-// Wand Cast beacon effect (oculist-nq1x.10): promotes fxWandCast (artifacts/prototypes/
+// Fairy Cast beacon effect (oculist-nq1x.10): promotes fxWandCast (artifacts/prototypes/
 // effects-playground.html) into extension/content.js as the ninth entry in the Halloween pack.
 // A sparkling amber fairy lands beside the match (right by default, left if the right side has
 // no room), casts through three wand poses, then launches six sparkles from the wand tip that
@@ -133,7 +133,7 @@ const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
 const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
 const WANDCAST_EFFECT_ROW = '#oc-wrap >> [data-oc-key="effect:wandcast"]';
 
-describe('Wand Cast: an amber fairy lands beside the match, casts, and launches six orbiting sparkles', () => {
+describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches six orbiting sparkles', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   before(async () => {

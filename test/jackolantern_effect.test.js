@@ -1,4 +1,4 @@
-// Jack-o'-Lantern Flicker beacon effect (oculist-4rso): promotes fxJackOLantern
+// Pumpkin Glow beacon effect (oculist-4rso): promotes fxJackOLantern
 // (artifacts/prototypes/effects-playground.html, the accepted geometry from oculist-xl8f/
 // oculist-9r5k) into extension/content.js as the fourth entry in the Halloween pack. A
 // hand-drawn pumpkin fades in centred on the match's own mouth cavity when the match is
@@ -117,7 +117,7 @@ function expectedPlacement(target, vw, vh, beaconScale) {
   return { mode: 'above', scale: aboveScale, left: aboveLeft, top: aboveTop };
 }
 
-describe("Jack-o'-Lantern Flicker: a hand-drawn pumpkin frames or sits above the match and its face-light flickers", () => {
+describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and its face-light flickers", () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   before(async () => {

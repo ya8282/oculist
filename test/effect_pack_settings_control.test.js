@@ -99,7 +99,7 @@ function createPackedFixtureExtension() {
   // extension/content.js itself is never touched — so each one counts as a core
   // (unpacked) entry here, same as it did before any real pack shipped. A global regex
   // rather than one literal target per entry, so a later promotion into this same pack
-  // (e.g. oculist-e2m.6's Cheshire) does not silently re-break this fixture's count the
+  // (e.g. oculist-e2m.6's Cheshire Cat) does not silently re-break this fixture's count the
   // way this one entry's own absence just did.
   const halloweenPackFieldCount = (contentJs.match(/,\s*pack:\s*'halloween'/g) || []).length;
   assert.ok(

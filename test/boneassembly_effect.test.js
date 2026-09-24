@@ -1,4 +1,4 @@
-// Bone Assembly beacon effect (oculist-nq1x.5): promotes fxBoneAssembly (artifacts/
+// Skeleton Trot beacon effect (oculist-nq1x.5): promotes fxBoneAssembly (artifacts/
 // prototypes/effects-playground.html, the nq1x.4 redraw) into extension/content.js as the
 // first entry in the Halloween pack. A scatter of loose bones flies in beside the match,
 // snaps into a small standing skeleton, the skull detaches and rolls ahead while the
@@ -52,7 +52,7 @@ const GEAR_BTN = '#oc-wrap >> button[title="Options"]';
 const SETTINGS_PANEL = '#oc-wrap >> #oc-settings-panel';
 const BONEASSEMBLY_EFFECT_ROW = '#oc-wrap >> [data-oc-key="effect:boneassembly"]';
 
-describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls ahead, and it collapses into a heap', () => {
+describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls ahead, and it collapses into a heap', () => {
   let server, ctx, page, client, isolatedContextId, origin;
 
   before(async () => {
@@ -92,7 +92,7 @@ describe('Bone Assembly: a skeleton scatters in, snaps together, the skull rolls
       message: 'never observed the content script isolated execution context',
     });
 
-    // Select Bone Assembly and turn its pack on for the whole suite before ever opening
+    // Select Skeleton Trot and turn its pack on for the whole suite before ever opening
     // the finder — every tab of this persistent context shares this chrome.storage.sync
     // write.
     await setSettings({ effect: 'boneassembly', enabledPacks: ['halloween'] });
