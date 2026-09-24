@@ -1369,8 +1369,15 @@
     b.remove();
   }
 
-  function cancelBeacons() {
-    var beacons = document.querySelectorAll('.oc-beacon');
+  // sel defaults to '.oc-beacon' (every transient effect beacon AND the persistent Low Vision
+  // overlays drawActiveOverlays() also tags .oc-beacon). oculist-01sj: handleResize()'s own
+  // leading-edge cancel passes '.oc-beacon-transient' instead — the same selector
+  // fadeActiveBeacons() uses, for the same reason: that cancel has no redraw following it
+  // (that's the debounced repositionActiveOverlays(), later) to immediately replace the
+  // persistent overlays, which otherwise track scroll AND resize correctly in document
+  // coordinates on their own and must survive both.
+  function cancelBeacons(sel) {
+    var beacons = document.querySelectorAll(sel || '.oc-beacon');
     for (var i = 0; i < beacons.length; i++) {
       destroyBeacon(beacons[i]);
     }
@@ -11118,10 +11125,36 @@
   // Bound to resize only, not folded into scheduleViewportMarkersUpdate — that one is
   // shared with handleScroll, which fades the overlays out on purpose, and redrawing
   // them 100ms later would resurrect what the scroll just dismissed.
+  //
+  // oculist-01sj: this used to reach cancelBeacons() only through the 100ms debounce below
+  // (overlayResizeTimer), which a continuous resize drag keeps resetting on every event — so
+  // an effect's own transient beacons could paint against a reflowed #match for the whole
+  // drag. Front sparkles are the case that exposed it: unlike backWrap/arrowShot/vineSwing,
+  // they carry no per-effect hard-cut resize listener of their own (see hardCutBackWrap's own
+  // comment), so cancelBeacons() was their only teardown path, and it never ran until the
+  // debounce settled. Cancel on the LEADING edge instead: overlayResizeTimer is null only at
+  // the start of a new burst (its own setTimeout callback nulls it back out once it fires, see
+  // below), never mid-burst, so this fires once per burst, not once per event.
+  //
+  // '.oc-beacon-transient' ONLY on that leading-edge call (review fix, same bead): the default
+  // '.oc-beacon' selector also matches the persistent Low Vision overlays (border/shape/label/
+  // magnifier) that drawActiveOverlays() tags .oc-beacon — those track resize correctly on
+  // their own and have no redraw scheduled to replace them until the debounce settles, so the
+  // full selector here would blank them for the whole drag, or for good if
+  // repositionActiveOverlays() returns early (no active match). The trailing, debounced
+  // repositionActiveOverlays() below still does the redraw once the drag settles — the final
+  // rect isn't known until then — and its own cancelBeacons() call (the default '.oc-beacon'
+  // selector) is NOT a no-op by that point: the transients are already gone, so it is what
+  // removes the persistent overlays themselves, immediately before drawActiveOverlays()
+  // redraws them in place.
   function handleResize() {
+    if (!overlayResizeTimer) cancelBeacons('.oc-beacon-transient');
     scheduleViewportMarkersUpdate();
     if (overlayResizeTimer) clearTimeout(overlayResizeTimer);
-    overlayResizeTimer = setTimeout(repositionActiveOverlays, 100);
+    overlayResizeTimer = setTimeout(function () {
+      overlayResizeTimer = null;
+      repositionActiveOverlays();
+    }, 100);
   }
 
   function handleScroll() {

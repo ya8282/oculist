@@ -911,6 +911,69 @@ describe('Wand Cast: an amber fairy lands beside the match, casts, and launches 
     }
   });
 
+  test('resize hard cut, front sparkles (oculist-01sj): a mid-orbit resize that reflows #match leaves zero dirty match pixels, checked at three frames of the orbit', async () => {
+    // The test above (1200->1184, an 8px reflow) passes even without oculist-01sj's fix, because
+    // this fixture's own front-sparkle clearance budget (20-50px, see the fixture's own
+    // #resizeTarget comment) absorbs an 8px shift. A 1200->1160 resize (a 20px reflow -- the
+    // reviewer's own repro) does not: unlike backWrap, the front sparkles (data-wandcast=
+    // "spark-front") carry no per-effect hard-cut resize listener of their own -- cancelBeacons()
+    // was their only teardown path, and content.js's own handleResize() used to reach it solely
+    // through the 100ms debounce (overlayResizeTimer), which a continuous drag keeps resetting.
+    // Checked at t=900/1100/1500ms (travel-to-landing, mid-orbit, late-orbit) -- the reviewer's
+    // own three dirty frames.
+    let decodePage;
+    const TIMES = [900, 1100, 1500];
+    try {
+      decodePage = await ctx.newPage();
+
+      await switchToTarget('resizeTarget')();
+      const beforeRect = await measure('resizeTarget');
+      await page.setViewportSize({ width: 1160, height: 800 });
+      await page.waitForTimeout(200); // let the debounced overlay settle -- this baseline must be genuinely post-transition
+      const afterRect = await measure('resizeTarget');
+      assert.ok(
+        Math.abs(afterRect.right - beforeRect.right) > 4,
+        `sanity check: the resize must actually move #match, or this test proves nothing (before.right=${beforeRect.right}, after.right=${afterRect.right})`
+      );
+      const clip = { x: Math.round(afterRect.left), y: Math.round(afterRect.top), width: Math.round(afterRect.width), height: Math.round(afterRect.height) };
+      const baseline = await screenshotRgba(decodePage, clip);
+
+      for (const t of TIMES) {
+        await page.setViewportSize(VIEWPORT);
+        await page.waitForTimeout(200);
+        const geom = await replay(wandcastSnapshot);
+        assert.ok(geom, `expected a mounted wandcast figure before the t=${t} check`);
+
+        // Freeze every animation at this frame BEFORE resizing, so the comparison below is
+        // deterministic regardless of how long the resize + screenshot round trip takes.
+        await page.evaluate((freezeT) => {
+          document.querySelectorAll('.oc-beacon-transient').forEach((el) => {
+            el.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = freezeT; });
+          });
+        }, t);
+
+        // The real repro: resize WHILE the (now-frozen) effect is still mounted, then sample
+        // immediately -- well inside the 100ms debounce window.
+        await page.setViewportSize({ width: 1160, height: 800 });
+        const live = await screenshotRgba(decodePage, clip);
+
+        const delta = maxRgbDelta(baseline, live);
+        assert.strictEqual(
+          delta, 0,
+          `#match must show zero painted-pixel delta immediately after a mid-orbit resize frozen at t=${t}ms -- got max delta ${delta}. Front sparkles have no per-effect hard cut of their own; only handleResize()'s own leading-edge cancelBeacons('.oc-beacon-transient') (oculist-01sj) tears them down before the reflow.`
+        );
+
+        await clearBeacons();
+      }
+    } finally {
+      if (decodePage) await decodePage.close();
+      await clearBeacons();
+      await page.setViewportSize(VIEWPORT);
+      await page.waitForTimeout(200);
+      await switchToTarget('target')();
+    }
+  });
+
   test('edge case (genuine suppression, oculist-giy7\'s own guard): a wide match at a narrow viewport where the clamped painted bounds truly overlap #match suppresses entirely -- zero elements, proven by census', async () => {
     await page.setViewportSize({ width: 320, height: 900 });
     await switchToTarget('edgeRightTarget')();

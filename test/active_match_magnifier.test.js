@@ -611,6 +611,28 @@ describe('Active-match magnifier overlay', () => {
     );
   });
 
+  test('leading-edge resize cancel (oculist-01sj review fix) does not remove the persistent magnifier card mid-burst', async () => {
+    await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
+    await searchUntilMagnifierWord('quarklet', 'quarklet');
+    assert.strictEqual(await page.locator(MAGNIFIER).count(), 1, 'expected the magnifier to be drawn before the check');
+
+    // Dispatches the resize event and checks the card's survival in the SAME synchronous
+    // page-side tick, so there is no real-time gap a real setViewportSize()'s own CDP round
+    // trip would leave open for the 100ms debounce (overlayResizeTimer) to already have fired
+    // before the assertion runs -- window.dispatchEvent() invokes every 'resize' listener
+    // (including content.js's own handleResize()) synchronously, so this observes exactly the
+    // DOM state handleResize()'s own leading-edge cancel leaves behind, deterministically, not
+    // a state that merely survived however long the round trip happened to take.
+    const stillPresent = await page.evaluate((sel) => {
+      window.dispatchEvent(new Event('resize'));
+      return document.querySelectorAll(sel).length;
+    }, MAGNIFIER);
+    assert.strictEqual(
+      stillPresent, 1,
+      'the magnifier card must survive handleResize()\'s own leading-edge cancel -- only transient effect beacons should be torn down before the debounced redraw, not this persistent overlay'
+    );
+  });
+
   test('is removed on teardown, caught by the same .oc-beacon sweep as every other overlay', async () => {
     await setVisionSettings({ magnifier: true, motionSensitivity: 'off' });
     await searchUntilMagnifierWord('quarklet', 'quarklet');
