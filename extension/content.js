@@ -10134,6 +10134,14 @@
     checkSiteOverride(searchRanges.length === 0);
   }
 
+  // Draft check (oculist-l6m.19), shared by the late working-list merge (oculist-fqti)
+  // and the mutation rescan (oculist-3p87): performListSearch()/addChipTerm()/
+  // activateChip() always alias searchRanges to termRanges[activeTermIndex] itself —
+  // only a real performDraftSearch() builds searchRanges fresh, breaking that identity.
+  function isDraftActive() {
+    return !!input.value && searchRanges !== termRanges[activeTermIndex];
+  }
+
   // Clearing the input hands ownership back to whichever chip was active before the draft
   // started — its cached termRanges become searchRanges again and oculist-match returns,
   // reusing the last scan rather than re-scanning the page (so rapid type-then-clear never
@@ -10253,6 +10261,33 @@
     // input (e.g. right after Enter commits a chip and the user hasn't typed since)
     // must still keep rescanning.
     if (!wrap || (!lastTerm && workListTerms.length === 0)) return;
+
+    if (isDraftActive()) {
+      // A real draft owns the highlight (oculist-3p87) — a bare performListSearch()
+      // would replace searchRanges with the working list's active chip (or nothing),
+      // stealing the highlight from the draft the user is actually looking at. But the
+      // working list's termRanges/counts/dim registry still need to track the mutated
+      // DOM: restoreActiveChip() (what runs when the draft is later cleared) only reads
+      // the cached termRanges, it never rescans, so leaving them stale here would surface
+      // as a wrong count/highlight the moment the draft ends, not just during it.
+      // performListSearch() then performDraftSearch(lastTerm) back to back — both fully
+      // synchronous, no await between them — refreshes termRanges/renderChipRow/the dim
+      // registry first and then immediately re-asserts the draft's own oculist-match/
+      // count/nav-enabled state over it, so the chip-owned intermediate state this
+      // produces is never actually painted.
+      var previousDraftIndex = activeIndex;
+      performListSearch();
+      performDraftSearch(lastTerm);
+      if (searchRanges.length > 0) {
+        activeIndex = Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
+        firstEnter = false;
+        // skipScroll: a background rescan re-attaches highlights, it must not yank the
+        // viewport back to the match while the user is scrolling elsewhere.
+        highlightActiveRange(false, true);
+      }
+      return;
+    }
+
     var previousActiveIndex = activeIndex;
     performListSearch();
     if (searchRanges.length > 0) {
@@ -12480,13 +12515,13 @@
       var activeTermValue = (activeTermIndex >= 0 && activeTermIndex < workListTerms.length)
         ? workListTerms[activeTermIndex]
         : null;
-      // Draft check (oculist-l6m.19): performListSearch()/addChipTerm()/activateChip()
-      // always alias searchRanges to termRanges[activeTermIndex] itself — only a real
-      // performDraftSearch() builds searchRanges fresh, breaking that identity.
+      // isDraftActive() (oculist-l6m.19) must be read before workListTerms/termRanges/
+      // termStarved below are reassigned to the merged values — capture the pre-merge
+      // arrays it needs alongside it.
       var oldWorkListTerms = workListTerms;
       var oldTermRanges = termRanges;
       var oldTermStarved = termStarved;
-      var draftActive = !!input.value && searchRanges !== oldTermRanges[activeTermIndex];
+      var draftActive = isDraftActive();
       var restoredTerms = list.terms.slice();
       var addedSinceMount = workListTerms.filter(function (t) {
         return restoredTerms.indexOf(t) === -1;
