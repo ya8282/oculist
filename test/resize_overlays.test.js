@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForPopupReady, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 const { readStoredSettings } = require('./helpers/storage');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -58,6 +58,11 @@ describe('Low Vision overlays survive a window resize', () => {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${sw.url().split('/')[2]}/popup.html`);
     await popup.waitForSelector('#vision-profile');
+    // oculist-6fhj: popup.js attaches #vision-profile's 'change' listener only after an
+    // internal chrome.storage.sync.get() round trip resolves — a selectOption() dispatched
+    // before that wiring lands has its 'change' event dropped for good (see
+    // waitForPopupReady()'s own comment in helpers/wait.js).
+    await waitForPopupReady(popup);
     await popup.selectOption('#vision-profile', 'low-vision');
     // Wait for the write to actually land before tearing the popup page down, instead of
     // guessing how long the async chrome.storage.sync.set() call takes.
