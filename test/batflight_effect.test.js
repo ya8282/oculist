@@ -39,7 +39,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -550,7 +550,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     // #wideTarget's own 526px rendered width already exceeds it outright -- while staying
     // tall enough that the mandatory scrollIntoView({block:'center'}) recenter (see
     // batflightSnapshotWithMatch's own comment) still leaves real room above the match.
-    await page.setViewportSize({ width: 320, height: 900 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     await switchToTarget('wideTarget')();
     try {
       const geom = await replay(batflightSnapshotWithMatch, 'wideTarget');
@@ -563,7 +563,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -573,7 +573,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     // scrollIntoView({block:'center'}) recenter now leaves no room above the match either
     // (half of a 220px-tall viewport, minus the figure's own clearance, is negative), forcing
     // the below branch as the unconditional last resort.
-    await page.setViewportSize({ width: 320, height: 220 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 220 });
     await switchToTarget('wideTarget')();
     try {
       const geom = await replay(batflightSnapshotWithMatch, 'wideTarget');
@@ -597,7 +597,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -831,13 +831,12 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
   });
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
-    await page.setViewportSize({ width: 500, height: 300 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
-    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
-    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight and hanging
-    // the waitForFunction below (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo() below is just page.evaluate() reads, fast enough that without this
+    // wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER
+    // replay()'s own fresh beacon mounts, tearing it down mid-flight and hanging the
+    // waitForFunction below (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       await scrollTargetTo('target', 100);
 
@@ -851,7 +850,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
       assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even at a tiny viewport');
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
       await scrollTargetTo('target', 200);

@@ -376,6 +376,29 @@
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
 
+  // Same test-reachability reasoning as getDebounceTimer above: overlayResizeTimer/
+  // resizeEventCount/settledResizeEvent (declared further down, near handleResize) drive
+  // the 100ms resize debounce. None of the three alone proves a specific resize has been
+  // fully handled (oculist-l9sg, twice over: a null timer is ambiguous between "never
+  // armed" and "already settled"; a settled size/count can be stale from a PRIOR resize
+  // whose debounce already fired before this one's setViewportSize even landed). Tests
+  // poll all three together -- timer === null, settledResizeEvent === resizeEventCount,
+  // and window.innerWidth/innerHeight matching the requested size -- see
+  // waitForOverlayResizeSettled in test/helpers/wait.js for the actual predicate.
+  window.__ocTest.getOverlayResizeTimer = function () { return overlayResizeTimer; };
+  window.__ocTest.getResizeEventCount = function () { return resizeEventCount; };
+  window.__ocTest.getSettledResizeEvent = function () { return settledResizeEvent; };
+  // oculist-l9sg (review fix, third pass): settledResizeEvent is only ever written by
+  // handleResize()'s own debounced callback, and handleResize's 'resize' listener is
+  // added/removed with the overlay itself (__ocToggle's open branch / __ocDestroy, not
+  // boot()'s page-lifetime listener that drives resizeEventCount above). So a resize that
+  // happens while the overlay is closed advances resizeEventCount forever but never
+  // advances settledResizeEvent to match -- polling "settled === count" in that state
+  // would wait for something that can never become true and time out. Exposed so
+  // waitForOverlayResizeSettled can tell the two states apart and, while detached, wait
+  // only for the plain physical facts (size, no pending timer) instead.
+  window.__ocTest.isHandleResizeAttached = function () { return handleResizeAttached; };
+
   // Same test-reachability reasoning as getDebounceTimer above: activeBeacons (declared
   // further down, in the "State" section) is a module-private "have we drawn since the
   // last reset" flag animate() increments and cancelBeacons()/fadeActiveBeacons() reset
@@ -1244,6 +1267,26 @@
   // permanently suppressed on its own — rather than either extreme silently.
   var dismissedNotices      = new Set();
   var overlayResizeTimer    = null;
+  // oculist-l9sg: true only between __ocToggle()'s open branch adding handleResize's
+  // 'resize' listener and __ocDestroy() removing it -- see isHandleResizeAttached's
+  // __ocTest comment above for why a test needs this distinct from resizeEventCount.
+  var handleResizeAttached  = false;
+  // oculist-l9sg: a monotonically increasing count of every 'resize' event this page has
+  // seen, incremented by a listener registered once at boot() (below), independent of
+  // whether the finder overlay is currently open — unlike overlayResizeTimer/handleResize,
+  // which only exist between window.__ocToggle()'s open branch and __ocDestroy(). Paired
+  // with settledResizeEvent, this turns "has the debounce processed the resize that just
+  // happened" from a timing guess into a fact a test can poll: a settle is only trustworthy
+  // once settledResizeEvent has caught up to the CURRENT resizeEventCount, not merely to
+  // some earlier one that had already elapsed before the test's own setViewportSize landed.
+  var resizeEventCount      = 0;
+  // Written only by handleResize()'s own debounced callback (below), the instant a
+  // resize-driven repositionActiveOverlays() has actually run to completion, to the
+  // resizeEventCount value AS OF that moment -- i.e. "which resize event this settle
+  // answers for", not just "a settle happened at some point". Never reset by __ocDestroy():
+  // like resizeEventCount, it tracks real window resize events, not overlay lifecycle, so a
+  // close/reopen must not make it look like no resize has ever settled.
+  var settledResizeEvent    = 0;
 
   // Sites known to render page text outside the accessible DOM (canvas, custom
   // virtualized editors) where Oculist's text-node search can't find anything.
@@ -1277,6 +1320,7 @@
     try {
       window.removeEventListener('resize', handleResize, { passive: true });
     } catch (e) {}
+    handleResizeAttached = false;
     if (domObserver) {
       domObserver.disconnect();
       domObserver = null;
@@ -11217,6 +11261,10 @@
     overlayResizeTimer = setTimeout(function () {
       overlayResizeTimer = null;
       repositionActiveOverlays();
+      // oculist-l9sg: recorded AFTER repositionActiveOverlays() completes, not before --
+      // this is "which resize this settle answers for", so it must reflect the count as of
+      // completion, not as of when the debounce was merely armed.
+      settledResizeEvent = resizeEventCount;
     }, 100);
   }
 
@@ -13889,6 +13937,12 @@
   function boot() {
     window.addEventListener('keydown', keydownHandler, { capture: true, passive: false });
 
+    // oculist-l9sg: registered once here, for the page's whole lifetime, deliberately
+    // separate from handleResize's own listener (added/removed with the overlay itself in
+    // __ocToggle/__ocDestroy below). A test waiting on a resize needs a count that keeps
+    // advancing across toggles rather than resetting on every open/close.
+    window.addEventListener('resize', function () { resizeEventCount++; }, { passive: true });
+
     window.__ocToggle = function () {
       // A detached wrap means an SPA swapped the body out from under us. Tear the stale
       // state down first so this reads as "closed" and the branch below rebuilds it,
@@ -13907,6 +13961,7 @@
         maybeShowPackDiscoveryNotice();
         window.addEventListener('scroll', handleScroll, { passive: true });
         window.addEventListener('resize', handleResize, { passive: true });
+        handleResizeAttached = true;
         if (input) {
           input.focus();
           input.select();

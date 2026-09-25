@@ -45,7 +45,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -652,7 +652,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
   });
 
   test('forced fallback (oculist-aouc, oculist-q4nl): a full-width match at a small viewport, where no plan clears MARGIN on any axis, still renders with the archer and target rings clear of #match', async () => {
-    await page.setViewportSize({ width: 500, height: 180 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 180 });
     await switchToTarget('forcedTarget')();
     try {
       await scrollTargetTo('forcedTarget', 20);
@@ -700,7 +700,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       await clearBeacons();
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -938,12 +938,11 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
   });
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
-    await page.setViewportSize({ width: 500, height: 300 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
-    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
-    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo() below is just page.evaluate() reads, fast enough that without this
+    // wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER
+    // replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       await scrollTargetTo('target', 100);
 
@@ -957,7 +956,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even at a tiny viewport');
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       await scrollTargetTo('target', 200);
     }
@@ -1004,8 +1003,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
 
       await switchToTarget('resizeTarget')();
       const beforeRect = await measure('resizeTarget');
-      await page.setViewportSize({ width: 1184, height: 800 });
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1184, height: 800 });
       const afterRect = await measure('resizeTarget');
       assert.ok(
         Math.abs(afterRect.right - beforeRect.right) > 4,
@@ -1018,8 +1016,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       const clip = { x: Math.round(afterRect.left), y: Math.round(afterRect.top), width: Math.round(afterRect.width), height: Math.round(afterRect.height) };
       const baseline = await screenshotRgba(decodePage, clip);
 
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       const geom = await replay(arrowshotSnapshot);
       assert.ok(geom, 'expected a mounted arrowshot figure');
 
@@ -1032,6 +1029,9 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
         });
       });
 
+      // Deliberately raw, no waitForOverlayResizeSettled: the assertion below is the
+      // 100ms debounce window itself -- routing this through the helper would wait the
+      // window closed before sampling and prove nothing.
       await page.setViewportSize({ width: 1184, height: 800 });
       const live = await screenshotRgba(decodePage, clip);
 
@@ -1045,8 +1045,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
     } finally {
       if (decodePage) await decodePage.close();
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });

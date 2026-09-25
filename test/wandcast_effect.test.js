@@ -47,7 +47,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -698,7 +698,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
   }
 
   test('edge case (non-vacuous fallback, oculist-giy7\'s own fix): a wide match at a narrow viewport where NEITHER side fits still renders the figure clear of #match, not suppressed', async () => {
-    await page.setViewportSize({ width: 320, height: 900 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     await switchToTarget('edgeLeftTarget')();
     try {
       const measured = await measure('edgeLeftTarget');
@@ -724,7 +724,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       await clearBeacons();
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -738,7 +738,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
     // wand tip itself and never engages this path at all (revealOffset stays 0) -- 68px is the
     // minimum bump inside the same non-suppressed plateau that actually exercises oculist-wkfc's
     // fix, not just its absence.
-    await page.setViewportSize({ width: 320, height: 900 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     await switchToTarget('edgeLeftTarget')();
     try {
       const measured = await measure('edgeLeftTarget');
@@ -771,7 +771,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       await clearBeacons();
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -783,7 +783,12 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
     // is what actually determines rx, not rawRx. Verified by the sanity check below (matchClearanceFloor >
     // min(rawRx, rxViewportCap)), computed from the SAME formula content.js uses (duplicated
     // here, not imported, same discipline as predict() above).
-    await page.setViewportSize({ width: 320, height: 900 });
+    //
+    // oculist-l9sg: this resize had no settle wait at all before switchToTarget() below --
+    // proven to matter under a mutated (slower) debounce, since switchToTarget()'s own
+    // scroll-into-view can otherwise race this resize's still-pending trailing
+    // repositionActiveOverlays().
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     await switchToTarget('rxEdgeTarget')();
     try {
       const measured = await measure('rxEdgeTarget');
@@ -826,7 +831,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       await clearBeacons();
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -873,8 +878,8 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       // there," not a stale pre-resize snapshot.
       await switchToTarget('resizeTarget')();
       const beforeRect = await measure('resizeTarget');
-      await page.setViewportSize({ width: 1184, height: 800 });
-      await page.waitForTimeout(200); // let the debounced overlay settle -- this baseline must be genuinely post-transition
+      // let the debounced overlay settle -- this baseline must be genuinely post-transition
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1184, height: 800 });
       const afterRect = await measure('resizeTarget');
       assert.ok(
         Math.abs(afterRect.right - beforeRect.right) > 4,
@@ -888,8 +893,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       const baseline = await screenshotRgba(decodePage, clip);
 
       // Restore to the pre-resize viewport and fire the effect for real.
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       const geom = await replay(wandcastSnapshot);
       assert.ok(geom, 'expected a mounted wandcast figure');
 
@@ -917,8 +921,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
     } finally {
       if (decodePage) await decodePage.close();
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -940,8 +943,8 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
 
       await switchToTarget('resizeTarget')();
       const beforeRect = await measure('resizeTarget');
-      await page.setViewportSize({ width: 1160, height: 800 });
-      await page.waitForTimeout(200); // let the debounced overlay settle -- this baseline must be genuinely post-transition
+      // let the debounced overlay settle -- this baseline must be genuinely post-transition
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1160, height: 800 });
       const afterRect = await measure('resizeTarget');
       assert.ok(
         Math.abs(afterRect.right - beforeRect.right) > 4,
@@ -951,8 +954,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       const baseline = await screenshotRgba(decodePage, clip);
 
       for (const t of TIMES) {
-        await page.setViewportSize(VIEWPORT);
-        await page.waitForTimeout(200);
+        await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
         const geom = await replay(wandcastSnapshot);
         assert.ok(geom, `expected a mounted wandcast figure before the t=${t} check`);
 
@@ -980,14 +982,13 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
     } finally {
       if (decodePage) await decodePage.close();
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
 
   test('edge case (genuine suppression, oculist-giy7\'s own guard): a wide match at a narrow viewport where the clamped painted bounds truly overlap #match suppresses entirely -- zero elements, proven by census', async () => {
-    await page.setViewportSize({ width: 320, height: 900 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     await switchToTarget('edgeRightTarget')();
     try {
       const measured = await measure('edgeRightTarget');
@@ -1020,7 +1021,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       assert.strictEqual(after, before, 'the match DOM must never be mutated, even when the effect suppresses itself');
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
