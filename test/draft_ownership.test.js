@@ -527,6 +527,48 @@ describe('Draft input vs. active chip ownership', () => {
     assert.ok(matchTexts.every((t) => t === 'dog'), 'the live highlight registry must not still hold "cat"\'s stale ranges');
   });
 
+  // oculist-njlo: with no chips, isDraftActive() is true for a lone draft search
+  // (activeTermIndex is -1, so termRanges[activeTermIndex] is undefined and searchRanges,
+  // a real array, can never === it) — so rescanAfterMutation()'s draft branch used to run
+  // performListSearch() (whose implicit-lastTerm branch, oculist-l6m.15, throws its own
+  // scan's Ranges away without ever writing them into the module-level termRanges) and
+  // then performDraftSearch(lastTerm) right after it: two full buildPageIndex() DOM
+  // traversals per mutation, in the single most common case (a lone search, no chips
+  // committed yet). Only performDraftSearch()'s scan is ever actually shown; the guard
+  // this test pins skips the redundant first one.
+  test('a mutation rescan with no chips and a lone draft search builds the page index exactly once (oculist-njlo)', async () => {
+    await typeDraft('cat');
+    await waitForMatchTexts('cat');
+
+    await evalInContentScript('window.__ocTest.resetBuildPageIndexCallCount()');
+
+    const mutationBefore = await armMutationRescanCounter();
+    await page.evaluate(() => {
+      const marker = document.createElement('span');
+      marker.textContent = 'trigger-rescan';
+      document.body.appendChild(marker);
+    });
+    await waitForMutationRescan(mutationBefore);
+
+    const buildCalls = await evalInContentScript('window.__ocTest.getBuildPageIndexCallCount()');
+    assert.strictEqual(
+      buildCalls,
+      1,
+      `a no-chip lone-search mutation rescan must build the page index exactly once, not twice (got ${buildCalls})`
+    );
+
+    // The fix must not cost any correctness: the draft's own highlight/count still land.
+    const matchTexts = await rangeTexts('oculist-match');
+    assert.strictEqual(matchTexts.length, 3, 'the draft\'s own matches must still be correct after the fix');
+    assert.ok(matchTexts.every((t) => t === 'cat'));
+    // rescanAfterMutation() clamps activeIndex to 0 and calls highlightActiveRange() when
+    // the pre-mutation draft had no active match (previousDraftIndex -1, its very first
+    // scan) — the same "0 of N" placeholder -> "1 of N" jump every first navigation makes,
+    // unrelated to this fix.
+    const countText = (await page.locator(COUNT).textContent()).trim();
+    assert.match(countText, /^1 of 3$/, `expected "1 of 3", got "${countText}"`);
+  });
+
   // oculist-3p87: a DOM mutation while a real draft (not aliased to any chip's
   // termRanges) is in flight must rescan the draft's own term, not the working list —
   // the mutation observer's rescanAfterMutation() used to call performListSearch()

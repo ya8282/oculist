@@ -376,6 +376,13 @@
   // registry), so it needs no matching lastTerm hook.
   window.__ocTest.getDebounceTimer = function () { return debounceTimer; };
 
+  // Same test-reachability reasoning as getDebounceTimer above, for buildPageIndexCallCount
+  // (declared next to the working-list state further down): lets oculist-njlo's regression
+  // test assert a mutation rescan builds the page index exactly once in the no-chip
+  // lone-search case, rather than inferring it from timing.
+  window.__ocTest.getBuildPageIndexCallCount = function () { return buildPageIndexCallCount; };
+  window.__ocTest.resetBuildPageIndexCallCount = function () { buildPageIndexCallCount = 0; };
+
   // Same test-reachability reasoning as getDebounceTimer above: overlayResizeTimer/
   // resizeEventCount/settledResizeEvent (declared further down, near handleResize) drive
   // the 100ms resize debounce. None of the three alone proves a specific resize has been
@@ -1091,6 +1098,10 @@
   var activeTermIndex  = -1;
   var termRanges       = [];
   var termStarved      = [];
+  // Counts real buildPageIndex() calls (oculist-njlo) — the expensive full-DOM
+  // traversal every scan pays for. Exposed read-only via window.__ocTest.getBuildPageIndexCallCount
+  // so a test can assert a mutation rescan costs exactly one, not two.
+  var buildPageIndexCallCount = 0;
   // Set by every writer that commits a real user action against the working list this
   // mount (add/reactivate a chip, remove a chip, load a saved list) — never inferred from
   // workListTerms.length, because a user who adds then removes a chip before the mount's
@@ -9666,6 +9677,8 @@
   // and the text-node offset maps needed to resolve match ranges. Called once
   // per scan (not once per term) so multiple terms can share the same index.
   function buildPageIndex() {
+    buildPageIndexCallCount++;
+
     var flatText = '';
     var textNodeMaps = [];
 
@@ -10313,13 +10326,28 @@
       // DOM: restoreActiveChip() (what runs when the draft is later cleared) only reads
       // the cached termRanges, it never rescans, so leaving them stale here would surface
       // as a wrong count/highlight the moment the draft ends, not just during it.
-      // performListSearch() then performDraftSearch(lastTerm) back to back — both fully
+      // performListSearch() (only when chips exist, see below) then performDraftSearch(lastTerm) back to back — both fully
       // synchronous, no await between them — refreshes termRanges/renderChipRow/the dim
       // registry first and then immediately re-asserts the draft's own oculist-match/
       // count/nav-enabled state over it, so the chip-owned intermediate state this
       // produces is never actually painted.
+      //
+      // Skipped entirely when workListTerms is empty (oculist-njlo): with no chips,
+      // performListSearch() takes its terms.length === 0 branch and substitutes
+      // [lastTerm] as an implicit term (oculist-l6m.15) — but that implicit scan's
+      // Ranges are deliberately never written into the module-level termRanges (there is
+      // no real chip to attribute them to), and every other thing it sets (searchRanges,
+      // the oculist-match/count/nav state, checkSiteOverride's notice) is unconditionally
+      // overwritten by the performDraftSearch(lastTerm) call right below, which reaches
+      // the identical checkSiteOverride outcome from its own fresh scan. The only thing
+      // performListSearch() does here that performDraftSearch() does not is
+      // renderChipRow(), which is a no-op with zero chips (it just re-hides an already-
+      // hidden row — see its own workListTerms.length === 0 branch). So with no working
+      // list, this second full buildPageIndex() traversal is pure waste; skipping it
+      // saves an entire duplicate DOM scan on every mutation rescan of the common
+      // lone-search, no-chips case.
       var previousDraftIndex = activeIndex;
-      performListSearch();
+      if (workListTerms.length > 0) performListSearch();
       performDraftSearch(lastTerm);
       if (searchRanges.length > 0) {
         activeIndex = Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
