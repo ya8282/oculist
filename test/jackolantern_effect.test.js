@@ -28,7 +28,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -625,12 +625,11 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   });
 
   test('viewport edges: at a small 380x220 viewport, the actual render matches the same fit computation the effect itself uses', async () => {
-    await page.setViewportSize({ width: 380, height: 220 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- the scroll below is just page.evaluate() reads, fast enough that without
-    // this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire
-    // AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // the scroll below is just page.evaluate() reads, fast enough that without this wait the
+    // trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER replay()'s
+    // own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 380, height: 220 });
     try {
       const targetDocY = await page.evaluate(() => {
         const r = document.getElementById('target').getBoundingClientRect();
@@ -670,7 +669,12 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       assert.ok(withinViewport.bottom <= withinViewport.vh + 2, `pumpkin's bottom edge (${withinViewport.bottom}) must stay within the ${withinViewport.vh}px-tall viewport`);
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      // oculist-l9sg: this restore had no resize-settle wait at all before the fixed 200ms
+      // scroll buffer below -- proven to matter under a mutated (slower) debounce: the
+      // 200ms buffer was only ever covering the scroll-event race it documents, not this
+      // resize's own trailing repositionActiveOverlays(), so a slow-enough debounce leaks
+      // into the NEXT test the same way the scroll race this comment already describes does.
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       // A programmatic scrollTo() dispatches its own 'scroll' event asynchronously, on the
       // browser's own schedule -- not necessarily before this test function returns.

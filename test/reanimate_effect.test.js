@@ -45,7 +45,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -498,13 +498,11 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
 
   test('degenerate fallback (neither side fits): an extreme narrow-viewport/wide-match scenario still lands on the right and never occludes the match', async () => {
     await switchToTarget('degenerateTarget')();
-    await page.setViewportSize({ width: 320, height: 900 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo()/measure() below are just page.evaluate() reads, fast
-    // enough that without this wait the trailing repositionActiveOverlays() ->
-    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
-    // down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo()/measure() below are just page.evaluate() reads, fast enough that
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     try {
       await scrollTargetTo('degenerateTarget', 100);
       const before = await page.evaluate(() => document.getElementById('degenerateTarget').outerHTML);
@@ -546,16 +544,15 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
 
   test('degenerate fallback at Beacon Size XL in a 320px viewport (oculist-mjv1): document.documentElement.scrollWidth never grows past its pre-fire baseline for the whole run, and the match still stays uncovered', async () => {
     await switchToTarget('degenerateTarget')();
-    await page.setViewportSize({ width: 320, height: 900 });
     // Same debounce wait as the sibling degenerate-fallback test above (oculist-f7vx).
-    await page.waitForTimeout(200);
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     let sizedXl = false;
     let hidLeftFallback = false;
     try {
@@ -657,7 +654,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
         });
       }
       if (sizedXl) await setVisionSettings({ beaconSize: 'm' });
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });
@@ -933,12 +930,11 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
   });
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
-    await page.setViewportSize({ width: 500, height: 300 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
-    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
-    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo() below is just page.evaluate() reads, fast enough that without this
+    // wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER
+    // replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       await scrollTargetTo('target', 100);
 
@@ -961,7 +957,10 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even at a tiny viewport');
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      // oculist-l9sg: this restore had no wait at all -- proven to matter under a mutated
+      // (slower) debounce, since the NEXT test's own setup can otherwise race this resize's
+      // still-pending trailing repositionActiveOverlays().
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     }

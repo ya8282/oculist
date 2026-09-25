@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -332,7 +332,7 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
   });
 
   test('placement: lands to the right of the match by default, with plenty of room', async () => {
-    await page.setViewportSize({ width: 1400, height: 800 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1400, height: 800 });
     try {
       const geom = await replay(page, figureSnapshot);
       assert.ok(geom, 'expected a mounted figure');
@@ -346,7 +346,7 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
         'a right-landed figure must start at or past the match\'s own right edge'
       );
     } finally {
-      await page.setViewportSize({ width: 1400, height: 800 });
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1400, height: 800 });
     }
   });
 
@@ -355,12 +355,10 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
     // text) — a 650px-wide viewport leaves only ~15px past the match's own right edge
     // (nowhere near the figure's own clearance requirement), while ~500px remains to the
     // match's left, comfortably enough for the mirrored landing to fit.
-    await page.setViewportSize({ width: 650, height: 800 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- without this wait the trailing repositionActiveOverlays() ->
-    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
-    // down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 650, height: 800 });
     try {
       const geom = await replay(page, figureSnapshot);
       assert.ok(geom, 'expected a mounted figure even with the right side unavailable');
@@ -374,13 +372,17 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
         'a left-landed figure must end at or before the match\'s own left edge'
       );
     } finally {
-      await page.setViewportSize({ width: 1400, height: 800 });
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1400, height: 800 });
     }
   });
 
   test('placement: falls back to a rendered (unmirrored) landing rather than disappearing when neither side fits', async () => {
     const page2 = await ctx.newPage();
     try {
+      // Deliberately raw, no waitForOverlayResizeSettled: page2 has not navigated yet, so
+      // no content script (and no window.__ocTest) is attached to poll, and evalInContentScript
+      // above is wired to the suite's shared `page`/`client`, not page2 -- there is no resize
+      // debounce running here to race against, only a plain pre-navigation viewport set.
       await page2.setViewportSize({ width: 220, height: 400 });
       await page2.goto(origin + 'narrow');
       await openFinder(page2);
