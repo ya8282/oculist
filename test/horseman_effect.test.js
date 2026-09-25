@@ -51,7 +51,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -405,12 +405,11 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('viewport edges: at a small 500x300 viewport, the rider\'s rendered box stays on screen and the match glyphs stay untouched', async () => {
-    await page.setViewportSize({ width: 500, height: 300 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- the scroll below is just page.evaluate() reads, fast enough that without
-    // this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire
-    // AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // the scroll below is just page.evaluate() reads, fast enough that without this wait the
+    // trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER replay()'s
+    // own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       const targetDocY = await page.evaluate(() => {
         const r = document.getElementById('target').getBoundingClientRect();
@@ -440,9 +439,8 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
       assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even at a tiny viewport');
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
-      await new Promise((resolve) => setTimeout(resolve, 200));
     }
   });
 

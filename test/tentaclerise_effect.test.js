@@ -30,7 +30,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -491,13 +491,11 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
     // No settleNavigation() here -- switchToTarget() already settled its own navigation
     // above; a pure viewport resize afterward triggers neither a scroll-into-view nor a
     // beacon, so waiting again would only add settleNavigation()'s own fixed dead time.
-    await page.setViewportSize({ width: 320, height: 900 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo()/measure() below are just page.evaluate() reads, fast
-    // enough that without this wait the trailing repositionActiveOverlays() ->
-    // cancelBeacons() can still fire AFTER replay()'s own fresh beacon mounts, tearing it
-    // down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo()/measure() below are just page.evaluate() reads, fast enough that
+    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
+    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 320, height: 900 });
     try {
       await scrollTargetTo('edgeTarget', 100);
       const before = await page.evaluate(() => document.getElementById('edgeTarget').outerHTML);
@@ -518,7 +516,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       // switchToTarget() already settles its own navigation (see settleNavigation()'s own
       // comment) before returning.
       await switchToTarget('target')();
@@ -671,13 +669,12 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
     // fixed dead time against this test's own POLL_TIMEOUT budget for no reason (measured:
     // this was the test that once brushed a ~5045ms near-miss against the unscaled 5000ms
     // POLL_TIMEOUT).
-    await page.setViewportSize({ width: 500, height: 300 });
     // A much cheaper, separate wait than settleNavigation() above: let content.js's own
     // 100ms resize debounce (overlayResizeTimer) settle before replaying. scrollTargetTo()/
     // measure() below are just page.evaluate() reads, fast enough that without this wait the
     // trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER replay()'s
     // own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       await scrollTargetTo('target', 100);
 
@@ -717,13 +714,12 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       // first poll tick; settleNavigation()'s own scrollend-or-750ms floor would only add
       // dead time here for no reason (same reasoning as this test's own opening, above).
       await evalInContentScript('window.__ocTest.cancelBeacons()');
-      await page.setViewportSize(VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
-      // Let the restore resize's own 100ms debounce (overlayResizeTimer) settle too -- the
+      // Waits out the restore resize's own 100ms debounce (overlayResizeTimer) too -- the
       // NEXT test's replay() can otherwise mount its own fresh beacon inside this window and
       // have it torn down by this restore's trailing repositionActiveOverlays() (oculist-f7vx).
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     }
   });
 
