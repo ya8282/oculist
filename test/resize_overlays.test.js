@@ -145,6 +145,9 @@ describe('Low Vision overlays survive a window resize', () => {
     assert.ok(before, 'expected the Low Vision match label to be drawn');
     assert.ok(Math.abs(before.dx) < 6, `label should start centered on the match, dx=${before.dx}`);
 
+    // Deliberately raw, no waitForOverlayResizeSettled: this file has no CDP session
+    // (evalInContentScript is unavailable), and the waitForFunction poll below already
+    // covers the resize debounce.
     await page.setViewportSize({ width: 700, height: 800 });
     // Poll for the real post-resize state (the 100ms resize debounce, plus the label's
     // own fade-in) rather than guessing "debounce + fade-in" as a wall-clock number.

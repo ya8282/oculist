@@ -27,7 +27,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForOverlayResizeSettled } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -281,7 +281,7 @@ describe('repositionActiveOverlays() does not replay the accessibility overlays\
 
     await armEntranceProbe(BORDER_MATCH_FN);
     // handleResize() (content.js) debounces 100ms before calling repositionActiveOverlays().
-    await page.setViewportSize({ width: 900, height: 800 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 900, height: 800 });
     const probe = await waitForEntranceProbe();
 
     assert.strictEqual(
@@ -294,7 +294,9 @@ describe('repositionActiveOverlays() does not replay the accessibility overlays\
       `a resize-driven border redraw's computed opacity must already be full the instant it lands, got ${probe.opacity}`
     );
 
-    // Restore the viewport so later tests in this file see the same layout they expect.
+    // Restore the viewport to the describe's 1200x800 default.
+    // Deliberately raw, no waitForOverlayResizeSettled: this is the last test in the file,
+    // so nothing after it depends on the resize having settled.
     await page.setViewportSize({ width: 1200, height: 800 });
   });
 });

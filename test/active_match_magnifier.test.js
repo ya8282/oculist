@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, TIMEOUT_SCALE } = require('./helpers/wait');
+const { POLL_TIMEOUT, TIMEOUT_SCALE, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -566,7 +566,7 @@ describe('Active-match magnifier overlay', () => {
     assert.ok(before, 'expected the magnifier to be drawn');
     assert.ok(Math.abs(before.dx) < 6, `card should start centered on the match, dx=${before.dx}`);
 
-    await page.setViewportSize({ width: 700, height: 800 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 700, height: 800 });
 
     // Poll for the real post-resize state (the 100ms resize debounce in content.js) rather
     // than sleeping a guessed duration.
@@ -600,7 +600,7 @@ describe('Active-match magnifier overlay', () => {
     assert.ok(Math.abs(after.dx) < 6, `card drifted off the match after resize, dx=${after.dx}`);
 
     // Restore the viewport so later tests in this file see the same layout they expect.
-    await page.setViewportSize({ width: 1200, height: 800 });
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1200, height: 800 });
     await page.waitForFunction(
       (args) => {
         const target = document.getElementById(args.targetId);
