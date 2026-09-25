@@ -450,6 +450,9 @@ describe('Pack discovery notice: settings-panel height cap accounts for the noti
 
   test('the same holds at a shorter, 600px viewport (the overflow is viewport-height independent)', async () => {
     try {
+      // Deliberately raw, no waitForOverlayResizeSettled: the overlay is closed here (the
+      // previous test's finally already ran), so handleResize()'s debounce has nothing to
+      // reposition -- openSettingsWithNoticeShowing() below already polls for the panel.
       await page.setViewportSize({ width: 1280, height: 600 });
       await openSettingsWithNoticeShowing();
 
@@ -460,6 +463,8 @@ describe('Pack discovery notice: settings-panel height cap accounts for the noti
       );
     } finally {
       await closeOverlayFully(page);
+      // Deliberately raw, no waitForOverlayResizeSettled: overlay is closed, this only
+      // restores the viewport for the next test in this describe.
       await page.setViewportSize({ width: 1280, height: 800 });
     }
   });

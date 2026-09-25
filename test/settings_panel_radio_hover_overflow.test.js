@@ -126,6 +126,9 @@ describe('Settings panel row hover never opens a horizontal scrollbar (oculist-n
 
   for (const viewport of VIEWPORTS) {
     test(`hovering a Highlight Effect row at ${viewport.label} keeps .oc-radio-list within its own scroll bounds`, async () => {
+      // Deliberately raw, no waitForOverlayResizeSettled: this file has no CDP session,
+      // and this viewport change is setup for a CSS overflow measurement, not exercising
+      // the resize debounce path.
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await openSettings();
 
@@ -152,6 +155,9 @@ describe('Settings panel row hover never opens a horizontal scrollbar (oculist-n
     });
 
     test(`hovering a Packs row at ${viewport.label} keeps .oc-checkbox-list within its own scroll bounds`, async () => {
+      // Deliberately raw, no waitForOverlayResizeSettled: this file has no CDP session,
+      // and this viewport change is setup for a CSS overflow measurement, not exercising
+      // the resize debounce path.
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await openSettings();
 
