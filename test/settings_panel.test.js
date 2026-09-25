@@ -577,5 +577,175 @@ describe('Oculist Preference Panel Tests', () => {
       assert.strictEqual(activeRowsRealChange[0].getAttribute('data-oc-key'), 'effect:trail', 'The active effect row should reflect the genuine change to trail');
     });
 
+    // oculist-gw7b: makeRadioList's grouping contract in isolation — synthetic items and
+    // an explicitly empty group, so this does not depend on a second real pack shipping.
+    test('makeRadioList groups items under a per-group subheading, keeps built-ins first and ungrouped, and skips an entirely empty group', () => {
+      createDOMEnvironment();
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const code = fs.readFileSync(codePath, 'utf8');
+      eval(code);
+
+      const makeRadioList = global.window.__ocTest.makeRadioList;
+      assert.strictEqual(typeof makeRadioList, 'function', 'content.js should expose the makeRadioList test hook');
+
+      const items = [
+        { value: 'core-a', label: 'Alpha' },
+        { value: 'core-b', label: 'Bravo' },
+        { value: 'hw-a', label: 'Reanimate' },
+        { value: 'hw-b', label: 'Batflight' }
+      ];
+      const groups = [
+        { id: 'halloween', label: 'Halloween', values: ['hw-b', 'hw-a'] },
+        // An enabled-but-nothing-available pack: must contribute no heading and no wrapper.
+        { id: 'empty-pack', label: 'Empty Pack', values: [] }
+      ];
+
+      const list = makeRadioList(items, 'core-a', () => {}, false, 'effect', groups);
+
+      const headings = Array.from(list.querySelectorAll('.oc-radio-group-heading')).map(h => h.textContent.trim());
+      assert.deepStrictEqual(headings, ['Halloween'], 'only the non-empty group renders a subheading; the empty group is skipped entirely');
+
+      const groupWrappers = list.querySelectorAll('.oc-radio-group');
+      assert.strictEqual(groupWrappers.length, 1, 'exactly one role=group wrapper, for the one non-empty group');
+      assert.strictEqual(groupWrappers[0].getAttribute('role'), 'group');
+      assert.strictEqual(
+        groupWrappers[0].getAttribute('aria-labelledby'),
+        list.querySelector('.oc-radio-group-heading').id,
+        'the group wrapper must reference its own subheading'
+      );
+
+      // Non-interactive: the heading and its wrapper are never Tab stops, so native Tab
+      // order still sees only the flat sequence of .oc-radio-item buttons, unchanged by
+      // grouping.
+      const heading = list.querySelector('.oc-radio-group-heading');
+      assert.strictEqual(heading.tagName, 'DIV');
+      assert.strictEqual(heading.getAttribute('tabindex'), null);
+      assert.strictEqual(groupWrappers[0].getAttribute('tabindex'), null);
+
+      // Built-ins render first, ungrouped, ahead of the subheading.
+      const children = Array.from(list.children);
+      const headingIdx = children.indexOf(heading);
+      assert.strictEqual(headingIdx, 2, 'both built-ins must render before the first subheading');
+      children.slice(0, headingIdx).forEach((c) => {
+        assert.ok(c.classList.contains('oc-radio-item'), 'every row before the first subheading must be an ungrouped built-in row');
+      });
+
+      // Rows within a group render in the order the caller supplied via groups[].values —
+      // sorting is the caller's job, not makeRadioList's.
+      const groupRowLabels = Array.from(groupWrappers[0].querySelectorAll('.oc-radio-item'))
+        .map((r) => r.textContent.replace(/[●○]/g, '').trim());
+      assert.deepStrictEqual(groupRowLabels, ['Batflight', 'Reanimate'], 'group rows render in groups[].values order');
+
+      // Still a single radio group: every row (built-in or grouped) shares the same
+      // groupKey-prefixed data-oc-key convention, and only one row is ever active.
+      const keys = Array.from(list.querySelectorAll('[data-oc-key]')).map((el) => el.getAttribute('data-oc-key'));
+      assert.deepStrictEqual(keys, ['effect:core-a', 'effect:core-b', 'effect:hw-b', 'effect:hw-a']);
+
+      const target = list.querySelector('[data-oc-key="effect:hw-a"]');
+      target.click();
+      assert.ok(target.classList.contains('active'), 'clicking a grouped row selects it');
+      assert.strictEqual(
+        list.querySelectorAll('.oc-radio-item.active').length,
+        1,
+        'exactly one row is active list-wide, across the subheading boundary'
+      );
+    });
+
+    // oculist-gw7b: integration coverage through the real Highlight Effect field —
+    // packLabel(), knownPacks() order (not alphabetical-by-label), and per-group
+    // alphabetical sorting — using a content.js copy patched in-memory with a second
+    // synthetic pack ('aurora') appended after the real Halloween entries, so pack-vs-pack
+    // ordering is actually exercised (the real registry ships only one pack today). Same
+    // in-memory string-patch-then-eval idiom this file already uses to load content.js;
+    // extension/content.js on disk is never written to.
+    test('the Highlight Effect field groups by pack: no subheading while every pack is disabled, one subheading per enabled pack afterward, ordered like knownPacks() and alphabetical within each group', () => {
+      createDOMEnvironment();
+      const codePath = path.join(__dirname, '../extension/content.js');
+      const original = fs.readFileSync(codePath, 'utf8');
+      const target = "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }\n  };";
+      assert.ok(
+        original.includes(target),
+        'fixture setup: expected the effectsRegistry closing entry not found — did its shape change?'
+      );
+      const patched = original.replace(
+        target,
+        "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }, " +
+          "auroraGamma: { label: 'Aurora Gamma', run: animateCyberVision, pack: 'aurora' }, " +
+          "auroraAlpha: { label: 'Aurora Alpha', run: animateCyberVision, pack: 'aurora' }\n  };"
+      );
+      assert.notStrictEqual(patched, original);
+
+      eval(patched);
+
+      global.window.__ocToggle();
+      const wrapRoot = global.document.getElementById('oc-wrap').shadowRoot;
+      const gearBtn = wrapRoot.querySelector('button[title^="Options"]');
+
+      // Phase 1: default state, every pack disabled (settings.enabledPacks starts []) —
+      // no subheading anywhere; both packs' groups are empty.
+      gearBtn.click();
+      let settingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+      assert.strictEqual(
+        settingsPanel.querySelectorAll('.oc-radio-group-heading').length,
+        0,
+        'with every pack disabled, no pack subheading should render at all'
+      );
+      gearBtn.click(); // close, so the next open rebuilds fresh off the new enabledPacks
+
+      // Phase 2: enable both packs — 'halloween' precedes 'aurora' in knownPacks() /
+      // registry insertion order, while 'aurora' precedes 'halloween' alphabetically by
+      // label — so subheading order below proves it follows knownPacks(), not
+      // alphabetical-by-label.
+      global.window.__ocTest.setEnabledPacksRaw(['halloween', 'aurora']);
+      gearBtn.click();
+      settingsPanel = wrapRoot.querySelector('#oc-settings-panel');
+
+      const headings = Array.from(settingsPanel.querySelectorAll('.oc-radio-group-heading')).map((h) => h.textContent.trim());
+      assert.deepStrictEqual(
+        headings,
+        ['Halloween', 'Aurora'],
+        'pack subheadings must be ordered like knownPacks() (registry insertion order), not alphabetically by pack label'
+      );
+
+      const list = settingsPanel.querySelector('.oc-radio-list');
+      const groupWrappers = Array.from(list.querySelectorAll('.oc-radio-group'));
+      assert.strictEqual(groupWrappers.length, 2, 'one role=group wrapper per enabled, non-empty pack');
+
+      const auroraWrapper = groupWrappers[1];
+      const auroraLabels = Array.from(auroraWrapper.querySelectorAll('.oc-radio-item')).map((r) =>
+        r.textContent.replace(/[●○]/g, '').trim()
+      );
+      assert.deepStrictEqual(
+        auroraLabels,
+        ['Aurora Alpha', 'Aurora Gamma'],
+        'effects within a pack group must be alphabetical by label, regardless of registry insertion order'
+      );
+
+      // Built-ins still render first, ungrouped, ahead of any subheading.
+      const children = Array.from(list.children);
+      const firstHeadingIdx = children.findIndex((c) => c.classList.contains('oc-radio-group-heading'));
+      assert.ok(firstHeadingIdx > 0, 'at least the built-ins must precede the first subheading');
+      children.slice(0, firstHeadingIdx).forEach((c) => {
+        assert.ok(c.classList.contains('oc-radio-item'), 'no group wrapper/subheading may precede the built-ins');
+      });
+
+      // Selection/constraints/saveSettings are untouched by grouping: the currently
+      // selected effect (settings.effect default 'hud', a built-in) is still marked active
+      // exactly once, list-wide.
+      const activeRows = list.querySelectorAll('.oc-radio-item.active');
+      assert.strictEqual(activeRows.length, 1, 'exactly one row must be active');
+      assert.strictEqual(activeRows[0].getAttribute('data-oc-key'), 'effect:hud');
+
+      // Picking a grouped (pack) row still drives selection exactly like a built-in row.
+      const auroraRow = auroraWrapper.querySelector('[data-oc-key="effect:auroraAlpha"]');
+      auroraRow.click();
+      assert.ok(auroraRow.classList.contains('active'), 'clicking a grouped pack row must select it, same as a built-in row');
+      assert.strictEqual(
+        list.querySelectorAll('.oc-radio-item.active').length,
+        1,
+        'exactly one row remains active after selecting a grouped row'
+      );
+    });
+
   });
 });
