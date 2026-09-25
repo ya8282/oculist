@@ -48,7 +48,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -842,12 +842,11 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
   });
 
   test('viewport edges: at a small 500x300 viewport, every rendered box stays reasonably placed and the match DOM stays untouched', async () => {
-    await page.setViewportSize({ width: 500, height: 300 });
-    // Let the resize debounce settle (content.js's own 100ms overlayResizeTimer) before
-    // replaying -- scrollTargetTo() below is just page.evaluate() reads, fast enough that
-    // without this wait the trailing repositionActiveOverlays() -> cancelBeacons() can still
-    // fire AFTER replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
-    await page.waitForTimeout(200);
+    // Waits out the resize debounce itself (content.js's own 100ms overlayResizeTimer) --
+    // scrollTargetTo() below is just page.evaluate() reads, fast enough that without this
+    // wait the trailing repositionActiveOverlays() -> cancelBeacons() can still fire AFTER
+    // replay()'s own fresh beacon mounts, tearing it down mid-flight (oculist-f7vx).
+    await waitForOverlayResizeSettled(page, evalInContentScript, { width: 500, height: 300 });
     try {
       await scrollTargetTo('target', 60);
 
@@ -861,7 +860,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
       assert.strictEqual(after, before, 'the match DOM must never be mutated by this effect, even at a tiny viewport');
     } finally {
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await page.evaluate(() => window.scrollTo(0, 0));
       await scrollTargetTo('target', 200);
     }
@@ -909,11 +908,10 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
 
       // Measure the post-widen (live, "clip") position first, at a CLEAN page (no effect), so
       // the baseline/live comparison below is apples-to-apples at the same clip.
-      await page.setViewportSize({ width: 1120, height: 800 });
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1120, height: 800 });
       await switchToTarget('resizeTarget')();
       const beforeRect = await measure('resizeTarget');
-      await page.setViewportSize({ width: 1200, height: 800 });
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1200, height: 800 });
       const afterRect = await measure('resizeTarget');
       assert.ok(
         afterRect.right - beforeRect.right > 20,
@@ -928,8 +926,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
 
       // Fire from the NARROWER viewport, so the figure's own Px is computed from #match's
       // narrower (further-left) position -- the stale geometry this resize will expose.
-      await page.setViewportSize({ width: 1120, height: 800 });
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, { width: 1120, height: 800 });
       const geom = await replay(vineswingSnapshot);
       assert.ok(geom, 'expected a mounted vine swing figure');
       assert.strictEqual(geom.side, 'right', 'sanity check: this fixture is meant to give the right-landing branch room');
@@ -943,6 +940,9 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
         });
       });
 
+      // Deliberately raw, no waitForOverlayResizeSettled: the assertion below is the
+      // 100ms debounce window itself -- routing this through the helper would wait the
+      // window closed before sampling and prove nothing.
       await page.setViewportSize({ width: 1200, height: 800 });
       const live = await screenshotRgba(decodePage, clip);
 
@@ -956,8 +956,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
     } finally {
       if (decodePage) await decodePage.close();
       await clearBeacons();
-      await page.setViewportSize(VIEWPORT);
-      await page.waitForTimeout(200);
+      await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
       await switchToTarget('target')();
     }
   });

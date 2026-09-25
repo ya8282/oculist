@@ -96,10 +96,84 @@ async function waitForPopupReady(popup, opts = {}) {
   );
 }
 
+// content.js's own handleResize() (extension/content.js, near "function handleResize")
+// debounces repositionActiveOverlays() 100ms behind overlayResizeTimer. Call this INSTEAD
+// of page.setViewportSize(viewport) (it makes the call itself) rather than after a fixed
+// page.waitForTimeout(200): a fixed sleep can lose the race against the debounce on a
+// loaded machine.
+//
+// Two earlier designs of this helper (both oculist-l9sg, both measured wrong, not just
+// theorized) inferred "settled" from a TIME budget or from a size/count snapshot that could
+// already be stale by the time it was read:
+// - v1 treated window.innerWidth/innerHeight already matching the new size as proof
+//   handling had happened. Wrong: those flip to the new value as soon as the CDP-level
+//   resize lands, before the 'resize' event ever reaches handleResize() -- the wait
+//   returned instantly, before any debounce ran at all.
+// - v2 added a lastResizeSettledSize written by the debounce's own callback, and waited for
+//   it to match the target size. Still wrong: if an EARLIER resize's debounce was still
+//   pending when this setViewportSize landed, that earlier debounce goes on to write the
+//   new size (matching by coincidence) before the new resize event is even handled -- the
+//   wait returned early. Measured with a 1200ms handleResize delay: 4 of 9 calls returned
+//   early.
+//
+// v3 (this version) polls three facts together, none of which can be true early:
+//   1. getOverlayResizeTimer() === null -- nothing currently pending.
+//   2. getSettledResizeEvent() === getResizeEventCount() -- the debounce has actually run to
+//      completion for the MOST RECENT resize event counted, not some earlier one.
+//   3. window.innerWidth/innerHeight match the requested viewport.
+// (2) alone is still ambiguous the instant after setViewportSize returns: if the debounce
+// from a PRIOR resize had already settled before this call, count and settled can already
+// be equal, and (3) can already read true (same CDP-level flip v1 hit), even though the
+// 'resize' event this call caused has not been dispatched yet. So this helper additionally
+// requires the event count to have advanced by at least 1 since before setViewportSize was
+// called, whenever the size is actually changing -- closing exactly the gap that made (2)
+// insufficient on its own. When the size does NOT change (a same-size no-op resize, which
+// fires no 'resize' event at all), that extra requirement is skipped, so the wait can still
+// resolve immediately instead of hanging until timeout.
+//
+// v3 was still wrong for one more state (review fix, oculist-l9sg): a caller in a finally
+// block after the overlay has already closed (__ocDestroy() has run, or never opened this
+// test at all). handleResize's own 'resize' listener is only attached between __ocToggle()'s
+// open branch and __ocDestroy() -- unlike the page-lifetime listener that drives
+// resizeEventCount -- so while closed, settledResizeEvent never advances to meet
+// resizeEventCount and (2) above waits for something that can never become true, timing out
+// for no real problem. window.__ocTest.isHandleResizeAttached() tells the two states apart:
+// while detached, this only waits for the plain physical facts a torn-down handler can still
+// guarantee -- no pending timer (__ocDestroy() clears it) and the size itself has landed --
+// and skips the count/settled check entirely.
+async function waitForOverlayResizeSettled(page, evalInContentScript, viewport, opts = {}) {
+  const { timeout = POLL_TIMEOUT } = opts;
+  const before = await evalInContentScript(
+    `({ count: window.__ocTest.getResizeEventCount(), w: window.innerWidth, h: window.innerHeight })`
+  );
+  await page.setViewportSize(viewport);
+  const sizeChanging = before.w !== viewport.width || before.h !== viewport.height;
+  const minCount = before.count + (sizeChanging ? 1 : 0);
+  await waitForContentScriptValue(
+    evalInContentScript,
+    `(function () {
+       var timer = window.__ocTest.getOverlayResizeTimer();
+       var sizeOk = window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height};
+       if (!window.__ocTest.isHandleResizeAttached()) {
+         return timer === null && sizeOk;
+       }
+       var count = window.__ocTest.getResizeEventCount();
+       var settled = window.__ocTest.getSettledResizeEvent();
+       return timer === null && sizeOk && count >= ${minCount} && settled === count;
+     })()`,
+    Boolean,
+    {
+      timeout,
+      message: `overlay resize never settled at ${viewport.width}x${viewport.height}`
+    }
+  );
+}
+
 module.exports = {
   waitForCondition,
   waitForContentScriptValue,
   waitForPopupReady,
+  waitForOverlayResizeSettled,
   TIMEOUT_SCALE,
   POLL_TIMEOUT,
   LONG_TIMEOUT
