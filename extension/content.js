@@ -11044,11 +11044,37 @@
             activeImmediateDrawTimer = instantDrawTimer;
           }
         }
-        element.scrollIntoView({
-          behavior: behavior,
-          block: 'center',
-          inline: 'nearest'
-        });
+        // oculist-aebg: a parent taller than the viewport (e.g. a raw text file's single
+        // <pre>) would be centered on its own midpoint, not the match. Center the range
+        // instead: walk scrollable ancestors inner to outer, then the document. Smooth
+        // scrolls are async, so measure once and track the shift inner scrollers apply.
+        if (element.getBoundingClientRect().height > window.innerHeight) {
+          var shift = 0;
+          var centerScroll = function (sc, top, height, isDoc) {
+            var cur = isDoc ? window.scrollY : sc.scrollTop;
+            var max = sc.scrollHeight - (isDoc ? window.innerHeight : sc.clientHeight);
+            var delta = (rect.top - shift + rect.height / 2) - (top + height / 2);
+            delta = Math.max(-cur, Math.min(delta, max - cur));
+            if (!delta) return;
+            (isDoc ? window : sc).scrollBy({ top: delta, behavior: behavior });
+            shift += delta;
+          };
+          // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
+          var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
+          for (var sc = element; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement) {
+            var oy = getComputedStyle(sc).overflowY;
+            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) {
+              centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
+            }
+          }
+          centerScroll(document.scrollingElement || document.documentElement, 0, window.innerHeight, true);
+        } else {
+          element.scrollIntoView({
+            behavior: behavior,
+            block: 'center',
+            inline: 'nearest'
+          });
+        }
       }
     } else {
       // oculist-7uc: same hazard oculist-rbx fixed at the smooth-scroll branch entry above,
