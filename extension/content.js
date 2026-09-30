@@ -1132,6 +1132,11 @@
   var activeScrollDebounceTimer = null;
   // Open shadow roots (inner to outer) that also carry the capture scroll listeners.
   var activeScrollRoots = [];
+  // oculist-h1ns: a user wheel/touch/scroll key while a navigation draw is pending cancels the beacon.
+  var activeInterruptHandler = null;
+  var INTERRUPT_EVENTS = ['wheel', 'touchstart', 'keydown'];
+  var SCROLL_KEYS = ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
+  var FIND_INPUT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
   // oculist-9tse: flat-tree parent: slot first (nested slots keep stepping), then the light parent,
   // then the host across an open shadow root. Closed roots give no assignedSlot: out of scope.
   var flatTreeParent = function (n) {
@@ -1179,6 +1184,10 @@
       activeScrollDebounceHandler = null;
     }
     activeScrollRoots = [];
+    if (activeInterruptHandler) {
+      INTERRUPT_EVENTS.forEach(function (t) { window.removeEventListener(t, activeInterruptHandler, { capture: true }); });
+      activeInterruptHandler = null;
+    }
     if (activeScrollDebounceTimer) {
       clearTimeout(activeScrollDebounceTimer);
       activeScrollDebounceTimer = null;
@@ -10939,7 +10948,7 @@
   }
 
   // Display the active match with the high-visibility visual animation
-  function highlightActiveRange(shouldAnimate, skipScroll) {
+  function highlightActiveRange(shouldAnimate, skipScroll, isRetry) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
 
     var activeRange = searchRanges[activeIndex];
@@ -10965,18 +10974,22 @@
       }
       return null;
     };
-    var isFullyInViewport = (
-      rect.top >= 0 &&
-      rect.left >= 0 &&
-      rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-      rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-    );
-    // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
-    // (vertically) the client box of every overflow scroller up its flat-tree chain.
-    for (var cs = scrollerOf(activeRange.startContainer.parentElement); isFullyInViewport && cs; cs = scrollerOf(flatTreeParent(cs))) {
-      var cb = cs.getBoundingClientRect();
-      if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) isFullyInViewport = false;
-    }
+    var isFullyVisible = function (rect) {
+      var inView = (
+        rect.top >= 0 &&
+        rect.left >= 0 &&
+        rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+        rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+      );
+      // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
+      // (vertically) the client box of every overflow scroller up its flat-tree chain.
+      for (var cs = scrollerOf(activeRange.startContainer.parentElement); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
+        var cb = cs.getBoundingClientRect();
+        if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) inView = false;
+      }
+      return inView;
+    };
+    var isFullyInViewport = isFullyVisible(rect);
 
     if (!isFullyInViewport && !skipScroll) {
       var element = activeRange.startContainer.parentElement;
@@ -11047,9 +11060,22 @@
                 return false;
               }
             };
+            // oculist-h1ns: relevant targets that scrolled and have not yet ended. The draw waits
+            // for all of them: an inner scroller can settle with the match already visible while
+            // the window still moves it (the retry alone would draw early).
+            var scrollingTargets = [];
+            var scrollTarget = function (e) {
+              var t = e && e.target;
+              return !t || t === window ? document : t;
+            };
             var onScrollEnd = function (e) {
               if (!isRelevantScroll(e)) return;
               if (scrollEndFired) return;
+              if (e) {
+                var ti = scrollingTargets.indexOf(scrollTarget(e));
+                if (ti >= 0) scrollingTargets.splice(ti, 1);
+                if (scrollingTargets.length) return;
+              }
               scrollEndFired = true;
               if (scrollTimeout) clearTimeout(scrollTimeout);
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
@@ -11064,7 +11090,14 @@
               if (activeScrollRoots === scrollRoots) activeScrollRoots = [];
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
               if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
+              clearActiveScrollHandles();
               var freshRect = activeRange.getBoundingClientRect();
+              // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
+              // re-issue the navigation once, then draw wherever it ends up.
+              if (!isRetry && !isFullyVisible(freshRect)) {
+                highlightActiveRange(shouldAnimate, skipScroll, true);
+                return;
+              }
               animate(freshRect);
             };
 
@@ -11072,6 +11105,7 @@
             var scrollStarted = false;
             var onScrollEndDebounced = function (e) {
               if (!isRelevantScroll(e)) return;
+              if (e && scrollingTargets.indexOf(scrollTarget(e)) < 0) scrollingTargets.push(scrollTarget(e));
               // oculist-yl02: a smooth scroll can outlast the 600ms no-scroll fallback
               // (measured 1.2s for ~5000px); once scrolling is seen, scrollend / the
               // idle debounce govern, with a longer cap for a scroller that never idles.
@@ -11105,6 +11139,19 @@
               r.addEventListener('scrollend', onScrollEnd, true);
               r.addEventListener('scroll', onScrollEndDebounced, true);
             });
+            // oculist-h1ns: the user taking over the scroll cancels this navigation's beacon.
+            // Measured: in the always-visible find input only the arrows and Space leave the page
+            // alone (PageUp/PageDown/Home/End scroll it); in a page input/textarea every scroll key
+            // scrolls it (caret reveal), so those are interrupts. Enter is not a scroll key.
+            activeInterruptHandler = function (e) {
+              if (e.type === 'keydown') {
+                if (SCROLL_KEYS.indexOf(e.key) < 0) return;
+                var kt = e.composedPath && e.composedPath()[0];
+                if (kt && kt.classList && kt.classList.contains('oc-input') && FIND_INPUT_KEYS.indexOf(e.key) >= 0) return;
+              }
+              clearActiveScrollHandles();
+            };
+            INTERRUPT_EVENTS.forEach(function (t) { window.addEventListener(t, activeInterruptHandler, { capture: true, passive: true }); });
           } else {
             // oculist-44y: same hazard oculist-rbx/tz6/7uc fixed elsewhere in this
             // function — this bare timer had no module-level handle, so no teardown
