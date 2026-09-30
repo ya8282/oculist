@@ -1386,7 +1386,7 @@
     clearAutoScrollFlag();
 
     try {
-      window.removeEventListener('scroll', handleScroll, { passive: true });
+      window.removeEventListener('scroll', handleScroll, { passive: true, capture: true });
     } catch (e) {}
 
     try {
@@ -10994,7 +10994,7 @@
     if (!isFullyInViewport && !skipScroll) {
       var element = activeRange.startContainer.parentElement;
       if (element) {
-        triggerAutoScrollFlag();
+        triggerAutoScrollFlag(element);
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
@@ -11257,11 +11257,26 @@
   // native 'scrollend' when that fires. It still always terminates even if 'scrollend'
   // never fires: once scroll events genuinely stop arriving, the grace timer runs out on
   // its own 300ms later.
+  // oculist-qv2i: capture, so an inner scroller's non-bubbling scroll/scrollend reaches these
+  // (same reason as handleScroll's own capture). Only the viewport or a scroller up the flat-tree
+  // chain of the element the extension scrolled counts: an unrelated scroller (a ticker) must
+  // neither extend nor shorten the suppression.
+  var autoScrollElement = null;
+  function isOwnAutoScroll(e) {
+    var t = e && e.target;
+    if (!t || t === document || t === window) return true;
+    for (var n = autoScrollElement; n; n = flatTreeParent(n)) if (n === t) return true;
+    return false;
+  }
+  function onAutoScrollEnd(e) { if (isOwnAutoScroll(e)) clearAutoScrollFlag(); }
+  function onAutoScrollScroll(e) { if (isOwnAutoScroll(e)) extendAutoScrollFlag(); }
+
   function clearAutoScrollFlag() {
     isAutoScrolling = false;
+    autoScrollElement = null;
     if (autoScrollTimer) { clearTimeout(autoScrollTimer); autoScrollTimer = null; }
-    window.removeEventListener('scrollend', clearAutoScrollFlag);
-    window.removeEventListener('scroll', extendAutoScrollFlag);
+    window.removeEventListener('scrollend', onAutoScrollEnd, true);
+    window.removeEventListener('scroll', onAutoScrollScroll, true);
   }
 
   function extendAutoScrollFlag() {
@@ -11269,15 +11284,16 @@
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
-  function triggerAutoScrollFlag() {
+  function triggerAutoScrollFlag(element) {
     isAutoScrolling = true;
+    autoScrollElement = element;
     // Re-entrant-safe: a navigation superseding an already-in-flight auto-scroll removes
     // the previous listeners before re-adding, rather than accumulating duplicates.
-    window.removeEventListener('scrollend', clearAutoScrollFlag);
-    window.removeEventListener('scroll', extendAutoScrollFlag);
+    window.removeEventListener('scrollend', onAutoScrollEnd, true);
+    window.removeEventListener('scroll', onAutoScrollScroll, true);
     if (autoScrollTimer) clearTimeout(autoScrollTimer);
-    window.addEventListener('scrollend', clearAutoScrollFlag, { once: true });
-    window.addEventListener('scroll', extendAutoScrollFlag);
+    window.addEventListener('scrollend', onAutoScrollEnd, true);
+    window.addEventListener('scroll', onAutoScrollScroll, true);
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
@@ -11444,6 +11460,8 @@
     }, 100);
   }
 
+  // oculist-qv2i: any scroll counts. Capture on window reaches light-DOM scrollers only; scroll is not
+  // composed, so scrollers inside open shadow roots are not covered (page-wide root listeners: out of scope).
   function handleScroll() {
     if (isAutoScrolling) return;
     fadeActiveBeacons();
@@ -14135,7 +14153,7 @@
         // class — the two can coexist) and before the input.focus()/select() below,
         // which must remain the last word on where focus lands on open.
         maybeShowPackDiscoveryNotice();
-        window.addEventListener('scroll', handleScroll, { passive: true });
+        window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
         window.addEventListener('resize', handleResize, { passive: true });
         handleResizeAttached = true;
         if (input) {
