@@ -25,6 +25,7 @@ const PAGES = {
   area: `<!doctype html>${STYLE}<textarea id=t rows=3></textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   // oculist-u6x3: match in a fixed element clipped by the viewport bottom; the page scrolls itself.
   fixedClipped: `<!doctype html>${STYLE}<div id=f style="position:fixed;left:0;top:785px;height:40px;font:14px/18px monospace">${TERM}</div><pre id=p>${lines(300, 150).join('\n')}</pre>`,
+  wide: `<!doctype html>${STYLE}<div style="width:4000px;height:1px"></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
 
@@ -198,6 +199,37 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
         await new Promise((r) => setTimeout(r, 200));
         await page.keyboard.press(key);
         await assertBeaconAtSettledMatch(page);
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
+  // oculist-o639: keys that do not scroll the page (no horizontal overflow, caret moves in an
+  // empty textarea) are not a takeover; Cmd+G/F3 navigate with focus outside the find input.
+  const offInput = (page) => page.evaluate(() => document.activeElement.blur());
+  for (const [label, name, focus, key, takeover] of [
+    ['ArrowRight with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowRight', false],
+    ['ArrowLeft with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowLeft', false],
+    ['ArrowDown in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowDown', false],
+    ['ArrowRight in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowRight', false],
+    ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true],
+  ]) {
+    test(label + (takeover ? ' is a takeover: no beacon' : ' still draws the beacon at the match'), async () => {
+      const page = await open(name);
+      try {
+        await page.fill(INPUT, TERM);
+        await focus(page);
+        await page.keyboard.press('F3');
+        await new Promise((r) => setTimeout(r, 200));
+        await page.keyboard.press(key);
+        if (takeover) {
+          await new Promise((r) => setTimeout(r, 2500));
+          assert.ok(await page.evaluate(() => window.scrollX) > 0, 'premise: the key never scrolled the page horizontally');
+          assert.strictEqual(await page.evaluate(() => window.__beacon), null, 'beacon was drawn after a real takeover');
+        } else {
+          await assertBeaconAtSettledMatch(page);
+        }
       } finally {
         await page.close();
       }

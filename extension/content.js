@@ -11165,6 +11165,23 @@
               r.addEventListener('scrollend', onScrollEnd, true);
               r.addEventListener('scroll', onScrollEndDebounced, true);
             });
+            // oculist-o639: arrows/Space only count as a takeover when they can scroll. In a
+            // page text field they move the caret (scroll only when the field is off-screen and the caret can move);
+            // elsewhere ArrowLeft/Right need a horizontally overflowing window or scroller.
+            var keyMayScroll = function (e, kt) {
+              if (kt && (kt.isContentEditable || kt.tagName === 'TEXTAREA' || kt.tagName === 'INPUT')) {
+                var r = kt.getBoundingClientRect();
+                if (!(r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth)) return false;
+                if (e.key === ' ' || typeof kt.selectionStart !== 'number') return true;
+                var back = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+                return back ? kt.selectionStart > 0 : kt.selectionEnd < kt.value.length;
+              }
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return true;
+              var de = document.documentElement;
+              if (de.scrollWidth > de.clientWidth) return true;
+              var path = e.composedPath ? e.composedPath() : [];
+              return path.some(function (n) { return n.nodeType === 1 && n.scrollWidth > n.clientWidth; });
+            };
             // oculist-h1ns: the user taking over the scroll cancels this navigation's beacon.
             // Measured: in the always-visible find input only the arrows and Space leave the page
             // alone (PageUp/PageDown/Home/End scroll it); in a page input/textarea every scroll key
@@ -11174,6 +11191,7 @@
                 if (SCROLL_KEYS.indexOf(e.key) < 0) return;
                 var kt = e.composedPath && e.composedPath()[0];
                 if (kt && kt.classList && kt.classList.contains('oc-input') && FIND_INPUT_KEYS.indexOf(e.key) >= 0) return;
+                if (FIND_INPUT_KEYS.indexOf(e.key) >= 0 && !keyMayScroll(e, kt)) return;
               }
               clearActiveScrollHandles();
             };
