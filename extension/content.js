@@ -10329,6 +10329,19 @@
     return true;
   }
 
+  // oculist-aknk: index of the match equal to a live Range kept from before a rescan, or -1.
+  // A live Range tracks its text through unrelated inserts, so boundary equality finds the
+  // same match at its new index; a removed or replaced match collapses and never equals one.
+  function indexOfSameMatch(old) {
+    if (!old || old.collapsed) return -1;
+    for (var i = 0; i < searchRanges.length; i++) {
+      var r = searchRanges[i];
+      if (r.startContainer === old.startContainer && r.startOffset === old.startOffset &&
+          r.endContainer === old.endContainer && r.endOffset === old.endOffset) return i;
+    }
+    return -1;
+  }
+
   function rescanAfterMutation() {
     remountIfDetached();
     // Fires as long as there is either a draft term in flight or a committed working
@@ -10366,10 +10379,12 @@
       // saves an entire duplicate DOM scan on every mutation rescan of the common
       // lone-search, no-chips case.
       var previousDraftIndex = activeIndex;
+      var previousDraftRange = searchRanges[activeIndex];
       if (workListTerms.length > 0) performListSearch();
       performDraftSearch(lastTerm);
       if (searchRanges.length > 0) {
-        activeIndex = Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
+        var sameDraftIdx = indexOfSameMatch(previousDraftRange);
+        activeIndex = sameDraftIdx >= 0 ? sameDraftIdx : Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
         firstEnter = false;
         // skipScroll: a background rescan re-attaches highlights, it must not yank the
         // viewport back to the match while the user is scrolling elsewhere.
@@ -10379,9 +10394,11 @@
     }
 
     var previousActiveIndex = activeIndex;
+    var previousActiveRange = searchRanges[activeIndex];
     performListSearch();
     if (searchRanges.length > 0) {
-      activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
+      var sameIdx = indexOfSameMatch(previousActiveRange);
+      activeIndex = sameIdx >= 0 ? sameIdx : Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
       // skipScroll: a background rescan re-attaches highlights, it must not yank the
       // viewport back to the match while the user is scrolling elsewhere.
@@ -12903,9 +12920,11 @@
         // for a background DOM rescan: a plain performListSearch() call always resets
         // activeIndex to -1, which would otherwise roll a pressed next-match back to 0.
         var previousActiveIndex = activeIndex;
+        var previousActiveRange = searchRanges[activeIndex];
         performListSearch();
         if (previousActiveIndex >= 0 && searchRanges.length > 0) {
-          activeIndex = Math.min(previousActiveIndex, searchRanges.length - 1);
+          var sameIdx = indexOfSameMatch(previousActiveRange);
+          activeIndex = sameIdx >= 0 ? sameIdx : Math.min(previousActiveIndex, searchRanges.length - 1);
           firstEnter = false;
           highlightActiveRange(false, true);
         }
