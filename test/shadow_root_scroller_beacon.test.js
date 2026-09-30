@@ -22,7 +22,12 @@ const STYLE = '<style>html,body{margin:0}pre{margin:0;font:14px/18px monospace}<
 const IN_SHADOW = `<!doctype html>${STYLE}<div id=host></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<div id=m style="height:400px;overflow:auto"><pre>${TEXT.replace(/\n/g, '\\n')}</pre></div>'</script>`;
 // (ii) light-DOM scroller whose content reaches the match through a shadow host.
 const VIA_HOST = `<!doctype html>${STYLE}<div id=m style="height:400px;overflow:auto"><div id=host></div></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<pre>${TEXT.replace(/\n/g, '\\n')}</pre>'</script>`;
+// (iii) light-DOM lines slotted into a shadow scroller that wraps the <slot> (oculist-9tse).
+const SLOTTED_LINES = [];
+for (let i = 0; i < 400; i++) SLOTTED_LINES.push('<p style="margin:0;font:14px/18px monospace">line ' + i + (i === 300 ? ' ' + TERM : '') + '</p>');
+const SLOTTED = `<!doctype html>${STYLE}<script>customElements.define('x-c',class extends HTMLElement{constructor(){super();this.attachShadow({mode:'open'}).innerHTML='<div id=m style="height:400px;overflow:auto"><slot></slot></div>'}})</script><x-c id=host>${SLOTTED_LINES.join('')}</x-c>`;
 const FIXTURES = [
+  ['light-DOM text slotted into a shadow scroller', SLOTTED, () => document.getElementById('host').shadowRoot.getElementById('m')],
   ['scroller inside a shadow root', IN_SHADOW, () => document.getElementById('host').shadowRoot.getElementById('m')],
   ['light-DOM scroller around a shadow host', VIA_HOST, () => document.getElementById('m')],
 ];
@@ -93,5 +98,11 @@ for (const [name, html, getScroller] of FIXTURES) describe('beacon after a smoot
       return { beacon: window.__beacon.mid, settled: r.top + r.height / 2 };
     });
     assert.ok(Math.abs(beacon - settled) <= TOLERANCE, `beacon at ${beacon}, match settled at ${settled}`);
+    const { mid, scrollerMid } = await page.evaluate(`(() => {
+      const sc = (${getScroller})(), b = sc.getBoundingClientRect();
+      const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
+      return { mid: r.top + r.height / 2, scrollerMid: b.top + b.height / 2 };
+    })()`);
+    assert.ok(Math.abs(mid - scrollerMid) <= TOLERANCE, `match at ${mid}, scroller centre ${scrollerMid}`);
   });
 });
