@@ -1130,6 +1130,8 @@
   var activeScrollEndHandler   = null;
   var activeScrollDebounceHandler = null;
   var activeScrollDebounceTimer = null;
+  // Open shadow roots (inner to outer) that also carry the capture scroll listeners.
+  var activeScrollRoots = [];
   // oculist-44y: the bare 50ms "draw at the fresh rect" timer armed by the
   // instant-scroll-behavior branch and the fully-in-viewport branch, below. Kept
   // deliberately separate from the four handles clearActiveScrollHandles() owns rather
@@ -1163,12 +1165,15 @@
     }
     if (activeScrollEndHandler) {
       window.removeEventListener('scrollend', activeScrollEndHandler, true);
+      activeScrollRoots.forEach(function (r) { r.removeEventListener('scrollend', activeScrollEndHandler, true); });
       activeScrollEndHandler = null;
     }
     if (activeScrollDebounceHandler) {
       window.removeEventListener('scroll', activeScrollDebounceHandler, true);
+      activeScrollRoots.forEach(function (r) { r.removeEventListener('scroll', activeScrollDebounceHandler, true); });
       activeScrollDebounceHandler = null;
     }
+    activeScrollRoots = [];
     if (activeScrollDebounceTimer) {
       clearTimeout(activeScrollDebounceTimer);
       activeScrollDebounceTimer = null;
@@ -11002,11 +11007,19 @@
             var scrollEndFired = false;
             // Capture sees every element's scroll; only the viewport or a scroller holding
             // the match counts. Timer calls pass no event and always count.
+            // Scroll events are not composed: a scroller inside an open shadow root never
+            // reaches window, so listen on each root up the host chain (closed roots: out of scope).
+            var scrollRoots = [];
+            for (var rn = activeRange.commonAncestorContainer.getRootNode(); rn instanceof ShadowRoot; rn = rn.host.getRootNode()) scrollRoots.push(rn);
             var isRelevantScroll = function (e) {
               var t = e && e.target;
               if (!t || t === document || t === window) return true;
               try {
-                return !!(t.contains && activeRange && t.contains(activeRange.commonAncestorContainer));
+                // Node.contains stops at shadow boundaries; cross them via host (open roots only).
+                for (var n = activeRange && activeRange.commonAncestorContainer; n; n = n.parentNode || n.host) {
+                  if (n === t) return true;
+                }
+                return false;
               } catch (err) {
                 return false;
               }
@@ -11021,6 +11034,11 @@
               if (activeScrollDebounceTimer === scrollDebounceTimer) activeScrollDebounceTimer = null;
               window.removeEventListener('scrollend', onScrollEnd, true);
               window.removeEventListener('scroll', onScrollEndDebounced, true);
+              scrollRoots.forEach(function (r) {
+                r.removeEventListener('scrollend', onScrollEnd, true);
+                r.removeEventListener('scroll', onScrollEndDebounced, true);
+              });
+              if (activeScrollRoots === scrollRoots) activeScrollRoots = [];
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
               if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
               var freshRect = activeRange.getBoundingClientRect();
@@ -11059,6 +11077,11 @@
             // (app-style layouts where only a container scrolls) also reaches these.
             window.addEventListener('scrollend', onScrollEnd, true);
             window.addEventListener('scroll', onScrollEndDebounced, true);
+            activeScrollRoots = scrollRoots;
+            scrollRoots.forEach(function (r) {
+              r.addEventListener('scrollend', onScrollEnd, true);
+              r.addEventListener('scroll', onScrollEndDebounced, true);
+            });
           } else {
             // oculist-44y: same hazard oculist-rbx/tz6/7uc fixed elsewhere in this
             // function — this bare timer had no module-level handle, so no teardown
@@ -11078,7 +11101,18 @@
         // <pre>) would be centered on its own midpoint, not the match. Center the range
         // instead: walk scrollable ancestors inner to outer, then the document. Smooth
         // scrolls are async, so measure once and track the shift inner scrollers apply.
-        if (element.getBoundingClientRect().height > window.innerHeight) {
+        // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
+        // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
+        var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
+        var scrollerOf = function (sc) {
+          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement || (sc.parentNode && sc.parentNode.host)) {
+            var oy = getComputedStyle(sc).overflowY;
+            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
+          }
+          return null;
+        };
+        var nearestScroller = scrollerOf(element);
+        if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
           var centerScroll = function (sc, top, height, isDoc) {
             var cur = isDoc ? window.scrollY : sc.scrollTop;
@@ -11089,13 +11123,8 @@
             (isDoc ? window : sc).scrollBy({ top: delta, behavior: behavior });
             shift += delta;
           };
-          // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
-          var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
-          for (var sc = element; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement) {
-            var oy = getComputedStyle(sc).overflowY;
-            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) {
-              centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
-            }
+          for (var sc = nearestScroller; sc; sc = scrollerOf(sc.parentElement || (sc.parentNode && sc.parentNode.host))) {
+            centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
           }
           centerScroll(document.scrollingElement || document.documentElement, 0, window.innerHeight, true);
         } else {

@@ -16,13 +16,19 @@ const LINES = [];
 for (let i = 0; i < 400; i++) LINES.push('line ' + i + (i === 300 ? ' ' + TERM : ''));
 const SHELL = `<!doctype html><style>html,body{margin:0;height:100%;overflow:hidden}#m{height:100vh;overflow:auto}pre{margin:0;font:14px/18px monospace}</style><div id=m><pre>${LINES.join('\n')}</pre></div>`;
 
-describe('beacon survives a main-thread stall mid smooth scroll (oculist-wzqi)', () => {
+const WINDOW_SHELL = `<!doctype html><style>body{margin:0}pre{margin:0;font:14px/18px monospace}</style><pre>${LINES.join('\n')}</pre>`;
+const FIXTURES = [
+  ['inner container', SHELL, () => document.getElementById('m')],
+  ['window scroll', WINDOW_SHELL, () => document.scrollingElement],
+];
+
+for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a main-thread stall mid smooth scroll: ' + name + ' (oculist-wzqi)', () => {
   let server, ctx, page;
 
   before(async () => {
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(SHELL);
+      res.end(html);
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     ctx = await chromium.launchPersistentContext('', {
@@ -75,11 +81,11 @@ describe('beacon survives a main-thread stall mid smooth scroll (oculist-wzqi)',
       }, true);
     });
     await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
-    await waitForCondition(() => page.evaluate(() => {
-      const m = document.getElementById('m');
+    await waitForCondition(() => page.evaluate(`(() => {
+      const m = (${getScroller})();
       window.__prev = window.__prev === m.scrollTop ? window.__prev : m.scrollTop;
       return new Promise((r) => setTimeout(() => r(m.scrollTop === window.__prev && m.scrollTop > 0), 400));
-    }), Boolean, { timeout: POLL_TIMEOUT * 2, interval: 100, message: 'scroll never settled' });
+    })()`), Boolean, { timeout: POLL_TIMEOUT * 2, interval: 100, message: 'scroll never settled' });
     const { beacon, settled } = await page.evaluate(() => {
       const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
       return { beacon: window.__beacon.mid, settled: r.top + r.height / 2 };

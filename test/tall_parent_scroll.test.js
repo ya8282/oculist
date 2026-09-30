@@ -27,6 +27,8 @@ const BODY_SCROLLER = `<!doctype html><style>html{height:100%;overflow:hidden}bo
 const QUIRKS = `<style>html{overflow:hidden}body{margin:0;overflow:auto}pre{margin:0;font:14px/18px monospace}</style><div style="height:3000px"></div><pre>${SHELL_LINES.join('\n')}</pre><div style="height:3000px"></div>`;
 // Document > #o (600px) > #m (400px) > pre: the match needs all three scrollers to move.
 const NESTED = `<!doctype html><style>body{margin:0}#o{height:600px;overflow:auto;margin-top:300px}#m{height:400px;overflow:auto}pre{margin:0;font:14px/18px monospace}</style><div id=o><div style="height:200px"></div><div id=m><div style="height:3000px"></div><pre>${SHELL_LINES.join('\n')}</pre><div style="height:3000px"></div></div><div style="height:200px"></div></div><div style="height:3000px"></div>`;
+// 600px pre fits the 800px viewport but not its 300px container; the match is at y=360 in the pre, below the fold.
+const FITS = `<!doctype html><style>body{margin:0}#m{height:300px;overflow:auto;margin-top:700px}pre{margin:0;font:14px/18px monospace}</style><div id=m><pre>${SHELL_LINES.slice(0, 33).join('\n')}</pre></div><div style="height:3000px"></div>`;
 const PAGE = `<!doctype html><meta charset="utf-8"><style>body{margin:0}pre{margin:0;font:14px/18px monospace}</style><pre>${LINES.join('\n')}</pre>`;
 
 describe('Navigation centers the match inside a viewport-exceeding parent', () => {
@@ -35,7 +37,7 @@ describe('Navigation centers the match inside a viewport-exceeding parent', () =
   before(async () => {
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end({ '/shell': SHELL, '/body': BODY_SCROLLER, '/nested': NESTED, '/quirks': QUIRKS }[req.url] || PAGE);
+      res.end({ '/shell': SHELL, '/body': BODY_SCROLLER, '/nested': NESTED, '/quirks': QUIRKS, '/fits': FITS }[req.url] || PAGE);
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${server.address().port}/`;
@@ -152,4 +154,21 @@ describe('Navigation centers the match inside a viewport-exceeding parent', () =
       assert.ok(Math.abs(r.mid - r.vh / 2) <= TOLERANCE, `not centered: ${JSON.stringify(r)}`);
     });
   }
+
+  // oculist-spws: the parent fits the viewport but exceeds its own 300px scroller.
+  test('parent fitting the viewport but not its scroller: match is centered in the scroller', async () => {
+    await page.goto(origin + 'fits');
+    await waitForCondition(() => page.evaluate(() => !document.getElementById('oc-wrap')), Boolean, { timeout: POLL_TIMEOUT });
+    await openFinder();
+    await page.fill(INPUT, TERM);
+    await page.keyboard.press('Enter');
+    const r = await settledRect();
+    assert.ok(r, 'no active highlight');
+    const c = await page.evaluate(() => {
+      const b = document.getElementById('m').getBoundingClientRect();
+      return { top: b.top, mid: b.top + b.height / 2, bottom: b.bottom };
+    });
+    assert.ok(r.top >= c.top && r.bottom <= c.bottom, `not inside the container: ${JSON.stringify({ r, c })}`);
+    assert.ok(Math.abs(r.mid - c.mid) <= TOLERANCE, `not centered in the container: ${JSON.stringify({ r, c })}`);
+  });
 });
