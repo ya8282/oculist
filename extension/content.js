@@ -1162,11 +1162,11 @@
       activeScrollTimeout = null;
     }
     if (activeScrollEndHandler) {
-      window.removeEventListener('scrollend', activeScrollEndHandler);
+      window.removeEventListener('scrollend', activeScrollEndHandler, true);
       activeScrollEndHandler = null;
     }
     if (activeScrollDebounceHandler) {
-      window.removeEventListener('scroll', activeScrollDebounceHandler);
+      window.removeEventListener('scroll', activeScrollDebounceHandler, true);
       activeScrollDebounceHandler = null;
     }
     if (activeScrollDebounceTimer) {
@@ -11000,15 +11000,27 @@
             // fire for one navigation (~47ms apart); this flag makes the handler
             // idempotent so animate() only tears down/redraws once per navigation.
             var scrollEndFired = false;
-            var onScrollEnd = function () {
+            // Capture sees every element's scroll; only the viewport or a scroller holding
+            // the match counts. Timer calls pass no event and always count.
+            var isRelevantScroll = function (e) {
+              var t = e && e.target;
+              if (!t || t === document || t === window) return true;
+              try {
+                return !!(t.contains && activeRange && t.contains(activeRange.commonAncestorContainer));
+              } catch (err) {
+                return false;
+              }
+            };
+            var onScrollEnd = function (e) {
+              if (!isRelevantScroll(e)) return;
               if (scrollEndFired) return;
               scrollEndFired = true;
               if (scrollTimeout) clearTimeout(scrollTimeout);
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
               if (activeScrollTimeout === scrollTimeout) activeScrollTimeout = null;
               if (activeScrollDebounceTimer === scrollDebounceTimer) activeScrollDebounceTimer = null;
-              window.removeEventListener('scrollend', onScrollEnd);
-              window.removeEventListener('scroll', onScrollEndDebounced);
+              window.removeEventListener('scrollend', onScrollEnd, true);
+              window.removeEventListener('scroll', onScrollEndDebounced, true);
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
               if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
               var freshRect = activeRange.getBoundingClientRect();
@@ -11016,7 +11028,18 @@
             };
 
             var scrollDebounceTimer = null;
-            var onScrollEndDebounced = function () {
+            var scrollStarted = false;
+            var onScrollEndDebounced = function (e) {
+              if (!isRelevantScroll(e)) return;
+              // oculist-yl02: a smooth scroll can outlast the 600ms no-scroll fallback
+              // (measured 1.2s for ~5000px); once scrolling is seen, scrollend / the
+              // idle debounce govern, with a longer cap for a scroller that never idles.
+              if (!scrollStarted) {
+                scrollStarted = true;
+                clearTimeout(scrollTimeout);
+                scrollTimeout = setTimeout(onScrollEnd, 3000);
+                activeScrollTimeout = scrollTimeout;
+              }
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
               scrollDebounceTimer = setTimeout(onScrollEnd, 80);
               activeScrollDebounceTimer = scrollDebounceTimer;
@@ -11027,8 +11050,10 @@
             activeScrollEndHandler = onScrollEnd;
             activeScrollDebounceHandler = onScrollEndDebounced;
 
-            window.addEventListener('scrollend', onScrollEnd, { once: true });
-            window.addEventListener('scroll', onScrollEndDebounced);
+            // oculist-yl02: capture, so an inner scroller's non-bubbling scroll/scrollend
+            // (app-style layouts where only a container scrolls) also reaches these.
+            window.addEventListener('scrollend', onScrollEnd, true);
+            window.addEventListener('scroll', onScrollEndDebounced, true);
           } else {
             // oculist-44y: same hazard oculist-rbx/tz6/7uc fixed elsewhere in this
             // function — this bare timer had no module-level handle, so no teardown
