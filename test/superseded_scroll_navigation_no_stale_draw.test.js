@@ -180,7 +180,9 @@ describe('a superseded scrolled navigation does not draw a stale rect (oculist-r
   // of ms later. QUIET_MS has to outlast that gap, or this would report "settled" right
   // after match1's draw and never observe match3's.
   async function waitForRedrawCountToSettle() {
-    const QUIET_MS = 1000;
+    // oculist-yl02: the draw now waits for the real scroll to settle (~1.5s for 12000px)
+    // instead of the 600ms fallback, so the quiet window must outlast that.
+    const QUIET_MS = 3000;
     await page.waitForFunction(
       (quiet) => window.__ocRedrawCount > 0 && performance.now() - window.__ocRedrawAt > quiet,
       QUIET_MS,
