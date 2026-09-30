@@ -11041,6 +11041,11 @@
                 activeScrollTimeout = scrollTimeout;
               }
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
+              // oculist-wzqi: where scrollend exists it is the settle signal. The 80ms idle
+              // debounce fires mid-scroll when the main thread stalls between scroll events
+              // (measured under load: 119-157ms gaps), and the rect cannot reveal it because
+              // the stalled thread has not applied the scroll offset yet.
+              if ('onscrollend' in window) return;
               scrollDebounceTimer = setTimeout(onScrollEnd, 80);
               activeScrollDebounceTimer = scrollDebounceTimer;
             };
