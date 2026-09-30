@@ -1,5 +1,6 @@
-// oculist-wzqi: a main-thread stall between scroll events of a smooth scroll must not trip the
-// 80ms idle debounce into drawing the beacon mid-scroll; scrollend governs where it exists.
+// oculist-blkh: same, where the text and scroller live in open shadow roots.
+// oculist-yl02: a smooth navigation that scrolls only an inner overflow container must draw
+// the beacon once that container settles, not at the 600ms fallback mid-scroll.
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -10,20 +11,24 @@ const { waitForCondition, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const INPUT = '#oc-wrap >> .oc-input';
-const TOLERANCE = 20;
+const TOLERANCE = 20; // one 18px line plus rounding slack
 const TERM = 'zqxjvmarker';
+
 const LINES = [];
 for (let i = 0; i < 400; i++) LINES.push('line ' + i + (i === 300 ? ' ' + TERM : ''));
-const SHELL = `<!doctype html><style>html,body{margin:0;height:100%;overflow:hidden}#m{height:100vh;overflow:auto}pre{margin:0;font:14px/18px monospace}</style><div id=m><pre>${LINES.join('\n')}</pre></div>`;
-
-const WINDOW_SHELL = `<!doctype html><style>body{margin:0}pre{margin:0;font:14px/18px monospace}</style><pre>${LINES.join('\n')}</pre>`;
+const TEXT = LINES.join('\n');
+const STYLE = '<style>html,body{margin:0}pre{margin:0;font:14px/18px monospace}</style>';
+// (i) open shadow root holding a fixed-height scroller; the page itself does not scroll.
+const IN_SHADOW = `<!doctype html>${STYLE}<div id=host></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<div id=m style="height:400px;overflow:auto"><pre>${TEXT.replace(/\n/g, '\\n')}</pre></div>'</script>`;
+// (ii) light-DOM scroller whose content reaches the match through a shadow host.
+const VIA_HOST = `<!doctype html>${STYLE}<div id=m style="height:400px;overflow:auto"><div id=host></div></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<pre>${TEXT.replace(/\n/g, '\\n')}</pre>'</script>`;
 const FIXTURES = [
-  ['inner container', SHELL, () => document.getElementById('m')],
-  ['window scroll', WINDOW_SHELL, () => document.scrollingElement],
+  ['scroller inside a shadow root', IN_SHADOW, () => document.getElementById('host').shadowRoot.getElementById('m')],
+  ['light-DOM scroller around a shadow host', VIA_HOST, () => document.getElementById('m')],
 ];
 
-for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a main-thread stall mid smooth scroll: ' + name + ' (oculist-wzqi)', () => {
-  let server, ctx, page;
+for (const [name, html, getScroller] of FIXTURES) describe('beacon after a smooth scroll: ' + name + ' (oculist-blkh)', () => {
+  let server, ctx, page, origin;
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -31,6 +36,7 @@ for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a ma
       res.end(html);
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${server.address().port}/`;
     ctx = await chromium.launchPersistentContext('', {
       channel: 'chromium',
       headless: true,
@@ -38,7 +44,7 @@ for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a ma
       viewport: { width: 1280, height: 800 },
     });
     page = await ctx.newPage();
-    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await page.goto(origin);
     for (let attempt = 0; attempt < 20; attempt++) {
       await page.keyboard.press('Control+f');
       try {
@@ -56,7 +62,7 @@ for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a ma
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
-  test('beacon is drawn at the settled position after a 250ms stall', async () => {
+  test('beacon is drawn at the match settled position', async () => {
     await page.evaluate(() => {
       window.__beacon = null;
       new MutationObserver((records) => {
@@ -72,22 +78,18 @@ for (const [name, html, getScroller] of FIXTURES) describe('beacon survives a ma
     });
     await page.fill(INPUT, TERM);
     await page.keyboard.press('Enter');
-    // Registered after the extension's own scroll listener, so the debounce is already armed
-    // when this one blocks the thread past 80ms, once, mid scroll.
-    await page.evaluate(() => {
-      let n = 0;
-      window.addEventListener('scroll', () => {
-        if (++n === 3) { const end = performance.now() + 250; while (performance.now() < end); }
-      }, true);
-    });
     await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
-    await waitForCondition(() => page.evaluate(`(() => {
-      const m = (${getScroller})();
-      window.__prev = window.__prev === m.scrollTop ? window.__prev : m.scrollTop;
-      return new Promise((r) => setTimeout(() => r(m.scrollTop === window.__prev && m.scrollTop > 0), 400));
-    })()`), Boolean, { timeout: POLL_TIMEOUT * 2, interval: 100, message: 'scroll never settled' });
+    // Let the container finish settling, then compare with the drawn position.
+    let prev = -1, stable = 0;
+    await waitForCondition(async () => {
+      const y = await page.evaluate(`(${getScroller})().scrollTop`);
+      stable = y === prev ? stable + 1 : 0;
+      prev = y;
+      return stable >= 5 && y > 0;
+    }, Boolean, { timeout: POLL_TIMEOUT, interval: 100, message: 'scroll never settled' });
     const { beacon, settled } = await page.evaluate(() => {
-      const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
+      const h = CSS.highlights.get('oculist-active-match');
+      const r = [...h][0].getBoundingClientRect();
       return { beacon: window.__beacon.mid, settled: r.top + r.height / 2 };
     });
     assert.ok(Math.abs(beacon - settled) <= TOLERANCE, `beacon at ${beacon}, match settled at ${settled}`);
