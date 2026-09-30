@@ -10983,7 +10983,7 @@
       );
       // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
       // (vertically) the client box of every overflow scroller up its flat-tree chain.
-      for (var cs = scrollerOf(activeRange.startContainer.parentElement); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
+      for (var cs = scrollerOf(flatTreeParent(activeRange.startContainer)); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
         var cb = cs.getBoundingClientRect();
         if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) inView = false;
       }
@@ -10992,7 +10992,8 @@
     var isFullyInViewport = isFullyVisible(rect);
 
     if (!isFullyInViewport && !skipScroll) {
-      var element = activeRange.startContainer.parentElement;
+      // Rendered-tree container: a root-level or slotted text node has no (useful) parentElement.
+      var element = flatTreeParent(activeRange.startContainer);
       if (element) {
         triggerAutoScrollFlag(element);
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
@@ -11181,7 +11182,9 @@
         // scrolls are async, so measure once and track the shift inner scrollers apply.
         // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
         var nearestScroller = scrollerOf(element);
-        if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
+        // A flat-tree-only container (host or slot) is not a box scrollIntoView can centre inside its
+        // scroller, so centre the range through the scroller walk instead.
+        if (element !== activeRange.startContainer.parentElement || element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
           var centerScroll = function (sc, top, height, isDoc) {
             var cur = isDoc ? window.scrollY : sc.scrollTop;
