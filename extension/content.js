@@ -11093,8 +11093,9 @@
               clearActiveScrollHandles();
               var freshRect = activeRange.getBoundingClientRect();
               // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
-              // re-issue the navigation once, then draw wherever it ends up.
-              if (!isRetry && !isFullyVisible(freshRect)) {
+              // re-issue the navigation once, then draw wherever it ends up. oculist-u6x3: not when
+              // the match is exactly where the navigation started (fixed/clipped, nothing to scroll).
+              if (!isRetry && !isFullyVisible(freshRect) && (freshRect.top !== rect.top || freshRect.left !== rect.left)) {
                 highlightActiveRange(shouldAnimate, skipScroll, true);
                 return;
               }
@@ -11105,6 +11106,13 @@
             var scrollStarted = false;
             var onScrollEndDebounced = function (e) {
               if (!isRelevantScroll(e)) return;
+              // oculist-u6x3: a scroll that leaves the match where it was is not ours (scroll
+              // anchoring fires scroll without scrollend, e.g. above a fixed match the
+              // navigation cannot scroll): it must neither extend the cap nor gate the draw.
+              if (e && !scrollStarted) {
+                var moved = activeRange.getBoundingClientRect();
+                if (moved.top === rect.top && moved.left === rect.left) return;
+              }
               if (e && scrollingTargets.indexOf(scrollTarget(e)) < 0) scrollingTargets.push(scrollTarget(e));
               // oculist-yl02: a smooth scroll can outlast the 600ms no-scroll fallback
               // (measured 1.2s for ~5000px); once scrolling is seen, scrollend / the
