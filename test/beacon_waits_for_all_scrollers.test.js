@@ -23,6 +23,8 @@ const PAGES = {
   slot: `<!doctype html>${STYLE}<div style="height:2000px"></div><script>customElements.define('x-s',class extends HTMLElement{constructor(){super();this.attachShadow({mode:'open'}).innerHTML='<div style="height:300px;overflow:auto"><slot></slot></div>'}})</script><x-s><pre>${lines(400, 300).join('\n')}</pre></x-s><div style="height:4000px"></div>`,
   shift: `<!doctype html>${STYLE}<pre id=p>${lines(300, 150).join('\n')}</pre>`,
   area: `<!doctype html>${STYLE}<textarea id=t rows=3></textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  // oculist-u6x3: match in a fixed element clipped by the viewport bottom; the page scrolls itself.
+  fixedClipped: `<!doctype html>${STYLE}<div id=f style="position:fixed;left:0;top:785px;height:40px;font:14px/18px monospace">${TERM}</div><pre id=p>${lines(300, 150).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
 
@@ -201,4 +203,40 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
       }
     });
   }
+
+  test('a scroll-anchoring shift with nothing to scroll toward does not delay the beacon to the 3s cap', async () => {
+    const page = await open('fixedClipped');
+    try {
+      await page.evaluate(() => {
+        window.scrollTo(0, 500);
+        window.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          window.__t0 = Date.now();
+          setTimeout(() => {
+            const d = document.createElement('div');
+            d.style.height = '300px';
+            document.body.insertBefore(d, document.getElementById('p'));
+          }, 100);
+        }, true);
+      });
+      await page.evaluate(() => new Promise((resolve) => {
+        let last = -1, stable = 0;
+        const tick = () => {
+          stable = window.scrollY === last && last === 500 ? stable + 1 : 0;
+          last = window.scrollY;
+          stable >= 10 ? resolve() : requestAnimationFrame(tick);
+        };
+        tick();
+      }));
+      await page.fill(INPUT, TERM);
+      await page.keyboard.press('Enter');
+      const t0 = await page.evaluate(() => window.__t0);
+      await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
+      const latency = Date.now() - t0;
+      assert.ok(await page.evaluate(() => window.scrollY) > 500, 'premise: the anchoring shift never scrolled the page');
+      assert.ok(latency < 1000, `beacon drawn ${latency}ms after Enter`);
+    } finally {
+      await page.close();
+    }
+  });
 });
