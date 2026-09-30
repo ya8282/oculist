@@ -1132,6 +1132,11 @@
   var activeScrollDebounceTimer = null;
   // Open shadow roots (inner to outer) that also carry the capture scroll listeners.
   var activeScrollRoots = [];
+  // oculist-9tse: flat-tree parent: slot first (nested slots keep stepping), then the light parent,
+  // then the host across an open shadow root. Closed roots give no assignedSlot: out of scope.
+  var flatTreeParent = function (n) {
+    return n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
+  };
   // oculist-44y: the bare 50ms "draw at the fresh rect" timer armed by the
   // instant-scroll-behavior branch and the fully-in-viewport branch, below. Kept
   // deliberately separate from the four handles clearActiveScrollHandles() owns rather
@@ -11010,13 +11015,16 @@
             // Scroll events are not composed: a scroller inside an open shadow root never
             // reaches window, so listen on each root up the host chain (closed roots: out of scope).
             var scrollRoots = [];
-            for (var rn = activeRange.commonAncestorContainer.getRootNode(); rn instanceof ShadowRoot; rn = rn.host.getRootNode()) scrollRoots.push(rn);
+            for (var fn = activeRange.commonAncestorContainer; fn; fn = flatTreeParent(fn)) {
+              var rn = fn.getRootNode();
+              if (rn instanceof ShadowRoot && scrollRoots.indexOf(rn) < 0) scrollRoots.push(rn);
+            }
             var isRelevantScroll = function (e) {
               var t = e && e.target;
               if (!t || t === document || t === window) return true;
               try {
-                // Node.contains stops at shadow boundaries; cross them via host (open roots only).
-                for (var n = activeRange && activeRange.commonAncestorContainer; n; n = n.parentNode || n.host) {
+                // Node.contains stops at shadow boundaries; cross them via slot/host (open roots only).
+                for (var n = activeRange && activeRange.commonAncestorContainer; n; n = flatTreeParent(n)) {
                   if (n === t) return true;
                 }
                 return false;
@@ -11105,7 +11113,7 @@
         // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
         var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
         var scrollerOf = function (sc) {
-          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement || (sc.parentNode && sc.parentNode.host)) {
+          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = flatTreeParent(sc)) {
             var oy = getComputedStyle(sc).overflowY;
             if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
           }
@@ -11123,7 +11131,7 @@
             (isDoc ? window : sc).scrollBy({ top: delta, behavior: behavior });
             shift += delta;
           };
-          for (var sc = nearestScroller; sc; sc = scrollerOf(sc.parentElement || (sc.parentNode && sc.parentNode.host))) {
+          for (var sc = nearestScroller; sc; sc = scrollerOf(flatTreeParent(sc))) {
             centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
           }
           centerScroll(document.scrollingElement || document.documentElement, 0, window.innerHeight, true);
