@@ -11078,7 +11078,18 @@
         // <pre>) would be centered on its own midpoint, not the match. Center the range
         // instead: walk scrollable ancestors inner to outer, then the document. Smooth
         // scrolls are async, so measure once and track the shift inner scrollers apply.
-        if (element.getBoundingClientRect().height > window.innerHeight) {
+        // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
+        // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
+        var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
+        var scrollerOf = function (sc) {
+          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement) {
+            var oy = getComputedStyle(sc).overflowY;
+            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
+          }
+          return null;
+        };
+        var nearestScroller = scrollerOf(element);
+        if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
           var centerScroll = function (sc, top, height, isDoc) {
             var cur = isDoc ? window.scrollY : sc.scrollTop;
@@ -11089,13 +11100,8 @@
             (isDoc ? window : sc).scrollBy({ top: delta, behavior: behavior });
             shift += delta;
           };
-          // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
-          var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
-          for (var sc = element; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement) {
-            var oy = getComputedStyle(sc).overflowY;
-            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) {
-              centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
-            }
+          for (var sc = nearestScroller; sc; sc = scrollerOf(sc.parentElement)) {
+            centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
           }
           centerScroll(document.scrollingElement || document.documentElement, 0, window.innerHeight, true);
         } else {
