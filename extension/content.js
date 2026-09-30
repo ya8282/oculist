@@ -10956,12 +10956,27 @@
     countEl.textContent = (activeIndex + 1) + ' ' + i18n.of + ' ' + searchRanges.length;
 
     var rect = activeRange.getBoundingClientRect();
+    // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
+    var bodyScrolls = document.compatMode !== 'BackCompat' && window.getComputedStyle(document.documentElement).overflowY !== 'visible';
+    var scrollerOf = function (sc) {
+      for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = flatTreeParent(sc)) {
+        var oy = window.getComputedStyle(sc).overflowY;
+        if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
+      }
+      return null;
+    };
     var isFullyInViewport = (
       rect.top >= 0 &&
       rect.left >= 0 &&
       rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
       rect.right <= (window.innerWidth || document.documentElement.clientWidth)
     );
+    // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
+    // (vertically) the client box of every overflow scroller up its flat-tree chain.
+    for (var cs = scrollerOf(activeRange.startContainer.parentElement); isFullyInViewport && cs; cs = scrollerOf(flatTreeParent(cs))) {
+      var cb = cs.getBoundingClientRect();
+      if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) isFullyInViewport = false;
+    }
 
     if (!isFullyInViewport && !skipScroll) {
       var element = activeRange.startContainer.parentElement;
@@ -11110,15 +11125,6 @@
         // instead: walk scrollable ancestors inner to outer, then the document. Smooth
         // scrolls are async, so measure once and track the shift inner scrollers apply.
         // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
-        // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
-        var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
-        var scrollerOf = function (sc) {
-          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = flatTreeParent(sc)) {
-            var oy = getComputedStyle(sc).overflowY;
-            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
-          }
-          return null;
-        };
         var nearestScroller = scrollerOf(element);
         if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
