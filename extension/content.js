@@ -11108,7 +11108,9 @@
       // teardown the superseded navigation's four handles (and its still-running native
       // scrollIntoView animation) are left live and its orphaned timer/scrollend can still
       // animate() a stale rect over the draw below.
-      clearActiveScrollHandles();
+      // oculist-9of8: a skipScroll re-highlight (storage/mutation rescan) is not a new
+      // navigation; it must leave a pending smooth draw armed, or no beacon is ever drawn.
+      if (!skipScroll) clearActiveScrollHandles();
       if (shouldAnimate) {
         // oculist-44y: same hazard as the instant-behavior branch above — this bare
         // timer had no module-level handle, so a second in-viewport navigation less
