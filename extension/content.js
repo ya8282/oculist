@@ -1132,6 +1132,16 @@
   var activeScrollDebounceTimer = null;
   // Open shadow roots (inner to outer) that also carry the capture scroll listeners.
   var activeScrollRoots = [];
+  // oculist-h1ns: a user wheel/touch/scroll key while a navigation draw is pending cancels the beacon.
+  var activeInterruptHandler = null;
+  var INTERRUPT_EVENTS = ['wheel', 'touchstart', 'keydown'];
+  var SCROLL_KEYS = ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
+  var FIND_INPUT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
+  // oculist-9tse: flat-tree parent: slot first (nested slots keep stepping), then the light parent,
+  // then the host across an open shadow root. Closed roots give no assignedSlot: out of scope.
+  var flatTreeParent = function (n) {
+    return n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
+  };
   // oculist-44y: the bare 50ms "draw at the fresh rect" timer armed by the
   // instant-scroll-behavior branch and the fully-in-viewport branch, below. Kept
   // deliberately separate from the four handles clearActiveScrollHandles() owns rather
@@ -1174,6 +1184,10 @@
       activeScrollDebounceHandler = null;
     }
     activeScrollRoots = [];
+    if (activeInterruptHandler) {
+      INTERRUPT_EVENTS.forEach(function (t) { window.removeEventListener(t, activeInterruptHandler, { capture: true }); });
+      activeInterruptHandler = null;
+    }
     if (activeScrollDebounceTimer) {
       clearTimeout(activeScrollDebounceTimer);
       activeScrollDebounceTimer = null;
@@ -1372,7 +1386,7 @@
     clearAutoScrollFlag();
 
     try {
-      window.removeEventListener('scroll', handleScroll, { passive: true });
+      window.removeEventListener('scroll', handleScroll, { passive: true, capture: true });
     } catch (e) {}
 
     try {
@@ -10934,7 +10948,7 @@
   }
 
   // Display the active match with the high-visibility visual animation
-  function highlightActiveRange(shouldAnimate, skipScroll) {
+  function highlightActiveRange(shouldAnimate, skipScroll, isRetry) {
     if (searchRanges.length === 0 || activeIndex < 0) return;
 
     var activeRange = searchRanges[activeIndex];
@@ -10951,17 +10965,36 @@
     countEl.textContent = (activeIndex + 1) + ' ' + i18n.of + ' ' + searchRanges.length;
 
     var rect = activeRange.getBoundingClientRect();
-    var isFullyInViewport = (
-      rect.top >= 0 &&
-      rect.left >= 0 &&
-      rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-      rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-    );
+    // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
+    var bodyScrolls = document.compatMode !== 'BackCompat' && window.getComputedStyle(document.documentElement).overflowY !== 'visible';
+    var scrollerOf = function (sc) {
+      for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = flatTreeParent(sc)) {
+        var oy = window.getComputedStyle(sc).overflowY;
+        if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
+      }
+      return null;
+    };
+    var isFullyVisible = function (rect) {
+      var inView = (
+        rect.top >= 0 &&
+        rect.left >= 0 &&
+        rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+        rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+      );
+      // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
+      // (vertically) the client box of every overflow scroller up its flat-tree chain.
+      for (var cs = scrollerOf(activeRange.startContainer.parentElement); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
+        var cb = cs.getBoundingClientRect();
+        if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) inView = false;
+      }
+      return inView;
+    };
+    var isFullyInViewport = isFullyVisible(rect);
 
     if (!isFullyInViewport && !skipScroll) {
       var element = activeRange.startContainer.parentElement;
       if (element) {
-        triggerAutoScrollFlag();
+        triggerAutoScrollFlag(element);
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
@@ -11010,13 +11043,16 @@
             // Scroll events are not composed: a scroller inside an open shadow root never
             // reaches window, so listen on each root up the host chain (closed roots: out of scope).
             var scrollRoots = [];
-            for (var rn = activeRange.commonAncestorContainer.getRootNode(); rn instanceof ShadowRoot; rn = rn.host.getRootNode()) scrollRoots.push(rn);
+            for (var fn = activeRange.commonAncestorContainer; fn; fn = flatTreeParent(fn)) {
+              var rn = fn.getRootNode();
+              if (rn instanceof ShadowRoot && scrollRoots.indexOf(rn) < 0) scrollRoots.push(rn);
+            }
             var isRelevantScroll = function (e) {
               var t = e && e.target;
               if (!t || t === document || t === window) return true;
               try {
-                // Node.contains stops at shadow boundaries; cross them via host (open roots only).
-                for (var n = activeRange && activeRange.commonAncestorContainer; n; n = n.parentNode || n.host) {
+                // Node.contains stops at shadow boundaries; cross them via slot/host (open roots only).
+                for (var n = activeRange && activeRange.commonAncestorContainer; n; n = flatTreeParent(n)) {
                   if (n === t) return true;
                 }
                 return false;
@@ -11024,9 +11060,22 @@
                 return false;
               }
             };
+            // oculist-h1ns: relevant targets that scrolled and have not yet ended. The draw waits
+            // for all of them: an inner scroller can settle with the match already visible while
+            // the window still moves it (the retry alone would draw early).
+            var scrollingTargets = [];
+            var scrollTarget = function (e) {
+              var t = e && e.target;
+              return !t || t === window ? document : t;
+            };
             var onScrollEnd = function (e) {
               if (!isRelevantScroll(e)) return;
               if (scrollEndFired) return;
+              if (e) {
+                var ti = scrollingTargets.indexOf(scrollTarget(e));
+                if (ti >= 0) scrollingTargets.splice(ti, 1);
+                if (scrollingTargets.length) return;
+              }
               scrollEndFired = true;
               if (scrollTimeout) clearTimeout(scrollTimeout);
               if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
@@ -11041,7 +11090,14 @@
               if (activeScrollRoots === scrollRoots) activeScrollRoots = [];
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
               if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
+              clearActiveScrollHandles();
               var freshRect = activeRange.getBoundingClientRect();
+              // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
+              // re-issue the navigation once, then draw wherever it ends up.
+              if (!isRetry && !isFullyVisible(freshRect)) {
+                highlightActiveRange(shouldAnimate, skipScroll, true);
+                return;
+              }
               animate(freshRect);
             };
 
@@ -11049,6 +11105,7 @@
             var scrollStarted = false;
             var onScrollEndDebounced = function (e) {
               if (!isRelevantScroll(e)) return;
+              if (e && scrollingTargets.indexOf(scrollTarget(e)) < 0) scrollingTargets.push(scrollTarget(e));
               // oculist-yl02: a smooth scroll can outlast the 600ms no-scroll fallback
               // (measured 1.2s for ~5000px); once scrolling is seen, scrollend / the
               // idle debounce govern, with a longer cap for a scroller that never idles.
@@ -11082,6 +11139,19 @@
               r.addEventListener('scrollend', onScrollEnd, true);
               r.addEventListener('scroll', onScrollEndDebounced, true);
             });
+            // oculist-h1ns: the user taking over the scroll cancels this navigation's beacon.
+            // Measured: in the always-visible find input only the arrows and Space leave the page
+            // alone (PageUp/PageDown/Home/End scroll it); in a page input/textarea every scroll key
+            // scrolls it (caret reveal), so those are interrupts. Enter is not a scroll key.
+            activeInterruptHandler = function (e) {
+              if (e.type === 'keydown') {
+                if (SCROLL_KEYS.indexOf(e.key) < 0) return;
+                var kt = e.composedPath && e.composedPath()[0];
+                if (kt && kt.classList && kt.classList.contains('oc-input') && FIND_INPUT_KEYS.indexOf(e.key) >= 0) return;
+              }
+              clearActiveScrollHandles();
+            };
+            INTERRUPT_EVENTS.forEach(function (t) { window.addEventListener(t, activeInterruptHandler, { capture: true, passive: true }); });
           } else {
             // oculist-44y: same hazard oculist-rbx/tz6/7uc fixed elsewhere in this
             // function — this bare timer had no module-level handle, so no teardown
@@ -11102,15 +11172,6 @@
         // instead: walk scrollable ancestors inner to outer, then the document. Smooth
         // scrolls are async, so measure once and track the shift inner scrollers apply.
         // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
-        // body is a real scroller only when html's own overflow keeps it from propagating to the viewport.
-        var bodyScrolls = document.compatMode !== 'BackCompat' && getComputedStyle(document.documentElement).overflowY !== 'visible';
-        var scrollerOf = function (sc) {
-          for (; sc && sc !== document.documentElement && (sc !== document.body || bodyScrolls); sc = sc.parentElement || (sc.parentNode && sc.parentNode.host)) {
-            var oy = getComputedStyle(sc).overflowY;
-            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && sc.scrollHeight > sc.clientHeight) return sc;
-          }
-          return null;
-        };
         var nearestScroller = scrollerOf(element);
         if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
@@ -11123,7 +11184,7 @@
             (isDoc ? window : sc).scrollBy({ top: delta, behavior: behavior });
             shift += delta;
           };
-          for (var sc = nearestScroller; sc; sc = scrollerOf(sc.parentElement || (sc.parentNode && sc.parentNode.host))) {
+          for (var sc = nearestScroller; sc; sc = scrollerOf(flatTreeParent(sc))) {
             centerScroll(sc, sc.getBoundingClientRect().top + sc.clientTop, sc.clientHeight, false);
           }
           centerScroll(document.scrollingElement || document.documentElement, 0, window.innerHeight, true);
@@ -11196,11 +11257,26 @@
   // native 'scrollend' when that fires. It still always terminates even if 'scrollend'
   // never fires: once scroll events genuinely stop arriving, the grace timer runs out on
   // its own 300ms later.
+  // oculist-qv2i: capture, so an inner scroller's non-bubbling scroll/scrollend reaches these
+  // (same reason as handleScroll's own capture). Only the viewport or a scroller up the flat-tree
+  // chain of the element the extension scrolled counts: an unrelated scroller (a ticker) must
+  // neither extend nor shorten the suppression.
+  var autoScrollElement = null;
+  function isOwnAutoScroll(e) {
+    var t = e && e.target;
+    if (!t || t === document || t === window) return true;
+    for (var n = autoScrollElement; n; n = flatTreeParent(n)) if (n === t) return true;
+    return false;
+  }
+  function onAutoScrollEnd(e) { if (isOwnAutoScroll(e)) clearAutoScrollFlag(); }
+  function onAutoScrollScroll(e) { if (isOwnAutoScroll(e)) extendAutoScrollFlag(); }
+
   function clearAutoScrollFlag() {
     isAutoScrolling = false;
+    autoScrollElement = null;
     if (autoScrollTimer) { clearTimeout(autoScrollTimer); autoScrollTimer = null; }
-    window.removeEventListener('scrollend', clearAutoScrollFlag);
-    window.removeEventListener('scroll', extendAutoScrollFlag);
+    window.removeEventListener('scrollend', onAutoScrollEnd, true);
+    window.removeEventListener('scroll', onAutoScrollScroll, true);
   }
 
   function extendAutoScrollFlag() {
@@ -11208,15 +11284,16 @@
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
-  function triggerAutoScrollFlag() {
+  function triggerAutoScrollFlag(element) {
     isAutoScrolling = true;
+    autoScrollElement = element;
     // Re-entrant-safe: a navigation superseding an already-in-flight auto-scroll removes
     // the previous listeners before re-adding, rather than accumulating duplicates.
-    window.removeEventListener('scrollend', clearAutoScrollFlag);
-    window.removeEventListener('scroll', extendAutoScrollFlag);
+    window.removeEventListener('scrollend', onAutoScrollEnd, true);
+    window.removeEventListener('scroll', onAutoScrollScroll, true);
     if (autoScrollTimer) clearTimeout(autoScrollTimer);
-    window.addEventListener('scrollend', clearAutoScrollFlag, { once: true });
-    window.addEventListener('scroll', extendAutoScrollFlag);
+    window.addEventListener('scrollend', onAutoScrollEnd, true);
+    window.addEventListener('scroll', onAutoScrollScroll, true);
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
@@ -11383,6 +11460,8 @@
     }, 100);
   }
 
+  // oculist-qv2i: any scroll counts. Capture on window reaches light-DOM scrollers only; scroll is not
+  // composed, so scrollers inside open shadow roots are not covered (page-wide root listeners: out of scope).
   function handleScroll() {
     if (isAutoScrolling) return;
     fadeActiveBeacons();
@@ -14074,7 +14153,7 @@
         // class — the two can coexist) and before the input.focus()/select() below,
         // which must remain the last word on where focus lands on open.
         maybeShowPackDiscoveryNotice();
-        window.addEventListener('scroll', handleScroll, { passive: true });
+        window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
         window.addEventListener('resize', handleResize, { passive: true });
         handleResizeAttached = true;
         if (input) {
