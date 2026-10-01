@@ -10329,6 +10329,19 @@
     return true;
   }
 
+  // oculist-aknk: index of the match equal to a live Range kept from before a rescan, or -1.
+  // A live Range tracks its text through unrelated inserts, so boundary equality finds the
+  // same match at its new index; a removed or replaced match collapses and never equals one.
+  function indexOfSameMatch(old) {
+    if (!old || old.collapsed) return -1;
+    for (var i = 0; i < searchRanges.length; i++) {
+      var r = searchRanges[i];
+      if (r.startContainer === old.startContainer && r.startOffset === old.startOffset &&
+          r.endContainer === old.endContainer && r.endOffset === old.endOffset) return i;
+    }
+    return -1;
+  }
+
   function rescanAfterMutation() {
     remountIfDetached();
     // Fires as long as there is either a draft term in flight or a committed working
@@ -10366,10 +10379,12 @@
       // saves an entire duplicate DOM scan on every mutation rescan of the common
       // lone-search, no-chips case.
       var previousDraftIndex = activeIndex;
+      var previousDraftRange = searchRanges[activeIndex];
       if (workListTerms.length > 0) performListSearch();
       performDraftSearch(lastTerm);
       if (searchRanges.length > 0) {
-        activeIndex = Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
+        var sameDraftIdx = indexOfSameMatch(previousDraftRange);
+        activeIndex = sameDraftIdx >= 0 ? sameDraftIdx : Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
         firstEnter = false;
         // skipScroll: a background rescan re-attaches highlights, it must not yank the
         // viewport back to the match while the user is scrolling elsewhere.
@@ -10379,9 +10394,11 @@
     }
 
     var previousActiveIndex = activeIndex;
+    var previousActiveRange = searchRanges[activeIndex];
     performListSearch();
     if (searchRanges.length > 0) {
-      activeIndex = Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
+      var sameIdx = indexOfSameMatch(previousActiveRange);
+      activeIndex = sameIdx >= 0 ? sameIdx : Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
       // skipScroll: a background rescan re-attaches highlights, it must not yank the
       // viewport back to the match while the user is scrolling elsewhere.
@@ -10983,7 +11000,7 @@
       );
       // oculist-bxyf: fully inside the viewport is not enough; the match must also be fully inside
       // (vertically) the client box of every overflow scroller up its flat-tree chain.
-      for (var cs = scrollerOf(activeRange.startContainer.parentElement); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
+      for (var cs = scrollerOf(flatTreeParent(activeRange.startContainer)); inView && cs; cs = scrollerOf(flatTreeParent(cs))) {
         var cb = cs.getBoundingClientRect();
         if (rect.top < cb.top + cs.clientTop || rect.bottom > cb.top + cs.clientTop + cs.clientHeight) inView = false;
       }
@@ -10992,7 +11009,8 @@
     var isFullyInViewport = isFullyVisible(rect);
 
     if (!isFullyInViewport && !skipScroll) {
-      var element = activeRange.startContainer.parentElement;
+      // Rendered-tree container: a root-level or slotted text node has no (useful) parentElement.
+      var element = flatTreeParent(activeRange.startContainer);
       if (element) {
         triggerAutoScrollFlag(element);
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
@@ -11093,8 +11111,9 @@
               clearActiveScrollHandles();
               var freshRect = activeRange.getBoundingClientRect();
               // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
-              // re-issue the navigation once, then draw wherever it ends up.
-              if (!isRetry && !isFullyVisible(freshRect)) {
+              // re-issue the navigation once, then draw wherever it ends up. oculist-u6x3: not when
+              // the match is exactly where the navigation started (fixed/clipped, nothing to scroll).
+              if (!isRetry && !isFullyVisible(freshRect) && (freshRect.top !== rect.top || freshRect.left !== rect.left)) {
                 highlightActiveRange(shouldAnimate, skipScroll, true);
                 return;
               }
@@ -11105,6 +11124,13 @@
             var scrollStarted = false;
             var onScrollEndDebounced = function (e) {
               if (!isRelevantScroll(e)) return;
+              // oculist-u6x3: a scroll that leaves the match where it was is not ours (scroll
+              // anchoring fires scroll without scrollend, e.g. above a fixed match the
+              // navigation cannot scroll): it must neither extend the cap nor gate the draw.
+              if (e && !scrollStarted) {
+                var moved = activeRange.getBoundingClientRect();
+                if (moved.top === rect.top && moved.left === rect.left) return;
+              }
               if (e && scrollingTargets.indexOf(scrollTarget(e)) < 0) scrollingTargets.push(scrollTarget(e));
               // oculist-yl02: a smooth scroll can outlast the 600ms no-scroll fallback
               // (measured 1.2s for ~5000px); once scrolling is seen, scrollend / the
@@ -11139,6 +11165,23 @@
               r.addEventListener('scrollend', onScrollEnd, true);
               r.addEventListener('scroll', onScrollEndDebounced, true);
             });
+            // oculist-o639: arrows/Space only count as a takeover when they can scroll. In a
+            // page text field they move the caret (scroll only when the field is off-screen and the caret can move);
+            // elsewhere ArrowLeft/Right need a horizontally overflowing window or scroller.
+            var keyMayScroll = function (e, kt) {
+              if (kt && (kt.isContentEditable || kt.tagName === 'TEXTAREA' || kt.tagName === 'INPUT')) {
+                var r = kt.getBoundingClientRect();
+                if (!(r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth)) return false;
+                if (e.key === ' ' || typeof kt.selectionStart !== 'number') return true;
+                var back = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+                return back ? kt.selectionStart > 0 : kt.selectionEnd < kt.value.length;
+              }
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return true;
+              var de = document.documentElement;
+              if (de.scrollWidth > de.clientWidth) return true;
+              var path = e.composedPath ? e.composedPath() : [];
+              return path.some(function (n) { return n.nodeType === 1 && n.scrollWidth > n.clientWidth; });
+            };
             // oculist-h1ns: the user taking over the scroll cancels this navigation's beacon.
             // Measured: in the always-visible find input only the arrows and Space leave the page
             // alone (PageUp/PageDown/Home/End scroll it); in a page input/textarea every scroll key
@@ -11148,6 +11191,7 @@
                 if (SCROLL_KEYS.indexOf(e.key) < 0) return;
                 var kt = e.composedPath && e.composedPath()[0];
                 if (kt && kt.classList && kt.classList.contains('oc-input') && FIND_INPUT_KEYS.indexOf(e.key) >= 0) return;
+                if (FIND_INPUT_KEYS.indexOf(e.key) >= 0 && !keyMayScroll(e, kt)) return;
               }
               clearActiveScrollHandles();
             };
@@ -11173,7 +11217,9 @@
         // scrolls are async, so measure once and track the shift inner scrollers apply.
         // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
         var nearestScroller = scrollerOf(element);
-        if (element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
+        // A flat-tree-only container (host or slot) is not a box scrollIntoView can centre inside its
+        // scroller, so centre the range through the scroller walk instead.
+        if (element !== activeRange.startContainer.parentElement || element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
           var centerScroll = function (sc, top, height, isDoc) {
             var cur = isDoc ? window.scrollY : sc.scrollTop;
@@ -12892,9 +12938,11 @@
         // for a background DOM rescan: a plain performListSearch() call always resets
         // activeIndex to -1, which would otherwise roll a pressed next-match back to 0.
         var previousActiveIndex = activeIndex;
+        var previousActiveRange = searchRanges[activeIndex];
         performListSearch();
         if (previousActiveIndex >= 0 && searchRanges.length > 0) {
-          activeIndex = Math.min(previousActiveIndex, searchRanges.length - 1);
+          var sameIdx = indexOfSameMatch(previousActiveRange);
+          activeIndex = sameIdx >= 0 ? sameIdx : Math.min(previousActiveIndex, searchRanges.length - 1);
           firstEnter = false;
           highlightActiveRange(false, true);
         }

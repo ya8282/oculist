@@ -23,6 +23,14 @@ const PAGES = {
   short: page_('<div style="height:400px"></div>', lines(14, 13)),
   // Match already visible inside the container.
   visible: page_('', lines(33, 3)),
+  // oculist-a99z: text node is a direct child of the shadow root; the host is the scroller.
+  shadowtext: `<!doctype html><style>body{margin:0}</style><div id=h style="height:300px;overflow:auto;margin-top:100px;white-space:pre;font:14px/18px monospace"></div><div style="height:3000px"></div><script>document.getElementById('h').attachShadow({mode:'open'}).appendChild(document.createTextNode(${JSON.stringify(lines(33, 30))}))</script>`,
+  // oculist-a99z: bare text node slotted into a shadow scroller.
+  slottedtext: `<!doctype html><style>body{margin:0}x-s{display:block;margin-top:100px;white-space:pre;font:14px/18px monospace}</style><x-s></x-s><div style="height:3000px"></div><script>const h=document.querySelector('x-s');h.attachShadow({mode:'open'}).innerHTML='<div id=m style="height:300px;overflow:auto"><slot></slot></div>';h.appendChild(document.createTextNode(${JSON.stringify(lines(33, 30))}))</script>`,
+};
+const SCROLLER = {
+  shadowtext: "document.getElementById('h')",
+  slottedtext: "document.querySelector('x-s').shadowRoot.getElementById('m')",
 };
 
 describe('match clipped by an inner scroller but inside the viewport rect (oculist-bxyf)', () => {
@@ -50,6 +58,7 @@ describe('match clipped by an inner scroller but inside the viewport rect (oculi
   });
 
   async function search(name) {
+    const sc = SCROLLER[name] || "document.getElementById('m')";
     await page.goto(origin + name);
     for (let attempt = 0; attempt < 20; attempt++) {
       await page.keyboard.press('Control+f');
@@ -76,24 +85,24 @@ describe('match clipped by an inner scroller but inside the viewport rect (oculi
     // Let the container stop moving, then read everything.
     let prev = -1, stable = 0;
     await waitForCondition(async () => {
-      const y = await page.evaluate(() => document.getElementById('m').scrollTop);
+      const y = await page.evaluate(`(${sc}).scrollTop`);
       stable = y === prev ? stable + 1 : 0;
       prev = y;
       return stable >= 5;
     }, Boolean, { timeout: POLL_TIMEOUT, interval: 100, message: 'scroll never settled' });
-    return page.evaluate(() => {
+    return page.evaluate(`(() => {
       const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
-      const m = document.getElementById('m');
+      const m = ${sc};
       const c = m.getBoundingClientRect();
       return {
         top: r.top, bottom: r.bottom, mid: r.top + r.height / 2,
         cTop: c.top + m.clientTop, cBottom: c.top + m.clientTop + m.clientHeight,
         scrollTop: m.scrollTop, beacon: window.__beacon.mid, beaconAt: window.__beacon.at,
       };
-    });
+    })()`);
   }
 
-  for (const name of ['tall', 'short']) {
+  for (const name of ['tall', 'short', 'shadowtext', 'slottedtext']) {
     test(`${name} parent: match is scrolled into the container and the beacon follows`, async () => {
       const s = await search(name);
       assert.ok(s.top >= s.cTop && s.bottom <= s.cBottom, `match not inside the container: ${JSON.stringify(s)}`);
