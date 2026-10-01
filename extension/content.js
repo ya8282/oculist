@@ -11129,7 +11129,9 @@
               // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
               // re-issue the navigation once, then draw wherever it ends up. oculist-u6x3: not when
               // the match is exactly where the navigation started (fixed/clipped, nothing to scroll).
-              if (!isRetry && !isFullyVisible(freshRect) && (freshRect.top !== rect.top || freshRect.left !== rect.left)) {
+              // oculist-r425: but a native scrollend means a scroll we issued was cancelled (page
+              // script scrolled within a frame), so retry; only the timer fallback is the unscrollable case.
+              if (!isRetry && !isFullyVisible(freshRect) && (e || freshRect.top !== rect.top || freshRect.left !== rect.left)) {
                 highlightActiveRange(shouldAnimate, skipScroll, true);
                 return;
               }
