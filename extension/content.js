@@ -1420,6 +1420,22 @@
 
   // ── Beacons ───────────────────────────────────────────────────────────────────
 
+  // oculist-ntvt: overlays are positioned in document coordinates from getBoundingClientRect
+  // (visual px), but under CSS zoom on <html> every length on an element appended to
+  // documentElement is multiplied by that zoom, so they land off the match. Counter-zoom the
+  // mounted element so its own zoom cancels the inherited one. Zoom on body/ancestors does not
+  // inherit to documentElement children, so it needs nothing.
+  function mountOverlay(el) {
+    var root = document.documentElement;
+    var z = root.currentCSSZoom;
+    if (!z) {
+      var w = root.offsetWidth;
+      z = w ? root.getBoundingClientRect().width / w : 1;
+    }
+    if (z && Math.abs(z - 1) > 0.001) el.style.zoom = String(1 / z);
+    root.appendChild(el);
+  }
+
   // WAAPI animations do NOT stop on their own when their target is detached from the
   // document — verified empirically: playState stays 'running' and currentTime keeps
   // advancing on a removed element unless .cancel() is called explicitly. Canvas
@@ -1609,7 +1625,7 @@
     laserContainer.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
-    document.documentElement.appendChild(laserContainer);
+    mountOverlay(laserContainer);
 
     setTimeout(function() {
       laserContainer.remove();
@@ -1632,7 +1648,7 @@
       'pointer-events:none', 'z-index:2147483641',
       'background:radial-gradient(ellipse ' + (w * 2.8) + 'px ' + (h * 2.8) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(0, 0, 0, 0.72) 80%)'
     ].join(';');
-    document.documentElement.appendChild(overlay);
+    mountOverlay(overlay);
 
     // overlay and ring are each their own top-level .oc-beacon element (no shared
     // container here), so cancelBeacons() reaches them independently — each needs its
@@ -1662,7 +1678,7 @@
       'box-shadow:0 0 20px ' + color + ', inset 0 0 20px ' + color,
       'pointer-events:none', 'z-index:2147483642',
     ].join(';');
-    document.documentElement.appendChild(ring);
+    mountOverlay(ring);
 
     ring.__waapiAnims = [ring.animate([
       { opacity: 0, transform: 'scale(4)' },
@@ -1710,7 +1726,7 @@
       'text-align:right',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(leftArrow);
+    mountOverlay(leftArrow);
 
     var rightArrow = document.createElement('div');
     rightArrow.className = 'oc-beacon oc-beacon-transient';
@@ -1729,7 +1745,7 @@
       'text-align:left',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(rightArrow);
+    mountOverlay(rightArrow);
 
     var duration = getBeaconDuration(2000);
 
@@ -1866,7 +1882,7 @@
     container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     setTimeout(function() {
       container.remove();
@@ -2044,7 +2060,7 @@
     container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     setTimeout(function() {
       container.remove();
@@ -2159,7 +2175,7 @@
     container.__waapiAnims = anims;
 
     // Append to live DOM tree exactly once at the end to prevent layout reflow invalidations
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     setTimeout(function() {
       container.remove();
@@ -2235,7 +2251,7 @@
       linePath.setAttribute('stroke-linejoin', 'round');
       linePath.style.opacity = '0.7';
       lineSvg.appendChild(linePath);
-      document.documentElement.appendChild(lineSvg);
+      mountOverlay(lineSvg);
 
       var lineLength = Math.abs(dx) + Math.abs(dy) || 1;
       try {
@@ -2277,7 +2293,7 @@
       'offset-path:path("M 0 0 L ' + dx + ' 0 L ' + dx + ' ' + dy + '")',
       'offset-rotate:auto'
     ].join(';');
-    document.documentElement.appendChild(arrow);
+    mountOverlay(arrow);
 
     var anim = arrow.animate([
       { offsetDistance: '0%', opacity: 1 },
@@ -2323,7 +2339,7 @@
       flashCss.push('box-shadow:0 0 ' + (18 * scale) + 'px ' + color + ', 0 0 ' + (6 * scale) + 'px ' + color);
     }
     flash.style.cssText = flashCss.join(';');
-    document.documentElement.appendChild(flash);
+    mountOverlay(flash);
 
     var flashDuration = getBeaconDuration(450);
     var flashAnim = flash.animate([
@@ -2776,7 +2792,7 @@
       'pointer-events:none',
       'z-index:2147483642'
     ].join(';') + (mirrored ? ';transform:scaleX(-1)' : '');
-    document.documentElement.appendChild(figWrap);
+    mountOverlay(figWrap);
 
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('width', String(figWidth));
@@ -3248,7 +3264,7 @@
       'offset-rotate:auto' + (mirrored ? ' 180deg' : ''),
       'opacity:1'
     ].join(';');
-    document.documentElement.appendChild(birdEl);
+    mountOverlay(birdEl);
 
     // Mirroring and the Beacon Size scale are both applied here, as a plain CSS
     // transform on this wrapper, rather than by touching the authoring grid (CELL) or
@@ -3379,7 +3395,7 @@
       flashCss.push('box-shadow:0 0 ' + (18 * beaconScale) + 'px ' + flashColor + ', 0 0 ' + (6 * beaconScale) + 'px ' + flashColor);
     }
     flash.style.cssText = flashCss.join(';');
-    document.documentElement.appendChild(flash);
+    mountOverlay(flash);
 
     var flashDuration = getBeaconDuration(450);
     var flashAnim = flash.animate([
@@ -3491,7 +3507,7 @@
       'transform-origin:50% 50%',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(svg);
+    mountOverlay(svg);
 
     function addShape(tag, attrs, parent) {
       var el = document.createElementNS(NS, tag);
@@ -3759,7 +3775,7 @@
       'transform-origin:50% ' + ((CAV.y + CAV.h / 2) * scale) + 'px',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(pumpkinEl);
+    mountOverlay(pumpkinEl);
 
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('width', String(VB_W * scale));
@@ -4128,7 +4144,7 @@
       "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
       'opacity:1'
     ].join(';');
-    document.documentElement.appendChild(outer);
+    mountOverlay(outer);
 
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('width', String(SPRITE_W));
@@ -4312,7 +4328,7 @@
       "offset-path:path('" + pumpPath + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(pumpkin);
+    mountOverlay(pumpkin);
 
     function makePumpkin() {
       var art = document.createElementNS(NS, 'svg');
@@ -4412,7 +4428,7 @@
         'z-index:2147483642',
         'background:#f59e0b', 'clip-path:' + side[7], 'opacity:0', 'transform-origin:' + side[4]
       ].join(';');
-      document.documentElement.appendChild(burst);
+      mountOverlay(burst);
       var burstAnim = burst.animate([
         { opacity: 0, transform: side[5] },
         { opacity: 0.9, transform: side[6], offset: 0.4 },
@@ -4646,7 +4662,7 @@
       'z-index:2147483642',
       'clip-path:polygon(0px 0px, ' + vw + 'px 0px, ' + vw + 'px ' + waterlineY + 'px, 0px ' + waterlineY + 'px)'
     ].join(';');
-    document.documentElement.appendChild(riseWrap);
+    mountOverlay(riseWrap);
 
     // Every WAAPI animation this beacon creates -- including on the tentacle/dome/eye child
     // nodes below -- is collected here and hung off riseWrap (the element cancelBeacons()
@@ -5020,7 +5036,7 @@
       // uses.
       'overflow:hidden'
     ].join(';');
-    document.documentElement.appendChild(reanimateWrap);
+    mountOverlay(reanimateWrap);
 
     // Every WAAPI animation this beacon creates -- including on the electrode/figure/eye
     // child nodes below -- is collected here and hung off reanimateWrap (the element
@@ -5506,7 +5522,7 @@
       "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
       'opacity:1'
     ].join(';');
-    document.documentElement.appendChild(batEl);
+    mountOverlay(batEl);
 
     var batSvg = document.createElementNS(NS, 'svg');
     batSvg.setAttribute('width', String(BAT_W));
@@ -5580,7 +5596,7 @@
       'transform-origin:50% 100%',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(mistEl);
+    mountOverlay(mistEl);
 
     // Grow-in and fade-out are ONE .animate() call (not two stacked on the same properties)
     // -- oculist-7x3j's own compositing fix, ported as-is: two separate calls keyframing the
@@ -5623,7 +5639,7 @@
       'z-index:2147483642',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(figWrap);
+    mountOverlay(figWrap);
 
     var figSvg = document.createElementNS(NS, 'svg');
     figSvg.setAttribute('width', String(figWidth));
@@ -5911,7 +5927,7 @@
       'opacity:0',
       mirrored ? 'transform:scaleX(-1);' : ''
     ].join(';');
-    document.documentElement.appendChild(wrap);
+    mountOverlay(wrap);
 
     var svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('width', String(figWidth));
@@ -6129,7 +6145,7 @@
       'z-index:2147483642',
       'clip-path:polygon(evenodd, ' + clipPts + ')'
     ].join(';');
-    document.documentElement.appendChild(backWrap);
+    mountOverlay(backWrap);
     var backWrapAnims = [];
 
     for (var i = 0; i < THETA0.length; i++) {
@@ -6243,7 +6259,7 @@
         'opacity:0'
       ].join(';');
       frontEl.appendChild(sparkVisual(i));
-      document.documentElement.appendChild(frontEl);
+      mountOverlay(frontEl);
 
       // Back-arc ghost: a plain child of backWrap (see its own comment above), not its own
       // mounted top-level element -- no 'oc-beacon' class, no z-index override.
@@ -6923,7 +6939,7 @@
       'z-index:2147483642',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(archerWrap);
+    mountOverlay(archerWrap);
 
     var archerSvg = document.createElementNS(NS, 'svg');
     archerSvg.setAttribute('width', String(archerW));
@@ -7087,7 +7103,7 @@
       'opacity:0'
     ].join(';');
     flightArrow.appendChild(arrowSvg);
-    document.documentElement.appendChild(flightArrow);
+    mountOverlay(flightArrow);
 
     // ── Target rings ─────────────────────────────────────────────────────────────────────────
     var SQRT2 = Math.SQRT2;
@@ -7112,7 +7128,7 @@
       'z-index:2147483642',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(targetEl);
+    mountOverlay(targetEl);
 
     var targetSvg = document.createElementNS(NS, 'svg');
     targetSvg.setAttribute('width', String(targetW));
@@ -7545,7 +7561,7 @@
       'z-index:2147483642',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(vineWrap);
+    mountOverlay(vineWrap);
 
     var vineAnims = [];
     function trackVine(a) { vineAnims.push(a); return a; }
@@ -7612,7 +7628,7 @@
       'z-index:2147483642',
       'opacity:0'
     ].join(';');
-    document.documentElement.appendChild(fallOuter);
+    mountOverlay(fallOuter);
 
     var fallAnims = [];
     function trackFall(a) { fallAnims.push(a); return a; }
@@ -7782,7 +7798,7 @@
     ].join(';');
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = cx + 'px ' + cy + 'px';
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.style.cssText = 'width:100%; height:100%; overflow:visible; display:block;';
@@ -8028,7 +8044,7 @@
     ].join(';');
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = cx + 'px ' + cy + 'px';
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     var canvas = document.createElement('canvas');
     var dpr = window.devicePixelRatio || 1;
@@ -8227,7 +8243,7 @@
     ].join(';');
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     // lastSpeedLinesContainerRect: the container's own position, taken right after it is
     // placed in the document and never touched again on this element -- its CSS
@@ -8564,7 +8580,7 @@
     ].join(';');
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = vpCx + 'px ' + offsetY + 'px';
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     var canvas = document.createElement('canvas');
     var dpr = window.devicePixelRatio || 1;
@@ -8781,7 +8797,7 @@
     ].join(';');
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = matchCxDoc + 'px ' + localY(matchCyDoc) + 'px';
-    document.documentElement.appendChild(container);
+    mountOverlay(container);
 
     var anims = [];
 
@@ -8995,7 +9011,7 @@
       'pointer-events:none',
       'z-index:2147483640'
     ].join(';');
-    document.documentElement.appendChild(borderEl);
+    mountOverlay(borderEl);
   }
 
   function animateReducedMotion(rect) {
@@ -9031,7 +9047,7 @@
         'pointer-events:none', 'z-index:2147483641',
         'background:radial-gradient(ellipse ' + (sw * 2) + 'px ' + (sh * 2) + 'px at ' + cx + 'px ' + cy + 'px, transparent 20%, rgba(28, 25, 22, 0.45) 80%)'
       ].join(';');
-      document.documentElement.appendChild(overlay);
+      mountOverlay(overlay);
 
       var glow = document.createElement('div');
       glow.className = 'oc-beacon oc-beacon-transient';
@@ -9047,7 +9063,7 @@
         'pointer-events:none',
         'z-index:2147483640'
       ].join(';');
-      document.documentElement.appendChild(glow);
+      mountOverlay(glow);
 
       var leftArrow = document.createElement('div');
       leftArrow.className = 'oc-beacon oc-beacon-transient';
@@ -9067,7 +9083,7 @@
         'text-align:right',
         'opacity:0'
       ].join(';');
-      document.documentElement.appendChild(leftArrow);
+      mountOverlay(leftArrow);
 
       var rightArrow = document.createElement('div');
       rightArrow.className = 'oc-beacon oc-beacon-transient';
@@ -9086,7 +9102,7 @@
         'text-align:left',
         'opacity:0'
       ].join(';');
-      document.documentElement.appendChild(rightArrow);
+      mountOverlay(rightArrow);
 
       var duration = getBeaconDuration(2500);
 
@@ -9150,7 +9166,7 @@
       'pointer-events:none',
       'z-index:2147483640'
     ].join(';');
-    document.documentElement.appendChild(glow);
+    mountOverlay(glow);
 
     var anim = glow.animate([
       { opacity: 0 },
@@ -9204,7 +9220,7 @@
       'box-shadow:0 0 8px ' + color,
       'opacity:' + (skipEntrance ? '1' : '0')
     ].join(';');
-    document.documentElement.appendChild(borderEl);
+    mountOverlay(borderEl);
 
     if (!skipEntrance) {
       borderEl.__waapiAnims = [borderEl.animate([
@@ -9244,7 +9260,7 @@
       'box-shadow:0 0 6px ' + activeColor
     ].join(';');
     
-    document.documentElement.appendChild(shape);
+    mountOverlay(shape);
   }
 
   // skipEntrance: see drawActiveMatchBorder above.
@@ -9288,7 +9304,7 @@
     ].join(';');
 
     label.textContent = 'Match #' + (activeIndex + 1) + ' of ' + searchRanges.length;
-    document.documentElement.appendChild(label);
+    mountOverlay(label);
 
     var lw = label.offsetWidth || 100;
     var lh = label.offsetHeight || 22;
@@ -9453,7 +9469,7 @@
     ].join(';');
     card.appendChild(connector);
 
-    document.documentElement.appendChild(card);
+    mountOverlay(card);
 
     var cw = card.offsetWidth || 120;
     var ch = card.offsetHeight || 50;
