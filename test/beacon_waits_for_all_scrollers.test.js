@@ -271,4 +271,29 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
       await page.close();
     }
   });
+
+  // oculist-r425: page script cancels the smooth scroll within one frame of Enter (scrollend fires
+  // almost at once with the match unmoved); the retry must still bring the match on screen.
+  test('a page cancelling the smooth scroll within a frame of Enter still ends on screen with the beacon drawn', async () => {
+    const page = await open('wheel');
+    try {
+      await page.evaluate(() => {
+        window.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' || window.__cancelled) return;
+          window.__cancelled = true;
+          requestAnimationFrame(() => window.scrollTo({ top: window.scrollY, behavior: 'instant' }));
+        }, true);
+      });
+      await page.fill(INPUT, TERM);
+      await page.keyboard.press('Enter');
+      await assertBeaconAtSettledMatch(page);
+      const onScreen = await page.evaluate(() => {
+        const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
+        return r.top >= 0 && r.bottom <= window.innerHeight;
+      });
+      assert.ok(onScreen, 'match is off-screen after the navigation');
+    } finally {
+      await page.close();
+    }
+  });
 });
