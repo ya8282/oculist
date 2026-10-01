@@ -23,6 +23,9 @@ const PAGES = {
   slot: `<!doctype html>${STYLE}<div style="height:2000px"></div><script>customElements.define('x-s',class extends HTMLElement{constructor(){super();this.attachShadow({mode:'open'}).innerHTML='<div style="height:300px;overflow:auto"><slot></slot></div>'}})</script><x-s><pre>${lines(400, 300).join('\n')}</pre></x-s><div style="height:4000px"></div>`,
   shift: `<!doctype html>${STYLE}<pre id=p>${lines(300, 150).join('\n')}</pre>`,
   area: `<!doctype html>${STYLE}<textarea id=t rows=3></textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  // oculist-u6x3: match in a fixed element clipped by the viewport bottom; the page scrolls itself.
+  fixedClipped: `<!doctype html>${STYLE}<div id=f style="position:fixed;left:0;top:785px;height:40px;font:14px/18px monospace">${TERM}</div><pre id=p>${lines(300, 150).join('\n')}</pre>`,
+  wide: `<!doctype html>${STYLE}<div style="width:4000px;height:1px"></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
 
@@ -201,4 +204,71 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
       }
     });
   }
+
+  // oculist-o639: keys that do not scroll the page (no horizontal overflow, caret moves in an
+  // empty textarea) are not a takeover; Cmd+G/F3 navigate with focus outside the find input.
+  const offInput = (page) => page.evaluate(() => document.activeElement.blur());
+  for (const [label, name, focus, key, takeover] of [
+    ['ArrowRight with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowRight', false],
+    ['ArrowLeft with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowLeft', false],
+    ['ArrowDown in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowDown', false],
+    ['ArrowRight in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowRight', false],
+    ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true],
+  ]) {
+    test(label + (takeover ? ' is a takeover: no beacon' : ' still draws the beacon at the match'), async () => {
+      const page = await open(name);
+      try {
+        await page.fill(INPUT, TERM);
+        await focus(page);
+        await page.keyboard.press('F3');
+        await new Promise((r) => setTimeout(r, 200));
+        await page.keyboard.press(key);
+        if (takeover) {
+          await new Promise((r) => setTimeout(r, 2500));
+          assert.ok(await page.evaluate(() => window.scrollX) > 0, 'premise: the key never scrolled the page horizontally');
+          assert.strictEqual(await page.evaluate(() => window.__beacon), null, 'beacon was drawn after a real takeover');
+        } else {
+          await assertBeaconAtSettledMatch(page);
+        }
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
+  test('a scroll-anchoring shift with nothing to scroll toward does not delay the beacon to the 3s cap', async () => {
+    const page = await open('fixedClipped');
+    try {
+      await page.evaluate(() => {
+        window.scrollTo(0, 500);
+        window.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          window.__t0 = Date.now();
+          setTimeout(() => {
+            const d = document.createElement('div');
+            d.style.height = '300px';
+            document.body.insertBefore(d, document.getElementById('p'));
+          }, 100);
+        }, true);
+      });
+      await page.evaluate(() => new Promise((resolve) => {
+        let last = -1, stable = 0;
+        const tick = () => {
+          stable = window.scrollY === last && last === 500 ? stable + 1 : 0;
+          last = window.scrollY;
+          stable >= 10 ? resolve() : requestAnimationFrame(tick);
+        };
+        tick();
+      }));
+      await page.fill(INPUT, TERM);
+      await page.keyboard.press('Enter');
+      const t0 = await page.evaluate(() => window.__t0);
+      await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
+      const latency = Date.now() - t0;
+      assert.ok(await page.evaluate(() => window.scrollY) > 500, 'premise: the anchoring shift never scrolled the page');
+      assert.ok(latency < 1000, `beacon drawn ${latency}ms after Enter`);
+    } finally {
+      await page.close();
+    }
+  });
 });
