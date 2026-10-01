@@ -11217,9 +11217,9 @@
         // scrolls are async, so measure once and track the shift inner scrollers apply.
         // oculist-spws: same when the parent exceeds its nearest scroller's clientHeight.
         var nearestScroller = scrollerOf(element);
-        // A flat-tree-only container (host or slot) is not a box scrollIntoView can centre inside its
+        // A flat-tree-only container (host or slot), or a parent that is itself the scroller (oculist-gvtu), is not a box scrollIntoView can centre inside its
         // scroller, so centre the range through the scroller walk instead.
-        if (element !== activeRange.startContainer.parentElement || element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
+        if (element !== activeRange.startContainer.parentElement || element === nearestScroller || element.getBoundingClientRect().height > Math.min(window.innerHeight, nearestScroller ? nearestScroller.clientHeight : Infinity)) {
           var shift = 0;
           var centerScroll = function (sc, top, height, isDoc) {
             var cur = isDoc ? window.scrollY : sc.scrollTop;
