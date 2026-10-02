@@ -1628,7 +1628,7 @@
     mountOverlay(laserContainer);
 
     setTimeout(function() {
-      laserContainer.remove();
+      destroyBeacon(laserContainer);
     }, getBeaconDuration(2100));
   }
 
@@ -1692,8 +1692,8 @@
     })];
 
     setTimeout(function() {
-      overlay.remove();
-      ring.remove();
+      destroyBeacon(overlay);
+      destroyBeacon(ring);
     }, getBeaconDuration(2100));
   }
 
@@ -1885,7 +1885,7 @@
     mountOverlay(container);
 
     setTimeout(function() {
-      container.remove();
+      destroyBeacon(container);
     }, getBeaconDuration(2200));
   }
 
@@ -2063,7 +2063,7 @@
     mountOverlay(container);
 
     setTimeout(function() {
-      container.remove();
+      destroyBeacon(container);
     }, getBeaconDuration(2200));
   }
 
@@ -2178,7 +2178,7 @@
     mountOverlay(container);
 
     setTimeout(function() {
-      container.remove();
+      destroyBeacon(container);
     }, getBeaconDuration(2900));
   }
 
@@ -8020,7 +8020,7 @@
     }, travelDuration);
 
     setTimeout(function () {
-      container.remove();
+      destroyBeacon(container);
     }, travelDuration + getBeaconDuration(1000));
   }
 
