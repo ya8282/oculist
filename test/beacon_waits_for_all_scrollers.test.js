@@ -156,11 +156,11 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
   });
 
   const refocusNothing = (page) => page.evaluate(() => document.activeElement.blur());
-  for (const [label, interrupt, movesPage] of [
+  for (const [label, interrupt, bound] of [
     ['wheel', (page) => page.mouse.wheel(0, -100)],
-    ['PageDown', (page) => refocusNothing(page).then(() => page.keyboard.press('PageDown')), true],
-    ['PageDown with focus in the find input', (page) => page.keyboard.press('PageDown'), true],
-    ['End with focus in the find input', (page) => page.keyboard.press('End'), true],
+    ['PageDown', (page) => refocusNothing(page).then(() => page.keyboard.press('PageDown')), { min: (y0) => y0 + 400, max: 3000 }],
+    ['PageDown with focus in the find input', (page) => page.keyboard.press('PageDown'), { min: (y0) => y0 + 400, max: 3000 }],
+    ['End with focus in the find input', (page) => page.keyboard.press('End'), { min: () => 5500 }],
   ]) {
     test('a user ' + label + ' interrupting the smooth scroll draws no beacon and keeps the highlight', async () => {
       const page = await open('wheel');
@@ -180,7 +180,11 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
         assert.ok(res.scrolled > 0, 'premise: the navigation scroll never started');
         assert.strictEqual(res.beacon, null, 'beacon was drawn for an interrupted navigation');
         assert.ok(res.active, 'active highlight was dropped');
-        if (movesPage) assert.ok(res.scrolled >= y0 + 400, `page ended at ${res.scrolled}, key was sent at ${y0}: navigation pulled it back`);
+        // Measured: honoured PageDown ends ~860-1360, End 6400 (page bottom); a pull-back to the match ends ~5009.
+        if (bound) {
+          assert.ok(res.scrolled >= bound.min(y0), `page ended at ${res.scrolled}, key was sent at ${y0}: key not honoured`);
+          if (bound.max) assert.ok(res.scrolled < bound.max, `page ended at ${res.scrolled}: navigation pulled it back to the match (~5009)`);
+        }
       } finally {
         await page.close();
       }
