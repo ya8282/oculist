@@ -214,10 +214,29 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   // (goToNext()/replay path — the only match on the page, so every Enter re-fires the same
   // active match), and waits for a fresh .oc-beacon container to actually exist. animate()
   // calls cancelBeacons() first, so this never accumulates parts across calls.
+  //
+  // oculist-xfsk: waitForSelector only sees a beacon that is still in the DOM when its poll
+  // runs, so a renderer stall longer than the beacon's lifetime (a scroll-cancelled run lives
+  // ~0.7s) loses it for good and times out. A MutationObserver armed before the Enter latches
+  // the draw itself, so the wait cannot miss a beacon that was drawn and removed in between.
+  async function pressEnterAndAwaitBeacon() {
+    await page.evaluate(() => {
+      window.__ocBeaconSeen = false;
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('.oc-beacon')) {
+          window.__ocBeaconSeen = true;
+          obs.disconnect();
+        }
+      });
+      obs.observe(document.documentElement, { childList: true });
+    });
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__ocBeaconSeen === true, null, { timeout: POLL_TIMEOUT });
+  }
+
   async function replay() {
     await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+    await pressEnterAndAwaitBeacon();
   }
 
   // Waits for content.js's own cyberVisionBracketsSettled flag — flipped by a setTimeout
@@ -512,7 +531,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       await page.keyboard.press('Enter');
 
       // No '.oc-beacon' will ever appear -- the guard returns before the container is
-      // created -- so this cannot reuse replay()'s own waitForSelector('.oc-beacon'). Poll
+      // created -- so this cannot reuse replay()'s own beacon wait. Poll
       // cyberVisionBracketsSettled directly: it can only go from the prior run's stale
       // true back to false by this reset running, since no real run (and therefore no
       // later settle timer) is possible once the element is zero-sized.
@@ -695,8 +714,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
 
       await armScrollRace();
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+      await pressEnterAndAwaitBeacon();
 
       await waitForContentScriptValue(evalInContentScript, 'window.__ocRaceScrollFired', (v) => v === true, {
         timeout: POLL_TIMEOUT,
