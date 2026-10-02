@@ -88,7 +88,7 @@ describe('effect self-removal timers cancel still-running animations', () => {
     await page.waitForSelector(INPUT, { timeout: POLL_TIMEOUT });
   }
 
-  async function setEffect(effect) {
+  async function setEffect(effect, extra) {
     const res = await client.send('Runtime.evaluate', {
       contextId: isolatedContextId,
       awaitPromise: true,
@@ -96,7 +96,7 @@ describe('effect self-removal timers cancel still-running animations', () => {
       expression:
         'new Promise(function (resolve) {' +
         "chrome.storage.sync.get('oc-settings', function (data) {" +
-        "var next = Object.assign({}, (data && data['oc-settings']) || {}, { effect: " + JSON.stringify(effect) + ' });' +
+        "var next = Object.assign({}, (data && data['oc-settings']) || {}, { effect: " + JSON.stringify(effect) + ' }, ' + JSON.stringify(extra || {}) + ');' +
         "chrome.storage.sync.set({ 'oc-settings': next }, function () { setTimeout(resolve, 200); });" +
         '});' +
         '})',
@@ -143,6 +143,45 @@ describe('effect self-removal timers cancel still-running animations', () => {
         );
       } finally {
         await page.evaluate(() => { delete window.__waapiSnapshot; });
+      }
+    });
+  }
+
+  // oculist-w0xo: these two effects remove sibling elements off ONE sibling's .finished.
+  // Only the siblings are slowed, so the trigger finishes while they are still running;
+  // the removal must cancel them rather than detach them mid-flight. Beacon order is
+  // mount order: arrows = [left(trigger), right]; reduced-motion = [overlay, glow(trigger),
+  // left, right].
+  const SIBLING_CASES = [
+    { name: 'arrows (animatePointingArrows)', effect: 'arrows', extra: {}, trigger: 0 },
+    { name: 'reduced-motion (animateReducedMotion)', effect: 'hud', extra: { displayPreset: 'reduced-motion', visionSettings: { motionSensitivity: 'reduced' } }, trigger: 1 },
+  ];
+  for (const c of SIBLING_CASES) {
+    test(`${c.name}: removing siblings off one .finished cancels the lagging ones`, async () => {
+      await setEffect(c.effect, c.extra);
+      try {
+        await replay();
+        const n = await page.evaluate((trigger) => {
+          const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+          window.__waapiSnapshot = [];
+          beacons.forEach((b, i) => {
+            if (i === trigger) return;
+            b.getAnimations().forEach((a) => { a.updatePlaybackRate(0.01); window.__waapiSnapshot.push(a); });
+          });
+          return window.__waapiSnapshot.length;
+        }, c.trigger);
+        assert.ok(n > 0, 'sanity check: expected live sibling animations');
+        await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+          timeout: POLL_TIMEOUT,
+        });
+        const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+        assert.ok(
+          after.every((s) => s !== 'running'),
+          `expected sibling animations cancelled on removal; observed ${JSON.stringify(after)}`
+        );
+      } finally {
+        await page.evaluate(() => { delete window.__waapiSnapshot; });
+        await setEffect('hud', { displayPreset: null, visionSettings: { motionSensitivity: 'full' } });
       }
     });
   }
