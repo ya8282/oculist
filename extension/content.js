@@ -11455,9 +11455,7 @@
       }
     }
 
-    // Batch DOM Writes using a DocumentFragment
     if (visibleMatches.length > 0) {
-      var fragment = document.createDocumentFragment();
       for (var j = 0; j < visibleMatches.length; j++) {
         var pos = visibleMatches[j];
         var marker = document.createElement('div');
@@ -11473,10 +11471,9 @@
           'pointer-events:none',
           'z-index:2147483640'
         ].join(';');
-        fragment.appendChild(marker);
+        mountOverlay(marker);
         viewportMarkers.push(marker);
       }
-      document.documentElement.appendChild(fragment);
     }
   }
 
