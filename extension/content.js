@@ -8904,6 +8904,7 @@
       ['border-right:0;border-top:0;', mxDoc - pad, localY(myDoc + mh + pad - L), -22, 22],
       ['border-left:0;border-top:0;', mxDoc + mw + pad - L, localY(myDoc + mh + pad - L), 22, 22]
     ];
+    var bracketAnims = [];
     for (var i = 0; i < corners.length; i++) {
       var cdef = corners[i];
       var bracket = add('oc-cv-bracket', [
@@ -8911,7 +8912,7 @@
         'left:' + cdef[1] + 'px', 'top:' + cdef[2] + 'px',
         'width:' + L + 'px', 'height:' + L + 'px'
       ].join(';'));
-      anims.push(bracket.animate(
+      var bracketAnim = bracket.animate(
         [
           { opacity: 0, transform: 'translate(' + cdef[3] + 'px,' + cdef[4] + 'px)' },
           { opacity: 1, transform: 'translate(0,0)', offset: 0.3 },
@@ -8919,7 +8920,9 @@
           { opacity: 0, transform: 'translate(0,0)' }
         ],
         { duration: BRACKET_DUR, delay: BRACKET_DELAY, easing: 'cubic-bezier(.2,.9,.3,1)', fill: 'both' }
-      ));
+      );
+      bracketAnims.push(bracketAnim);
+      anims.push(bracketAnim);
     }
 
     // window.__ocTest is this content script's sanctioned test-only surface. Reset per run
@@ -8927,13 +8930,14 @@
     // oculist-3ae). The brackets' own keyframes (above) reach translate(0,0)
     // — fully snapped in — at offset 0.3 of their delay+duration and hold there until the
     // fade-out; that offset is exact real math derived from this run's own BRACKET_DELAY/
-    // BRACKET_DUR, not a guess, so a timeout keyed to it is a genuine completion signal
+    // BRACKET_DUR, not a guess, so it is the point the settle check (below) waits for each
+    // bracket animation's currentTime to reach
     // (other DOM/WAAPI effects in this registry instead use .finished — there, "done" IS the animation's
     // end; here "settled" is a mid-animation point .finished cannot express, since waiting
     // for full completion would race the container's own self-removal timeout below, which
     // fires at the same moment the brackets' fade-out actually finishes).
     //
-    // This settle timer is a plain setTimeout, not tied to the container's own lifecycle, so
+    // The first settle check is a plain setTimeout, not tied to the container's own lifecycle, so
     // it is not cancelled if this run is cancelled early. Two independent paths can cancel
     // it: a new search calls animate() -> cancelBeacons() synchronously before every run
     // (including the one that reset the hook above), which detaches the container via
@@ -8946,11 +8950,20 @@
     // starts that fade, so checking it alongside isConnected catches this second path too,
     // without needing the container to have actually been removed yet.
     window.__ocTest.cyberVisionBracketsSettled = false;
-    setTimeout(function () {
-      if (container.isConnected && !container.__ocCancelled) {
-        window.__ocTest.cyberVisionBracketsSettled = true;
+    // The timer only schedules the first look: under load the WAAPI timeline can lag the
+    // timer (oculist-t85d), so the flag is set only once every bracket animation's own
+    // currentTime has actually reached the snapped-in point, re-checking until it does.
+    var settleAt = BRACKET_DELAY + BRACKET_DUR * 0.3;
+    function checkBracketsSettled() {
+      if (!container.isConnected || container.__ocCancelled) return;
+      for (var k = 0; k < bracketAnims.length; k++) {
+        var t = bracketAnims[k].currentTime;
+        if (t === null || bracketAnims[k].playState === 'idle') return; // cancelled
+        if (t < settleAt) { setTimeout(checkBracketsSettled, 16); return; }
       }
-    }, BRACKET_DELAY + BRACKET_DUR * 0.3);
+      window.__ocTest.cyberVisionBracketsSettled = true;
+    }
+    setTimeout(checkBracketsSettled, settleAt);
 
     // Readout beside the brackets. Decorative HUD chrome, not content — aria-hidden so it is
     // never announced and never collides with the chip/counter accessible names, which are
