@@ -214,18 +214,36 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   // (goToNext()/replay path — the only match on the page, so every Enter re-fires the same
   // active match), and waits for a fresh .oc-beacon container to actually exist. animate()
   // calls cancelBeacons() first, so this never accumulates parts across calls.
-  async function replay() {
-    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+  //
+  // oculist-xfsk: waitForSelector only sees a beacon that is still in the DOM when its poll
+  // runs, so a renderer stall longer than the beacon's lifetime (a scroll-cancelled run lives
+  // ~0.7s) loses it for good and times out. A MutationObserver armed before the Enter latches
+  // the draw itself, so the wait cannot miss a beacon that was drawn and removed in between.
+  async function pressEnterAndAwaitBeacon() {
+    await page.evaluate(() => {
+      window.__ocBeaconSeen = false;
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('.oc-beacon')) {
+          window.__ocBeaconSeen = true;
+          obs.disconnect();
+        }
+      });
+      obs.observe(document.documentElement, { childList: true });
+    });
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+    await page.waitForFunction(() => window.__ocBeaconSeen === true, null, { timeout: POLL_TIMEOUT });
   }
 
-  // Waits for content.js's own cyberVisionBracketsSettled flag — flipped by a setTimeout
-  // keyed to this run's own BRACKET_DELAY + BRACKET_DUR * 0.3 (content.js:2881-2884), the
-  // exact moment each bracket's own keyframes (offset: 0.3) reach translate(0,0), i.e. fully
-  // snapped in and holding, before their later fade-out. Not a guessed timeout: it is real
-  // math derived from this run's own scheduled durations, so it cannot race the WAAPI
-  // schedule it is reporting on. This is a completion signal only; it says nothing
+  async function replay() {
+    await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
+    await pressEnterAndAwaitBeacon();
+  }
+
+  // Waits for content.js's own cyberVisionBracketsSettled flag — set once a timer keyed to
+  // this run's BRACKET_DELAY + BRACKET_DUR * 0.3 fires AND every bracket animation's own
+  // currentTime has reached that point (oculist-t85d: the timer alone can run ahead of the
+  // WAAPI timeline under load), i.e. fully snapped in and holding, before the later
+  // fade-out. This is a completion signal only; it says nothing
   // about whether the geometry itself is correct, which the caller must still verify
   // independently.
   async function waitForBracketsSettled() {
@@ -512,7 +530,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       await page.keyboard.press('Enter');
 
       // No '.oc-beacon' will ever appear -- the guard returns before the container is
-      // created -- so this cannot reuse replay()'s own waitForSelector('.oc-beacon'). Poll
+      // created -- so this cannot reuse replay()'s own beacon wait. Poll
       // cyberVisionBracketsSettled directly: it can only go from the prior run's stale
       // true back to false by this reset running, since no real run (and therefore no
       // later settle timer) is possible once the element is zero-sized.
@@ -673,6 +691,34 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     }
   });
 
+  // oculist-5s7l: the container's own end-of-effect self-removal timer must cancel its
+  // animations, not just detach. Under load the WAAPI timeline lags that timer, so the
+  // animations can still be running when it fires; a bare remove() left them running on a
+  // detached element. Slowing every animation to 1% rate makes that lag deterministic.
+  test('the container self-removal timer cancels animations still running when it fires', async () => {
+    await replay();
+    const n = await page.evaluate(() => {
+      const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+      const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
+      window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
+      window.__waapiSnapshot.forEach((a) => a.updatePlaybackRate(0.01));
+      return window.__waapiSnapshot.length;
+    });
+    assert.ok(n > 0, 'sanity check: expected live animations under .oc-beacon');
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+        timeout: POLL_TIMEOUT,
+      });
+      const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+      assert.ok(
+        after.every((s) => s !== 'running'),
+        `expected the self-removal timer to cancel still-running animations; observed ${JSON.stringify(after)}`
+      );
+    } finally {
+      await page.evaluate(() => { delete window.__waapiSnapshot; });
+    }
+  });
+
   // oculist-xi4: reviewer residual from oculist-3ae. That fix's `container.isConnected`
   // guard tells a stale timer's container apart from a live one, but isConnected only goes
   // false once the container is actually removed — and fadeActiveBeacons() (unlike
@@ -695,8 +741,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
       await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
 
       await armScrollRace();
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.oc-beacon', { timeout: POLL_TIMEOUT });
+      await pressEnterAndAwaitBeacon();
 
       await waitForContentScriptValue(evalInContentScript, 'window.__ocRaceScrollFired', (v) => v === true, {
         timeout: POLL_TIMEOUT,
