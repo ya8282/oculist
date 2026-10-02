@@ -259,6 +259,30 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     return handle.jsonValue();
   }
 
+  // Variant for tests that read rendered state (boxes, timings, animation counts) after the
+  // mount: the effect self-removes on its own WAAPI clock (~1s at fast speed), so a read that
+  // lands after a stalled poll finds the elements gone, and the figure's scale fade-in makes
+  // its box time-dependent. A main-world MutationObserver armed before Enter pauses every
+  // animation at t=0 in the microtask after the mount, so the state stays put until
+  // cancelBeacons().
+  async function replayFrozen() {
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+    await page.evaluate(() => {
+      if (window.__bfFreeze) window.__bfFreeze.disconnect();
+      window.__bfFreeze = new MutationObserver(() => {
+        document.querySelectorAll('.oc-beacon-transient').forEach((root) => {
+          root.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = 0; });
+        });
+      });
+      window.__bfFreeze.observe(document.documentElement, { childList: true, subtree: true });
+    });
+    try {
+      return await replay();
+    } finally {
+      await page.evaluate(() => { window.__bfFreeze.disconnect(); delete window.__bfFreeze; });
+    }
+  }
+
   function switchToTarget(id) {
     return async () => {
       await page.locator(INPUT).fill('');
@@ -718,7 +742,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
 
   test('Lite Mode, set for real through chrome.storage.sync: a no-op -- same rendered geometry and the same animation count in both modes', async () => {
     async function snapshot() {
-      const mounted = await replay();
+      const mounted = await replayFrozen();
       assert.ok(mounted, 'expected a mounted batflight');
       return page.evaluate(() => {
         const fig = document.querySelector('.oc-beacon-transient[data-batflight="figure"]');
@@ -752,7 +776,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
 
   test('Beacon Size S/M/L/XL, set for real through chrome.storage.sync: the bat and figure RENDERED boxes scale together', async () => {
     async function renderedSizes() {
-      const mounted = await replay();
+      const mounted = await replayFrozen();
       assert.ok(mounted, 'expected a mounted batflight');
       return page.evaluate(() => {
         const fig = document.querySelector('.oc-beacon-transient[data-batflight="figure"]');
@@ -792,7 +816,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
 
   test('Animation Speed, set for real through chrome.storage.sync: every rendered WAAPI duration AND delay scales by getBeaconDuration\'s own factor', async () => {
     async function renderedTimings() {
-      await replay();
+      await replayFrozen();
       return page.evaluate(collectAnimationTimings);
     }
 
