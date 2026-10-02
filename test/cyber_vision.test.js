@@ -691,6 +691,34 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     }
   });
 
+  // oculist-5s7l: the container's own end-of-effect self-removal timer must cancel its
+  // animations, not just detach. Under load the WAAPI timeline lags that timer, so the
+  // animations can still be running when it fires; a bare remove() left them running on a
+  // detached element. Slowing every animation to 1% rate makes that lag deterministic.
+  test('the container self-removal timer cancels animations still running when it fires', async () => {
+    await replay();
+    const n = await page.evaluate(() => {
+      const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+      const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
+      window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
+      window.__waapiSnapshot.forEach((a) => a.updatePlaybackRate(0.01));
+      return window.__waapiSnapshot.length;
+    });
+    assert.ok(n > 0, 'sanity check: expected live animations under .oc-beacon');
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('.oc-beacon').length === 0, null, {
+        timeout: POLL_TIMEOUT,
+      });
+      const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+      assert.ok(
+        after.every((s) => s !== 'running'),
+        `expected the self-removal timer to cancel still-running animations; observed ${JSON.stringify(after)}`
+      );
+    } finally {
+      await page.evaluate(() => { delete window.__waapiSnapshot; });
+    }
+  });
+
   // oculist-xi4: reviewer residual from oculist-3ae. That fix's `container.isConnected`
   // guard tells a stale timer's container apart from a live one, but isConnected only goes
   // false once the container is actually removed — and fadeActiveBeacons() (unlike
