@@ -11023,12 +11023,28 @@
       return inView;
     };
     var isFullyInViewport = isFullyVisible(rect);
+    // oculist-i955: whether a scroll toward the match can actually move anything (a scroller up the
+    // chain with range left in the needed direction, then the document unless a position:fixed
+    // ancestor pins the match). Decides how long the auto-scroll flag waits for a first own scroll.
+    var expectsOwnScroll = function (el) {
+      var cy = rect.top + rect.height / 2;
+      var movable = function (pos, max, delta) { return (delta >= 1 && pos < max - 1) || (delta <= -1 && pos > 1); };
+      for (var n = el; n && n.nodeType === 1; n = flatTreeParent(n)) {
+        if (scrollerOf(n) === n) {
+          var b = n.getBoundingClientRect();
+          if (movable(n.scrollTop, n.scrollHeight - n.clientHeight, cy - (b.top + n.clientTop + n.clientHeight / 2))) return true;
+        }
+        if (window.getComputedStyle(n).position === 'fixed') return false;
+      }
+      var de = document.scrollingElement || document.documentElement;
+      return movable(window.scrollY, de.scrollHeight - window.innerHeight, cy - window.innerHeight / 2);
+    };
 
     if (!isFullyInViewport && !skipScroll) {
       // Rendered-tree container: a root-level or slotted text node has no (useful) parentElement.
       var element = flatTreeParent(activeRange.startContainer);
       if (element) {
-        triggerAutoScrollFlag(element);
+        triggerAutoScrollFlag(element, expectsOwnScroll(element));
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
@@ -11348,7 +11364,7 @@
     autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
   }
 
-  function triggerAutoScrollFlag(element) {
+  function triggerAutoScrollFlag(element, expectScroll) {
     isAutoScrolling = true;
     autoScrollElement = element;
     // Re-entrant-safe: a navigation superseding an already-in-flight auto-scroll removes
@@ -11358,7 +11374,11 @@
     if (autoScrollTimer) clearTimeout(autoScrollTimer);
     window.addEventListener('scrollend', onAutoScrollEnd, true);
     window.addEventListener('scroll', onAutoScrollScroll, true);
-    autoScrollTimer = setTimeout(clearAutoScrollFlag, 300);
+    // oculist-i955: the 300ms grace counts from the first own scroll event (extendAutoScrollFlag) when a
+    // scroll is expected (something can move toward the match), so a renderer stall past 300ms before
+    // that event keeps suppression. When nothing can move (fixed match, scroller at its limit) no event
+    // will come, so keep the short 300ms: a longer flag would swallow the user's own scroll.
+    autoScrollTimer = setTimeout(clearAutoScrollFlag, expectScroll ? 1500 : 300);
   }
 
   // Same test-reachability reasoning as window.__ocTest.getDebounceTimer above (see its
