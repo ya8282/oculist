@@ -27,6 +27,8 @@ const PAGES = {
   shadowtext: `<!doctype html><style>body{margin:0}</style><div id=h style="height:300px;overflow:auto;margin-top:100px;white-space:pre;font:14px/18px monospace"></div><div style="height:3000px"></div><script>document.getElementById('h').attachShadow({mode:'open'}).appendChild(document.createTextNode(${JSON.stringify(lines(33, 30))}))</script>`,
   // oculist-a99z: bare text node slotted into a shadow scroller.
   slottedtext: `<!doctype html><style>body{margin:0}x-s{display:block;margin-top:100px;white-space:pre;font:14px/18px monospace}</style><x-s></x-s><div style="height:3000px"></div><script>const h=document.querySelector('x-s');h.attachShadow({mode:'open'}).innerHTML='<div id=m style="height:300px;overflow:auto"><slot></slot></div>';h.appendChild(document.createTextNode(${JSON.stringify(lines(33, 30))}))</script>`,
+  // oculist-gvtu: text is a direct child of the light-DOM scroller (no wrapping element).
+  directtext: `<!doctype html><style>body{margin:0}#m{height:400px;overflow:auto;white-space:pre;font:14px/18px monospace}</style><div id=m>${lines(40, 36)}</div><div style="height:3000px"></div>`,
 };
 const SCROLLER = {
   shadowtext: "document.getElementById('h')",
@@ -102,7 +104,7 @@ describe('match clipped by an inner scroller but inside the viewport rect (oculi
     })()`);
   }
 
-  for (const name of ['tall', 'short', 'shadowtext', 'slottedtext']) {
+  for (const name of ['tall', 'short', 'shadowtext', 'slottedtext', 'directtext']) {
     test(`${name} parent: match is scrolled into the container and the beacon follows`, async () => {
       const s = await search(name);
       assert.ok(s.top >= s.cTop && s.bottom <= s.cBottom, `match not inside the container: ${JSON.stringify(s)}`);

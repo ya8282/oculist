@@ -405,8 +405,22 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
 
   test('Lite Mode renders no thermal blocks and no scanline overlay', async () => {
     await replay();
-    const fullThermalCount = await page.locator(THERMAL).count();
-    const fullScanlineCount = await page.locator(SCANLINES).count();
+    // Thermal blocks and scanlines are timed WAAPI elements: poll until both exist and read
+    // both counts in the same tick, so the count cannot fall outside their lifetime.
+    const full = await page
+      .waitForFunction(
+        ([t, sc]) => {
+          const th = document.querySelectorAll(t).length;
+          const sl = document.querySelectorAll(sc).length;
+          return th > 0 && sl > 0 ? { th, sl } : false;
+        },
+        [THERMAL, SCANLINES],
+        { timeout: POLL_TIMEOUT, polling: 'raf' }
+      )
+      .then((h) => h.jsonValue())
+      .catch(() => ({ th: 0, sl: 0 }));
+    const fullThermalCount = full.th;
+    const fullScanlineCount = full.sl;
     assert.ok(fullThermalCount > 0, `sanity check: expected thermal blocks in full mode, got ${fullThermalCount}`);
     assert.ok(fullScanlineCount > 0, `sanity check: expected a scanline overlay in full mode, got ${fullScanlineCount}`);
 
