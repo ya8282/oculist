@@ -11218,7 +11218,17 @@
             // oculist-o639: arrows/Space only count as a takeover when they can scroll. In a
             // page text field they move the caret (scroll only when the field is off-screen and the caret can move);
             // elsewhere ArrowLeft/Right need a horizontally overflowing window or scroller.
+            // oculist-7ki8: controls that consume some keys without scrolling, per key and type
+            // (measured on-screen and off-screen: page scrollY unchanged). Anything unlisted stays a takeover.
+            // Read from activeElement: a UA-shadow keydown target is an inner node, not the input.
+            var ARROWS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+            var UPDOWN = ['ArrowUp', 'ArrowDown']; // date family: Left/Right move the segment and interrupt a smooth scroll
+            var KEYS_KEPT = { number: ['ArrowUp', 'ArrowDown'], range: ARROWS, date: UPDOWN, time: UPDOWN, 'datetime-local': UPDOWN, month: UPDOWN, week: UPDOWN, checkbox: [' '], radio: [' '], button: [' '], submit: [' '], reset: [' '] };
             var keyMayScroll = function (e, kt) {
+              var fe = document.activeElement;
+              if (fe && fe.tagName === 'SELECT' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return false;
+              var kept = fe && fe.tagName === 'INPUT' && !fe.readOnly && KEYS_KEPT[fe.type];
+              if (kept && kept.indexOf(e.key) >= 0) return false;
               if (kt && (kt.isContentEditable || kt.tagName === 'TEXTAREA' || kt.tagName === 'INPUT')) {
                 var r = kt.getBoundingClientRect();
                 if (!(r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth)) return false;
@@ -11227,10 +11237,16 @@
                 return back ? kt.selectionStart > 0 : kt.selectionEnd < kt.value.length;
               }
               if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return true;
-              var de = document.documentElement;
-              if (de.scrollWidth > de.clientWidth) return true;
+              // Room in the key's direction (LTR; RTL keeps the plain overflow test).
+              var right = e.key === 'ArrowRight';
+              var canScrollX = function (n) {
+                if (n.scrollWidth <= n.clientWidth) return false;
+                if (getComputedStyle(n).direction === 'rtl') return true;
+                return right ? n.scrollLeft + n.clientWidth < n.scrollWidth - 1 : n.scrollLeft > 0;
+              };
+              if (canScrollX(document.documentElement)) return true;
               var path = e.composedPath ? e.composedPath() : [];
-              return path.some(function (n) { return n.nodeType === 1 && n.scrollWidth > n.clientWidth; });
+              return path.some(function (n) { return n.nodeType === 1 && canScrollX(n); });
             };
             // oculist-h1ns: the user taking over the scroll cancels this navigation's beacon.
             // Measured: in the always-visible find input only the arrows and Space leave the page
