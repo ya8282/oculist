@@ -91,19 +91,46 @@ describe('user scroll of an inner container (oculist-qv2i)', () => {
   // The flag must outlive the 300ms no-event window while the extension's own inner scroll runs
   // (its scroll/scrollend do not bubble), survive an unrelated scroller's scrollend, and still
   // terminate once the own scroll ends although the unrelated scroller keeps scrolling.
+  // The flag is deliberately a 300ms grace from the last own scroll event, so a renderer stall
+  // longer than that (parallel load) legitimately expires it, and once down it stays down. The
+  // page records a defect only when the flag was up at one own scroll event and is down at the
+  // next although they came under 250ms apart (the grace cannot have run out). A flag found down
+  // otherwise is a stall: retry on a fresh page.
   test('auto-scroll flag follows the own inner scroll only, not an unrelated scroller', async () => {
-    const { page, ev } = await open('/ticker');
-    const timer = () => ev('window.__ocTest.getAutoScrollTimer() !== null');
-    await page.fill(INPUT, TERM);
-    await page.keyboard.press('Enter');
-    await new Promise((r) => setTimeout(r, 700));
-    for (let i = 0; i < 4; i++) {
-      assert.strictEqual(await timer(), true, 'flag expired while the own inner scroll was still running');
-      await new Promise((r) => setTimeout(r, 150));
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { page, ev } = await open('/ticker');
+      const timer = () => ev('window.__ocTest.getAutoScrollTimer() !== null');
+      // The ticker is an unrelated scroller whose scroll legitimately fades a drawn beacon (any
+      // scroll counts), up to 150ms after the draw; under load that outruns a 20ms count poll.
+      // Record the draw itself instead of sampling the live count.
+      await ev(`window.__drawn = false; window.__defect = false;
+        new MutationObserver(function (ms, o) {
+          if (document.querySelector('.oc-beacon-transient')) { window.__drawn = true; o.disconnect(); } }).observe(document.documentElement, { childList: true, subtree: true });
+        var prev = 0, prevUp = false;
+        document.getElementById('m').addEventListener('scroll', function () {
+          var now = Date.now(), gap = now - prev; prev = now;
+          setTimeout(function () {
+            var up = window.__ocTest.getAutoScrollTimer() !== null;
+            if (prevUp && !up && gap < 250) window.__defect = true;
+            prevUp = up;
+          }, 0);
+        })`);
+      await page.fill(INPUT, TERM);
+      await page.keyboard.press('Enter');
+      await new Promise((r) => setTimeout(r, 700));
+      let stalled = false;
+      for (let i = 0; i < 4; i++) {
+        assert.strictEqual(await ev('window.__defect'), false, 'flag expired while the own inner scroll was still running');
+        if (!(await timer())) { stalled = true; break; }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (stalled) { await page.close(); continue; }
+      await waitForCondition(() => ev('window.__drawn'), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
+      await waitForCondition(timer, (v) => v === false, { timeout: POLL_TIMEOUT, interval: 50, message: 'unrelated scroller kept the flag alive after the own scroll ended' });
+      await page.close();
+      return;
     }
-    await waitForCondition(() => beacons(ev), (n) => n === 1, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
-    await waitForCondition(timer, (v) => v === false, { timeout: POLL_TIMEOUT, interval: 50, message: 'unrelated scroller kept the flag alive after the own scroll ended' });
-    await page.close();
+    assert.fail('renderer stalled past the 300ms grace on every attempt');
   });
 
   test('viewport markers refresh on a user scroll of the inner container', async () => {

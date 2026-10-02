@@ -143,14 +143,16 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
 
   // Simulates "a page that never stops scrolling" (an infinite auto-scroller, a stuck
   // momentum scroll — the bead's own framing): oscillates window.scrollY back and forth
-  // inside a small band near the top of the page, forever, via a short setInterval — started
+  // in 800px steps inside a band near the top of the page, forever, via a short setInterval
+  // (long steps keep each smooth animation alive far longer than a load-delayed 40ms tick, so
+  // it is re-targeted before it can end) — started
   // *before* the Enter navigation below and never paused, so native 'scrollend' has no
   // window of genuine quiescence in which to fire on its own. That matters: this test's
   // premise only holds if the ONLY thing that can ever clear the grace timer is
   // clearAutoScrollFlag() running (via native scrollend, or via __ocDestroy() with the fix);
   // if the native scrollIntoView() animation were left to finish undisturbed, its own
   // 'scrollend' would fire once and clear everything naturally, making the test pass
-  // vacuously regardless of __ocDestroy()'s behavior. The 0-300 band sits far above
+  // vacuously regardless of __ocDestroy()'s behavior. The 0-2400 band sits above
   // "target" (past 4000px) so isFullyInViewport for that match is unaffected by it. Returns
   // a stop() that clears the interval — the test always calls it before ctx.close() so no
   // timer outlives this file's own run.
@@ -165,7 +167,7 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
         // fired scrollend on nearly every tick). behavior:'smooth', re-targeted before each
         // prior animation settles, keeps one scroll operation continuously in flight instead.
         const y = window.scrollY;
-        if (y > 300) window.__ocNeverEndingScrollDir = -1;
+        if (y > 2400) window.__ocNeverEndingScrollDir = -1;
         // scrollY clamps at 0 and can never go negative, so the lower-bound check must be
         // reachable at exactly 0 (not '< 0', which nothing ever satisfies) or the motion
         // stalls the instant it descends to the clamp: every subsequent target is negative,
@@ -173,7 +175,7 @@ describe('__ocDestroy() leaves no stale auto-scroll listener/timer on a continuo
         // 'scroll'/'scrollend' events at all — silently defeating the "page that never
         // stops scrolling" premise this test depends on.
         if (y <= 0) window.__ocNeverEndingScrollDir = 1;
-        window.scrollTo({ top: y + window.__ocNeverEndingScrollDir * 30, behavior: 'smooth' });
+        window.scrollTo({ top: y + window.__ocNeverEndingScrollDir * 800, behavior: 'smooth' });
       }, 40);
     });
     return async function stop() {
