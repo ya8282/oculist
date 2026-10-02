@@ -8997,8 +8997,11 @@
     // container for cancelBeacons() to reach.
     container.__waapiAnims = anims;
 
+    // destroyBeacon(), not a bare remove(): under load the WAAPI timeline lags this timer,
+    // so animations can still be running here, and a detached element keeps them running
+    // (oculist-5s7l). It also leaves nothing for fadeActiveBeacons()'s own removal to reach.
     setTimeout(function () {
-      container.remove();
+      destroyBeacon(container);
     }, maxEnd);
   }
 
