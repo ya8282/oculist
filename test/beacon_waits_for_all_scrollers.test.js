@@ -26,6 +26,10 @@ const PAGES = {
   // oculist-u6x3: match in a fixed element clipped by the viewport bottom; the page scrolls itself.
   fixedClipped: `<!doctype html>${STYLE}<div id=f style="position:fixed;left:0;top:785px;height:40px;font:14px/18px monospace">${TERM}</div><pre id=p>${lines(300, 150).join('\n')}</pre>`,
   wide: `<!doctype html>${STYLE}<div style="width:4000px;height:1px"></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  // oculist-7ki8: focusable controls above the match; the navigation scrolls them off-screen.
+  controls: `<!doctype html>${STYLE}<input id=n type=number value=5><input id=r type=range><input id=d type=date><input id=cb type=checkbox><input id=em type=email value="hello"><input type=radio name=g id=r1><input id=btn type=button value=b><input id=rod type=date readonly><input id=ron type=number value=5 readonly><select id=s><option>a<option>b<option>c</select><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  hscroll: `<!doctype html>${STYLE}<div id=h tabindex=0 style="width:300px;height:30px;overflow-x:auto;white-space:nowrap"><div style="width:2000px">x</div></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  caretarea: `<!doctype html>${STYLE}<textarea id=t rows=3>${Array.from({ length: 40 }, () => 'abcd').join('\n')}</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
 
@@ -81,8 +85,13 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
     return page;
   }
 
+  const matchOnScreen = (page) => page.evaluate(() => {
+    const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= window.innerHeight;
+  });
+
   // Beacon mid must be within a line of the active match once everything has stopped moving.
-  async function assertBeaconAtSettledMatch(page) {
+  async function assertBeaconAtSettledMatch(page, requireOnScreen = true) {
     await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
     const sample = () => page.evaluate(() => {
       const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
@@ -101,6 +110,7 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
       return { beacon: window.__beacon.mid, settled: r.top + r.height / 2 };
     });
     assert.ok(Math.abs(beacon - settled) <= TOLERANCE, `beacon at ${beacon}, match settled at ${settled}`);
+    if (requireOnScreen) assert.ok(await matchOnScreen(page), 'match is off-screen after the navigation');
   }
 
   for (const name of ['nested', 'nestedShort', 'slot']) {
@@ -208,27 +218,61 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
   // oculist-o639: keys that do not scroll the page (no horizontal overflow, caret moves in an
   // empty textarea) are not a takeover; Cmd+G/F3 navigate with focus outside the find input.
   const offInput = (page) => page.evaluate(() => document.activeElement.blur());
-  for (const [label, name, focus, key, takeover] of [
+  const focusId = (id) => (page) => page.evaluate((i) => document.getElementById(i).focus({ preventScroll: true }), id);
+  // The key's scroll races the smooth navigation scroll, so a takeover row only checks that the
+  // navigation ran and drew nothing; the controls start scrolled off-screen so the key sees them off-screen.
+  const navigated = (page) => page.evaluate(() => CSS.highlights.has('oculist-active-match'));
+  const START = { controls: 1500, caretarea: 1500 };
+  for (const [label, name, focus, key, takeover, premise, offScreenOk] of [
     ['ArrowRight with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowRight', false],
     ['ArrowLeft with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowLeft', false],
-    ['ArrowDown in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowDown', false],
-    ['ArrowRight in an empty page textarea', 'area', (page) => page.evaluate(() => document.getElementById('t').focus({ preventScroll: true })), 'ArrowRight', false],
-    ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true],
+    ['ArrowDown in an empty page textarea', 'area', focusId('t'), 'ArrowDown', false, null, true], // oculist-1ihf: ArrowDown there scrolls the page and stops the navigation, so the match ends off-screen
+    ['ArrowRight in an empty page textarea', 'area', focusId('t'), 'ArrowRight', false],
+    ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true, async (page) => (await page.evaluate(() => window.scrollX)) > 0],
+    // oculist-7ki8: exemptions per key and type
+    ...['ArrowUp', 'ArrowDown'].map((k) => [k + ' in an off-screen number input', 'controls', focusId('n'), k, false]),
+    ...['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].map((k) => [k + ' in an off-screen range input', 'controls', focusId('r'), k, false]),
+    ...['ArrowUp', 'ArrowDown'].map((k) => [k + ' in an off-screen date input', 'controls', focusId('d'), k, false]),
+    ['Space on an off-screen checkbox', 'controls', focusId('cb'), 'Space', false],
+    ['Space on an off-screen radio', 'controls', focusId('r1'), 'Space', false],
+    ['Space on an off-screen button', 'controls', focusId('btn'), 'Space', false],
+    ['ArrowDown on a focused select', 'controls', focusId('s'), 'ArrowDown', false],
+    ['ArrowUp on a focused select', 'controls', focusId('s'), 'ArrowUp', false],
+    ['ArrowRight on a horizontal scroller already at max scrollLeft', 'hscroll', (page) => page.evaluate(() => { const h = document.getElementById('h'); h.scrollLeft = 1e5; h.focus({ preventScroll: true }); }), 'ArrowRight', false],
+    ['ArrowLeft on a horizontal scroller already at scrollLeft 0', 'hscroll', focusId('h'), 'ArrowLeft', false],
+    // must still cancel: the key scrolls the page
+    ['ArrowRight on a horizontal scroller with room to scroll', 'hscroll', focusId('h'), 'ArrowRight', true, (page) => page.evaluate(() => document.getElementById('h').scrollLeft > 0)],
+    ...['ArrowRight', 'Space'].map((k) => ['' + k + ' in an off-screen number input', 'controls', focusId('n'), k, true, navigated]),
+    ['ArrowUp in an off-screen readonly date input', 'controls', focusId('rod'), 'ArrowUp', true, navigated],
+    ['ArrowDown in an off-screen readonly number input', 'controls', focusId('ron'), 'ArrowDown', true, navigated],
+    ['ArrowRight in an off-screen date input', 'controls', focusId('d'), 'ArrowRight', true, navigated],
+    ['Space on an off-screen range input', 'controls', focusId('r'), 'Space', true, navigated],
+    ...['ArrowUp', 'ArrowDown'].map((k) => [k + ' on an off-screen checkbox', 'controls', focusId('cb'), k, true, navigated]),
+    ['ArrowDown on an off-screen button', 'controls', focusId('btn'), 'ArrowDown', true, navigated],
+    ['ArrowDown in an off-screen email input', 'controls', focusId('em'), 'ArrowDown', true, navigated],
+    ['ArrowDown in an off-screen textarea with the caret mid-text', 'caretarea', (page) => page.evaluate(() => { const t = document.getElementById('t'); t.focus({ preventScroll: true }); t.setSelectionRange(60, 60); }), 'ArrowDown', true, navigated],
+    ['ArrowDown with body focus', 'wheel', offInput, 'ArrowDown', true, navigated],
+    ['Space with body focus', 'wheel', offInput, 'Space', true, navigated],
   ]) {
     test(label + (takeover ? ' is a takeover: no beacon' : ' still draws the beacon at the match'), async () => {
       const page = await open(name);
       try {
         await page.fill(INPUT, TERM);
         await focus(page);
+        if (START[name]) {
+          // scroll after focusing: Chromium ignores preventScroll on some controls (date)
+          await page.evaluate((y) => window.scrollTo(0, y), START[name]);
+          assert.ok(await page.evaluate(() => document.activeElement.getBoundingClientRect().bottom < 0), 'premise: the focused control is not off-screen above the viewport');
+        }
         await page.keyboard.press('F3');
         await new Promise((r) => setTimeout(r, 200));
         await page.keyboard.press(key);
         if (takeover) {
           await new Promise((r) => setTimeout(r, 2500));
-          assert.ok(await page.evaluate(() => window.scrollX) > 0, 'premise: the key never scrolled the page horizontally');
+          assert.ok(await premise(page), 'premise: the key never scrolled the page');
           assert.strictEqual(await page.evaluate(() => window.__beacon), null, 'beacon was drawn after a real takeover');
         } else {
-          await assertBeaconAtSettledMatch(page);
+          await assertBeaconAtSettledMatch(page, !offScreenOk);
         }
       } finally {
         await page.close();
