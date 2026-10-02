@@ -11233,6 +11233,8 @@
                 var r = kt.getBoundingClientRect();
                 if (!(r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth)) return false;
                 if (e.key === ' ' || typeof kt.selectionStart !== 'number') return true;
+                // oculist-1ihf: off-screen, an empty textarea has nothing to move the caret over, so the arrow reveals it by scrolling the page.
+                if (kt.tagName === 'TEXTAREA' && kt.value === '' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return true;
                 var back = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
                 return back ? kt.selectionStart > 0 : kt.selectionEnd < kt.value.length;
               }

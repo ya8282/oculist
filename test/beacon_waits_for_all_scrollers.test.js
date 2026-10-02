@@ -29,6 +29,8 @@ const PAGES = {
   // oculist-7ki8: focusable controls above the match; the navigation scrolls them off-screen.
   controls: `<!doctype html>${STYLE}<input id=n type=number value=5><input id=r type=range><input id=d type=date><input id=cb type=checkbox><input id=em type=email value="hello"><input type=radio name=g id=r1><input id=btn type=button value=b><input id=rod type=date readonly><input id=ron type=number value=5 readonly><select id=s><option>a<option>b<option>c</select><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   hscroll: `<!doctype html>${STYLE}<div id=h tabindex=0 style="width:300px;height:30px;overflow-x:auto;white-space:nowrap"><div style="width:2000px">x</div></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  areaScrolled: `<!doctype html>${STYLE}<textarea id=t rows=3></textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  oneline: `<!doctype html>${STYLE}<textarea id=t rows=3>abcd</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   caretarea: `<!doctype html>${STYLE}<textarea id=t rows=3>${Array.from({ length: 40 }, () => 'abcd').join('\n')}</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
@@ -221,12 +223,25 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
   const focusId = (id) => (page) => page.evaluate((i) => document.getElementById(i).focus({ preventScroll: true }), id);
   // The key's scroll races the smooth navigation scroll, so a takeover row only checks that the
   // navigation ran and drew nothing; the controls start scrolled off-screen so the key sees them off-screen.
+  // The navigation only scrolls down toward the match, so a scroll back up after the keydown is the key revealing the textarea.
+  const focusRecordingReveal = (page) => page.evaluate(() => {
+    document.getElementById('t').focus({ preventScroll: true });
+    window.__revealed = false;
+    let down = null;
+    window.addEventListener('keydown', () => { down = scrollY; }, true);
+    window.addEventListener('scroll', () => { if (down !== null && scrollY < down) window.__revealed = true; }, true);
+  });
+  const revealed = (page) => page.evaluate(() => window.__revealed === true);
   const navigated = (page) => page.evaluate(() => CSS.highlights.has('oculist-active-match'));
-  const START = { controls: 1500, caretarea: 1500 };
+  const START = { controls: 1500, caretarea: 1500, areaScrolled: 1500, oneline: 1500 };
   for (const [label, name, focus, key, takeover, premise, offScreenOk] of [
     ['ArrowRight with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowRight', false],
     ['ArrowLeft with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowLeft', false],
-    ['ArrowDown in an empty page textarea', 'area', focusId('t'), 'ArrowDown', false, null, true], // oculist-1ihf: ArrowDown there scrolls the page and stops the navigation, so the match ends off-screen
+    // oculist-1ihf: an arrow in an off-screen empty textarea scrolls the page back to reveal it: a takeover
+    ['ArrowDown in an empty page textarea', 'areaScrolled', focusRecordingReveal, 'ArrowDown', true, revealed],
+    ['ArrowUp in an empty page textarea with the page scrolled down', 'areaScrolled', focusRecordingReveal, 'ArrowUp', true, revealed],
+    ['ArrowDown in an off-screen one-line textarea with the caret at the end', 'oneline', (page) => page.evaluate(() => { const t = document.getElementById('t'); t.focus({ preventScroll: true }); t.setSelectionRange(4, 4); }), 'ArrowDown', false],
+    ['ArrowUp in an off-screen textarea with the caret at 0', 'caretarea', (page) => page.evaluate(() => { const t = document.getElementById('t'); t.focus({ preventScroll: true }); t.setSelectionRange(0, 0); }), 'ArrowUp', false],
     ['ArrowRight in an empty page textarea', 'area', focusId('t'), 'ArrowRight', false],
     ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true, async (page) => (await page.evaluate(() => window.scrollX)) > 0],
     // oculist-7ki8: exemptions per key and type
