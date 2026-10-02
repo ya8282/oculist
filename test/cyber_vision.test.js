@@ -239,12 +239,11 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     await pressEnterAndAwaitBeacon();
   }
 
-  // Waits for content.js's own cyberVisionBracketsSettled flag — flipped by a setTimeout
-  // keyed to this run's own BRACKET_DELAY + BRACKET_DUR * 0.3 (content.js:2881-2884), the
-  // exact moment each bracket's own keyframes (offset: 0.3) reach translate(0,0), i.e. fully
-  // snapped in and holding, before their later fade-out. Not a guessed timeout: it is real
-  // math derived from this run's own scheduled durations, so it cannot race the WAAPI
-  // schedule it is reporting on. This is a completion signal only; it says nothing
+  // Waits for content.js's own cyberVisionBracketsSettled flag — set once a timer keyed to
+  // this run's BRACKET_DELAY + BRACKET_DUR * 0.3 fires AND every bracket animation's own
+  // currentTime has reached that point (oculist-t85d: the timer alone can run ahead of the
+  // WAAPI timeline under load), i.e. fully snapped in and holding, before the later
+  // fade-out. This is a completion signal only; it says nothing
   // about whether the geometry itself is correct, which the caller must still verify
   // independently.
   async function waitForBracketsSettled() {
