@@ -324,15 +324,15 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     await replay();
     await waitForBracketsSettled();
 
-    const geometry = await page.evaluate((sel) => {
-      const target = document.getElementById('target');
-      const m = target.getBoundingClientRect();
-      const brackets = Array.from(document.querySelectorAll(sel)).map((el) => {
-        const r = el.getBoundingClientRect();
-        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-      });
-      return { match: { left: m.left, top: m.top, right: m.right, bottom: m.bottom }, brackets };
-    }, BRACKET);
+    // Bracket rects come from content.js's own getBoundingClientRect snapshot taken the
+    // instant the flag flips: under load the container can be gone before a read from here.
+    const geometry = {
+      brackets: await evalInContentScript('window.__ocTest.cyberVisionBracketRects'),
+      match: await page.evaluate(() => {
+        const m = document.getElementById('target').getBoundingClientRect();
+        return { left: m.left, top: m.top, right: m.right, bottom: m.bottom };
+      }),
+    };
 
     assert.strictEqual(geometry.brackets.length, 4, `expected exactly 4 corner brackets, got ${geometry.brackets.length}`);
 
@@ -362,6 +362,19 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
 
   test('all four brackets land on the match: real rendered geometry, never off by a wide margin', async () => {
     await assertBracketsLandOnMatch(1, 'default beaconSize');
+  });
+
+  // oculist-y3kz: the container used to self-remove on a wall-clock timer while the settle
+  // flag follows the WAAPI timeline, so a lagging timeline (CPU load) let the container go
+  // before the flag flipped. Half-rate animations make that lag deterministic.
+  test('the container outlives the settle flag when the animation timeline lags (rate 0.5)', async () => {
+    await replay();
+    await page.evaluate(() => {
+      document.querySelectorAll('.oc-beacon *').forEach((el) => el.getAnimations().forEach((a) => a.updatePlaybackRate(0.5)));
+    });
+    await waitForBracketsSettled();
+    const n = (await evalInContentScript('window.__ocTest.cyberVisionBracketRects')).length;
+    assert.strictEqual(n, 4, `expected exactly 4 corner brackets after settling under lag, got ${n}`);
   });
 
   test('all four brackets land on the match at beaconSize "xl" (scale 2.25)', async () => {

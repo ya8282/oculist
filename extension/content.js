@@ -8759,6 +8759,7 @@
     // run's leftover true (oculist-3ae, same gap oculist-47e closed for
     // animateSpeedLines).
     window.__ocTest.cyberVisionBracketsSettled = false;
+    window.__ocTest.cyberVisionBracketRects = null;
 
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
@@ -8936,8 +8937,8 @@
     // bracket animation's currentTime to reach
     // (other DOM/WAAPI effects in this registry instead use .finished — there, "done" IS the animation's
     // end; here "settled" is a mid-animation point .finished cannot express, since waiting
-    // for full completion would race the container's own self-removal timeout below, which
-    // fires at the same moment the brackets' fade-out actually finishes).
+    // for full completion would leave the flag false for the whole hold; the container itself
+    // now self-removes on every animation's .finished, oculist-y3kz).
     //
     // The first settle check is a plain setTimeout, not tied to the container's own lifecycle, so
     // it is not cancelled if this run is cancelled early. Two independent paths can cancel
@@ -8952,6 +8953,19 @@
     // starts that fade, so checking it alongside isConnected catches this second path too,
     // without needing the container to have actually been removed yet.
     window.__ocTest.cyberVisionBracketsSettled = false;
+    // Flips the flag and snapshots the brackets' rendered rects at that instant: under load
+    // the container can be removed before a test's own read lands (oculist-y3kz), so the
+    // geometry is captured here, where it is still attached.
+    function markBracketsSettled() {
+      window.__ocTest.cyberVisionBracketRects = Array.prototype.map.call(
+        container.querySelectorAll('.oc-cv-bracket'),
+        function (el) {
+          var r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+        }
+      );
+      window.__ocTest.cyberVisionBracketsSettled = true;
+    }
     // The timer only schedules the first look: under load the WAAPI timeline can lag the
     // timer (oculist-t85d), so the flag is set only once every bracket animation's own
     // currentTime has actually reached the snapped-in point, re-checking until it does.
@@ -8963,7 +8977,7 @@
         if (t === null || bracketAnims[k].playState === 'idle') return; // cancelled
         if (t < settleAt) { setTimeout(checkBracketsSettled, 16); return; }
       }
-      window.__ocTest.cyberVisionBracketsSettled = true;
+      markBracketsSettled();
     }
     setTimeout(checkBracketsSettled, settleAt);
 
@@ -9002,9 +9016,27 @@
     // destroyBeacon(), not a bare remove(): under load the WAAPI timeline lags this timer,
     // so animations can still be running here, and a detached element keeps them running
     // (oculist-5s7l). It also leaves nothing for fadeActiveBeacons()'s own removal to reach.
-    setTimeout(function () {
+    //
+    // oculist-y3kz: removal follows the same WAAPI timeline as the settle flag (every
+    // animation's .finished), so a lagging timeline cannot remove the container before the
+    // flag flips. The wall-clock timer stays only as a safety net at 2x maxEnd, so an
+    // animation that never finishes cannot leak the container.
+    var removed = false;
+    function removeContainer() {
+      if (removed) return;
+      removed = true;
       destroyBeacon(container);
-    }, maxEnd);
+    }
+    // A bracket that finishes before the 16ms re-check fires (a stalled main thread) has
+    // passed the snapped-in point, so it settles the flag here rather than being removed
+    // with the flag still false.
+    bracketAnims.forEach(function (a) {
+      a.finished.then(function () {
+        if (container.isConnected && !container.__ocCancelled) markBracketsSettled();
+      }, function () {});
+    });
+    Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeContainer);
+    setTimeout(removeContainer, maxEnd * 2);
   }
 
   function drawStaticActiveBorder(rect) {
