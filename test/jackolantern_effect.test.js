@@ -28,7 +28,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -416,7 +416,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   }
 
   test('mouth-framing mode, UNSCROLLED: document-space geometry matches the shipped placement formula', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const measured = await measureTarget('target');
     const predicted = expectedPlacement(measured, measured.vw, measured.vh, 1);
     assert.strictEqual(predicted.mode, 'mouth');
@@ -455,7 +455,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
     // A modest 30px scroll -- enough for a real, non-zero scrollY to catch a missing
     // "+ window.scrollY" term (rule 2 of the promotion contract), while staying well
     // within the headroom the mouth cavity's own upward extent needs above #target.
-    await page.evaluate(() => window.scrollTo(0, 30));
+    await scrollPageTo(page, 30);
     try {
       const measured = await measureTarget('target');
       const predicted = expectedPlacement(measured, measured.vw, measured.vh, 1);
@@ -482,12 +482,12 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       assert.ok(cavGeom, 'expected a mounted mouth-mode pumpkin for the CAV clearance check');
       assertCavClearance(cavGeom.cav, cavGeom.target, 'mouth SCROLLED');
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
   test('mouth mode: the cavity contains the match with the real 6px clearance, the mouth panel carries its exact deliberate 0.18-opacity tint contract, and the match DOM is never mutated', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const before = await page.evaluate(() => document.getElementById('target').outerHTML);
 
     const geom = await replay(() => {
@@ -526,7 +526,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
     await page.locator(INPUT).fill('');
     await page.locator(INPUT).type('zeptogram', { delay: 30 });
     await waitForMatchCount(page);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     const before = await page.evaluate(() => document.getElementById('wideTarget').outerHTML);
     const measured = await measureTarget('wideTarget');
@@ -568,7 +568,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
 
     // 150px scroll -- a real, non-zero scrollY, well within the below-pumpkin figure's own
     // headroom need above #wideTarget (its 400px own lead-in).
-    await page.evaluate(() => window.scrollTo(0, 150));
+    await scrollPageTo(page, 150);
     try {
       const measured = await measureTarget('wideTarget');
       const predicted = expectedPlacement(measured, measured.vw, measured.vh, 1);
@@ -594,7 +594,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       assert.ok(rendered, 'expected a mounted above-mode pumpkin for the rendered-geometry check');
       assertAboveModeContract(rendered, 'below-pumpkin SCROLLED');
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
       await page.locator(INPUT).fill('');
       await page.locator(INPUT).type('quarklet', { delay: 30 });
       await waitForMatchCount(page);
@@ -607,7 +607,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       return r.top + window.scrollY;
     });
     try {
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 15)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 15));
 
       const measured = await measureTarget('target');
       const predicted = expectedPlacement(measured, measured.vw, measured.vh, 1);
@@ -620,7 +620,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       const beaconCount = await page.evaluate(() => document.querySelectorAll('.oc-beacon-transient').length);
       assert.strictEqual(beaconCount, 0, 'no .oc-beacon-transient node of any kind should remain after a suppressed fire');
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -638,7 +638,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       // Centre #target vertically in the tiny 220px-tall viewport -- close to both the top
       // and the bottom edge at once, and (#target's own 420px left margin against a 380px
       // viewport) already close to the right edge horizontally.
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 100)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 100));
 
       const measured = await measureTarget('target');
       const predicted = expectedPlacement(measured, measured.vw, measured.vh, 1);
@@ -675,7 +675,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       // resize's own trailing repositionActiveOverlays(), so a slow-enough debounce leaks
       // into the NEXT test the same way the scroll race this comment already describes does.
       await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
       // A programmatic scrollTo() dispatches its own 'scroll' event asynchronously, on the
       // browser's own schedule -- not necessarily before this test function returns.
       // Without this wait, that event (which calls handleScroll() -> fadeActiveBeacons() in
@@ -689,7 +689,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   });
 
   test('Beacon Size S/L/XL, set for real through chrome.storage.sync: mouth mode never rescales (a hard containment requirement, not a stylistic one), and the CAV box keeps clearing the match at every size', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     async function mouthRenderedBox() {
       await replay(() => (document.querySelector('.oc-jackolantern[data-jol-mode="mouth"]') ? true : null));
@@ -739,7 +739,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
     await page.locator(INPUT).fill('');
     await page.locator(INPUT).type('zeptogram', { delay: 30 });
     await waitForMatchCount(page);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     async function aboveRenderedBox() {
       await replay(() => (document.querySelector('.oc-jackolantern[data-jol-mode="above"]') ? true : null));
@@ -861,7 +861,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
       };
     }
 
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     const full = await replay(snapshot);
     assert.ok(full, 'expected a mounted pumpkin in full mode');
@@ -883,7 +883,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   });
 
   test('cancellation mid-animation: no .oc-beacon-transient nodes survive, and every WAAPI animation on the pumpkin is actually canceled', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const mounted = await replay(() => (document.querySelector('.oc-jackolantern') ? true : null));
     assert.ok(mounted, 'sanity check: the pumpkin must actually mount before it can be cancelled');
 
@@ -934,7 +934,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   });
 
   test('rapid refire: pressing Enter repeatedly, with no explicit cancel in between, never leaves more than one pumpkin mounted at once', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     // animate() itself calls cancelBeacons() as its own first statement (extension/
     // content.js) -- this drives the PRODUCTION re-fire path directly (no
     // window.__ocTest.cancelBeacons() call from the test), unlike replay()'s own idiom,
@@ -950,7 +950,7 @@ describe("Pumpkin Glow: a hand-drawn pumpkin frames or sits above the match and 
   });
 
   test('natural completion: nothing remains in the DOM once the full flicker sequence finishes, with no cancel', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const mounted = await replay(() => (document.querySelector('.oc-jackolantern') ? true : null));
     assert.ok(mounted, 'sanity check: the pumpkin must actually mount before it can complete naturally');
 

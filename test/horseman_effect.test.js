@@ -51,7 +51,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -257,7 +257,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
       return r.top + window.scrollY;
     });
     try {
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 300)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 300));
 
       // Measured JUST BEFORE firing, post-scroll, in viewport space -- the same live rect
       // animate() itself hands to animateHorseman -- so the expected values below are
@@ -309,12 +309,12 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
         `a burst band's own top: expected ~${expectedBurstTop} (viewport position + real scrollY), got ${geom.burstTop}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
   test('normal entrance: on an UNSCROLLED page, direction/staging match the shipped fit formula and the match DOM is untouched', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const before = await page.evaluate(() => document.getElementById('target').outerHTML);
 
     const geom = await replay(() => {
@@ -338,7 +338,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
 
   test('mirrored entrance: a match near the viewport\'s left edge stages the rider on the right, mirrors the sprite for real, and the pumpkin still lands on the match', async () => {
     await switchToTarget('edgeTarget')();
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const before = await page.evaluate(() => document.getElementById('edgeTarget').outerHTML);
 
     try {
@@ -380,7 +380,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('the entrance geometry is independent of cursor position (fxHorseman never reads lastMouseX/lastMouseY, unlike animateTrail/animateFlappy)', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     const noMouse = await replay(() => {
       const outer = document.querySelector('.oc-beacon-transient[data-horseman-direction]');
@@ -415,7 +415,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
         const r = document.getElementById('target').getBoundingClientRect();
         return r.top + window.scrollY;
       });
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 100)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 100));
 
       const before = await page.evaluate(() => document.getElementById('target').outerHTML);
 
@@ -440,12 +440,12 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
   test('the pumpkin rides as the rider\'s head through gallop and rear, detaches at the throw, and the collar is empty for the exit (oculist-1ta.31)', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const mounted = await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
     assert.ok(mounted, 'sanity check: the rider must actually mount before it can be sampled frame by frame');
 
@@ -534,7 +534,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('the burst never paints inside the match rect, and the match DOM stays untouched across the whole sequence', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const before = await page.evaluate(() => document.getElementById('target').outerHTML);
 
     const mounted = await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
@@ -573,7 +573,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('Beacon Size M/L/XL, set for real through chrome.storage.sync: the rider\'s and pumpkin\'s RENDERED boxes scale together', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     async function renderedBoxes() {
       await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
@@ -610,7 +610,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('Beacon Size M/L/XL: the burst still clears the match rect at every size', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     async function burstClearance() {
       await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
@@ -641,7 +641,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('Beacon Size M/XL: the pumpkin\'s landing offset is pinned so its box intrusion into the match rect at the contact frame stays constant, and the painted intrusion stays near the M figure (oculist-4afn)', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     // Contact frame = burstStart (LAUNCH_T + PUMPKIN_FLIGHT_DUR = 1140 + 420 = 1560 in
     // animateHorseman's own timeline): the exact instant the flight's offsetDistance
@@ -813,7 +813,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
       });
     }
 
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const full = await snapshot();
 
     try {
@@ -829,7 +829,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('cancellation mid-animation: no .oc-beacon-transient nodes survive, and every WAAPI animation on every element is actually canceled', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const mounted = await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
     assert.ok(mounted, 'sanity check: the rider must actually mount before it can be cancelled');
 
@@ -878,7 +878,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('rapid refire: pressing Enter repeatedly, with no explicit cancel in between, never leaves more than one rider mounted at once', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     for (let i = 0; i < 6; i++) {
       await page.keyboard.press('Enter');
       const count = await page.evaluate(() => document.querySelectorAll('.oc-beacon-transient[data-horseman-direction]').length);
@@ -889,7 +889,7 @@ describe('Galloping Throw: a silhouetted rider gallops in, rears, and hurls a bl
   });
 
   test('natural completion: nothing remains in the DOM once the full sequence finishes, with no cancel', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const mounted = await replay(() => (document.querySelector('.oc-beacon-transient[data-horseman-direction]') ? true : null));
     assert.ok(mounted, 'sanity check: the rider must actually mount before it can complete naturally');
 
