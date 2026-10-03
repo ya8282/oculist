@@ -57,4 +57,37 @@ async function elementCenterInContainer(page, elementSelector, containerSelector
   );
 }
 
-module.exports = { elementCenterInContainer };
+// Same measurement, taken in the microtask right after the container first mounts instead of
+// at whenever a later CDP round trip lands (oculist-ns64). The effect removes its container on
+// its own rAF clock, so under load a live read after a few round trips finds nothing, and the
+// helper above then returns null. Arm before the trigger, then read the latched value; the
+// observer disconnects itself after its first capture. Same caveats as above (beaconSize 1).
+async function armCenterLatch(page, elementSelector, containerSelector) {
+  await page.evaluate(
+    ({ elementSelector, containerSelector }) => {
+      if (window.__centerLatchObserver) window.__centerLatchObserver.disconnect();
+      window.__centerLatch = null;
+      window.__centerLatchObserver = new MutationObserver(() => {
+        var el = document.querySelector(elementSelector);
+        var container = document.querySelector(containerSelector);
+        if (!el || !container) return;
+        var r = el.getBoundingClientRect();
+        var c = container.getBoundingClientRect();
+        window.__centerLatch = { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+        window.__centerLatchObserver.disconnect();
+      });
+      window.__centerLatchObserver.observe(document.documentElement, { childList: true, subtree: true });
+    },
+    { elementSelector, containerSelector }
+  );
+}
+
+// Null if the container never mounted since armCenterLatch().
+async function readCenterLatch(page) {
+  return page.evaluate(() => {
+    if (window.__centerLatchObserver) window.__centerLatchObserver.disconnect();
+    return window.__centerLatch || null;
+  });
+}
+
+module.exports = { elementCenterInContainer, armCenterLatch, readCenterLatch };

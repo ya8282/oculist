@@ -169,8 +169,52 @@ async function waitForOverlayResizeSettled(page, evalInContentScript, viewport, 
   );
 }
 
+// Waits until window.scrollY has not changed for `quietMs` of frames (polled on rAF so frames
+// are produced), so a smooth scroll already in flight has landed before the caller moves on.
+async function waitForScrollSettled(page, quietMs = 300) {
+  await page.evaluate(() => { delete window.__scrollQuiet; });
+  await page.waitForFunction((q) => {
+    const now = performance.now();
+    const s = window.__scrollQuiet || (window.__scrollQuiet = { y: window.scrollY, t: now });
+    if (window.scrollY !== s.y) { s.y = window.scrollY; s.t = now; }
+    return now - s.t >= q;
+  }, quietMs, { timeout: POLL_TIMEOUT });
+  await page.evaluate(() => { delete window.__scrollQuiet; });
+}
+
+// Positions the page for a test that fires a beacon next (oculist-ns64). Two measured races:
+// 1. An instant scrollTo issued while a smooth scroll is still in flight does not land exactly:
+//    chromium applies the interrupted animation's remaining compositor offset on top of it
+//    (scrollTo(0, 816) mid smooth scroll ended at 826..956, 7 of 7 trials), moving the match
+//    after the beacon's placement was decided (cheshire 'cat renders ABOVE it' got top 1285).
+//    So any in-flight scroll is settled BEFORE scrolling, and again after.
+// 2. scrollY updates synchronously but the 'scroll' EVENT arrives on a later frame, possibly after
+//    the caller pressed Enter: handleScroll then fades the new beacon from under the test
+//    (speed_lines 'survives a scroll between capture and read'). So wait for the event the
+//    scrollTo itself causes (none fires when the position does not change).
+async function scrollPageTo(page, y) {
+  await waitForScrollSettled(page);
+  await page.evaluate(
+    ({ top, timeout }) => new Promise((resolve, reject) => {
+      const before = window.scrollY;
+      const onScroll = () => { clearTimeout(timer); window.removeEventListener('scroll', onScroll, true); resolve(); };
+      const timer = setTimeout(() => {
+        window.removeEventListener('scroll', onScroll, true);
+        reject(new Error('scrollPageTo: no scroll event after scrollTo(0, ' + top + ')'));
+      }, timeout);
+      window.addEventListener('scroll', onScroll, true);
+      window.scrollTo(0, top);
+      if (window.scrollY === before) onScroll();
+    }),
+    { top: y, timeout: POLL_TIMEOUT }
+  );
+  await waitForScrollSettled(page);
+}
+
 module.exports = {
   waitForCondition,
+  waitForScrollSettled,
+  scrollPageTo,
   waitForContentScriptValue,
   waitForPopupReady,
   waitForOverlayResizeSettled,
