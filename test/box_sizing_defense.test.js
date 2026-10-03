@@ -205,15 +205,15 @@ describe('Beacon geometry does not depend on host-page box-sizing (oculist-6p6)'
       await page.waitForSelector(BRACKET, { timeout: POLL_TIMEOUT });
       await waitForBracketsSettled();
 
-      const bracketGeometry = await page.evaluate((sel) => {
-        const target = document.getElementById('target');
-        const m = target.getBoundingClientRect();
-        const brackets = Array.from(document.querySelectorAll(sel)).map((el) => {
-          const r = el.getBoundingClientRect();
-          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
-        });
-        return { match: { left: m.left, top: m.top, right: m.right, bottom: m.bottom }, brackets };
-      }, BRACKET);
+      // Snapshot taken by content.js the instant the flag flips (oculist-y3kz): under load
+      // the container can be removed before a read from here lands.
+      const bracketGeometry = {
+        brackets: await evalInContentScript('window.__ocTest.cyberVisionBracketRects'),
+        match: await page.evaluate(() => {
+          const m = document.getElementById('target').getBoundingClientRect();
+          return { left: m.left, top: m.top, right: m.right, bottom: m.bottom };
+        }),
+      };
 
       assert.strictEqual(
         bracketGeometry.brackets.length,
