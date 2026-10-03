@@ -20,8 +20,8 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
-const { elementCenterInContainer } = require('./helpers/effect_anchor');
+const { waitForCondition, waitForContentScriptValue, scrollPageTo, TIMEOUT_SCALE, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { armCenterLatch, readCenterLatch } = require('./helpers/effect_anchor');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -270,10 +270,13 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   // an independent source of truth instead: the match's own rendered position, read
   // straight off the DOM (see test/helpers/effect_anchor.js).
   test("the effect's own reported anchor matches where the match actually renders", async () => {
+    // Latched at the mount: the container removes itself on its own rAF clock, so a live read
+    // after the round trips below can land after it is gone (oculist-ns64).
+    await armCenterLatch(page, '#target', '.oc-beacon');
     await replay();
 
     const anchor = await evalInContentScript('window.__ocTest.lastSpeedLinesAnchor');
-    const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
+    const independent = await readCenterLatch(page);
 
     assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
     const dx = Math.abs(anchor.matchX - independent.x);
@@ -288,9 +291,10 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   // Centre-line highlight (oculist-s0t): a persistent horizontal locator at the match's own
   // vertical centre, on top for the effect's full duration. Same independent-truth approach
   // as the anchor test above — content.js's own lastSpeedLinesHighlightY hook is graded
-  // against the match's real rendered position via elementCenterInContainer, not against
+  // against the match's real rendered position via armCenterLatch/readCenterLatch, not against
   // any other value content.js reports about itself.
   test("the centre-line highlight renders at the match's vertical centre, verified independently", async () => {
+    await armCenterLatch(page, '#target', '.oc-beacon');
     await replay();
     await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
       timeout: POLL_TIMEOUT,
@@ -298,7 +302,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     });
 
     const highlightY = await evalInContentScript('window.__ocTest.lastSpeedLinesHighlightY');
-    const independent = await elementCenterInContainer(page, '#target', '.oc-beacon');
+    const independent = await readCenterLatch(page);
 
     assert.ok(independent, 'sanity check: expected both #target and .oc-beacon to resolve to real elements');
     const dy = Math.abs(highlightY - independent.y);
@@ -446,7 +450,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
   test('the centre-line highlight anchor check survives a scroll between capture and read', async () => {
     const SCROLL_AT_CAPTURE = 150;
     const SCROLL_AT_READ = 550;
-    await page.evaluate((y) => window.scrollTo(0, y), SCROLL_AT_CAPTURE);
+    await scrollPageTo(page, SCROLL_AT_CAPTURE);
     try {
       await replay();
       await waitForContentScriptValue(evalInContentScript, 'window.__ocTest.speedLinesFrameCount', (v) => v >= 2, {
