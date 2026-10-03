@@ -458,12 +458,8 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
         message: 'speed lines never rendered its first frames',
       });
 
-      // This fixture sets no 'scroll-behavior', so the scroll resolves instantly and
-      // scrollY is already updated by the time this evaluate() round trip returns -- no
-      // separate scroll-settle wait is needed. Note the two-argument form is NOT
-      // unconditionally instant: it uses behavior 'auto', which does consult CSS
-      // 'scroll-behavior'. On a page that sets 'smooth' this would need a settle wait.
-      await page.evaluate((y) => window.scrollTo(0, y), SCROLL_AT_READ);
+      // scrollPageTo waits for this scroll's own 'scroll' event and for scrollY to go quiet, so the late event cannot land after the reads below (oculist-ns64).
+      await scrollPageTo(page, SCROLL_AT_READ);
 
       // oculist-a96: this used to wait for window.__ocTest.speedLinesDone, but that hook
       // reflects the rAF loop's own completion, which has nothing to do with what this test
@@ -530,7 +526,7 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
           `and read; highlightY=${result.highlightY}, independent=${JSON.stringify(result.independent)} (dy=${dy}px)`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 

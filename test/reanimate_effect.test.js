@@ -45,7 +45,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -282,7 +282,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       const r = document.getElementById(elId).getBoundingClientRect();
       return r.top + window.scrollY;
     }, id);
-    await page.evaluate((y) => window.scrollTo(0, y), Math.max(0, docTop - topOffset));
+    await scrollPageTo(page, Math.max(0, docTop - topOffset));
   }
 
   // Mirrors content.js's own animateReanimate() placement formula verbatim (measured and
@@ -382,7 +382,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -422,7 +422,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
   });
 
   test('starting from a genuinely unscrolled page (scrollY=0), Enter still finds and plays the effect correctly, via the extension\'s own scroll-into-view', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const scrollBefore = await page.evaluate(() => window.scrollY);
     assert.strictEqual(scrollBefore, 0, 'sanity check: page must start genuinely unscrolled');
 
@@ -433,7 +433,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
 
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
   });
 
   test('left fallback: the mirrored branch is real, not just compiled -- when the right side has no room, the figure lands on the left, rotates the mirrored direction, and never occludes the match', async () => {
@@ -961,7 +961,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       // (slower) debounce, since the NEXT test's own setup can otherwise race this resize's
       // still-pending trailing repositionActiveOverlays().
       await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     }
   });

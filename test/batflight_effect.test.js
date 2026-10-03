@@ -39,7 +39,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -299,7 +299,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
       const r = document.getElementById(elId).getBoundingClientRect();
       return r.top + window.scrollY;
     }, id);
-    await page.evaluate((y) => window.scrollTo(0, y), Math.max(0, docTop - topOffset));
+    await scrollPageTo(page, Math.max(0, docTop - topOffset));
   }
 
   // Mirrors content.js's own animateBatFlight() placement formula verbatim (measured and
@@ -420,7 +420,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -450,7 +450,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
   });
 
   test('starting from a genuinely unscrolled page (scrollY=0), Enter still finds and plays the effect correctly, via the extension\'s own scroll-into-view', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     try {
       const scroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
       assert.strictEqual(scroll.y, 0, 'sanity check: page must start genuinely unscrolled');
@@ -875,7 +875,7 @@ describe('Vampire Bat: a bat flies in, vanishes into a mist column, and a cloake
     } finally {
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
       await scrollTargetTo('target', 200);
     }

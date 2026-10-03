@@ -39,7 +39,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { scrollPageTo, waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 
@@ -314,7 +314,7 @@ describe('reduced-motion spotlight overlay tracks scroll (oculist-4re)', () => {
           `glow/arrow siblings, not stay frozen at its pre-scroll viewport position: ${JSON.stringify(captured)}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 });
