@@ -19,7 +19,8 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { POLL_TIMEOUT, waitForCondition, scrollPageTo } = require('./helpers/wait');
+const { armBeaconFreeze, disarmBeaconFreeze } = require('./helpers/freeze_beacons');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -220,6 +221,20 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     return handle.jsonValue();
   }
 
+  // Variant for tests that read rendered state after the mount: see helpers/freeze_beacons.js.
+  // The cat self-removes on its own ~1.5s clock, so a poll that lands late finds it gone
+  // (TimeoutError), and a time-dependent box moves under the read. Frozen at t=0 on mount;
+  // tests that need a later frame seek explicitly (Animation.currentTime).
+  async function replayFrozen(predicate, opts) {
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+    await armBeaconFreeze(page, opts);
+    try {
+      return await replay(predicate);
+    } finally {
+      await disarmBeaconFreeze(page);
+    }
+  }
+
   // animateCheshire's own single .oc-beacon-transient element IS the <svg> itself (see
   // its header comment), not a wrapping <div> -- unlike animateFlappy's birdEl or
   // animateBoneAssembly's figWrap.
@@ -253,9 +268,9 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       // (well under 110px even at the largest clamp), so animateCheshire's own `above`
       // branch fires, and a real, non-zero scrollY exercises document-space math a
       // window.scrollTo(0, 0) page could not.
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 400)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 400));
 
-      const geom = await replay(cheshireSnapshot);
+      const geom = await replayFrozen(cheshireSnapshot);
       assert.ok(geom, 'expected a mounted cheshire svg');
       assert.ok(geom.scrollY > 0, `sanity check: the page must actually be scrolled, got scrollY=${geom.scrollY}`);
 
@@ -285,7 +300,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
         `height: expected ~${catHeight}, got ${geom.styleHeight}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -298,9 +313,9 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     try {
       // Leave only 20px of headroom above the match -- well under catHeight+GAP at any
       // Beacon Size, so animateCheshire's own below-match fallback branch fires.
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 20)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 20));
 
-      const geom = await replay(cheshireSnapshot);
+      const geom = await replayFrozen(cheshireSnapshot);
       assert.ok(geom, 'expected a mounted cheshire svg');
 
       const catHeight = expectedCatHeight(geom.targetHeight);
@@ -319,7 +334,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
         `cat's bottom edge must be on screen (viewport height ${VIEWPORT.height}), got ${viewportTop + catHeight}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -328,17 +343,24 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       const r = document.getElementById('target').getBoundingClientRect();
       return r.top + window.scrollY;
     });
-    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 400)), targetDocY);
+    await scrollPageTo(page, Math.max(0, targetDocY - 400));
 
     async function renderedBox() {
-      await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
-      // Wait for the 0-180ms fade/scale-in to settle at its final transform:scale(1)
-      // before reading the box: getBoundingClientRect() would otherwise still reflect
-      // the animation's own in-flight scale(0.9..1), not the effect's real footprint.
-      await page.waitForFunction(() => {
+      await replayFrozen(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+      // The mount is frozen at t=0 (replayFrozen), mid fade/scale-in: seek every animation
+      // just past the end of the svg's OWN scale-in (its end time scales with Animation
+      // Speed, so it is read off the animation rather than hardcoded), so
+      // getBoundingClientRect() reflects the final transform:scale(1) rather than the
+      // in-flight scale(0.9..1) -- the same Animation.currentTime idiom grinPopBox below uses.
+      await page.evaluate(() => {
         const svg = document.querySelector('svg.oc-beacon-transient');
-        return svg && parseFloat(getComputedStyle(svg).opacity) > 0.98 ? true : null;
-      }, null, { timeout: POLL_TIMEOUT });
+        const scaleIn = svg.getAnimations()[0];
+        const t = scaleIn.effect.getComputedTiming().endTime + 20;
+        svg.getAnimations({ subtree: true }).forEach((a) => {
+          a.pause();
+          a.currentTime = t;
+        });
+      });
       return page.evaluate(() => {
         const rect = document.querySelector('svg.oc-beacon-transient').getBoundingClientRect();
         const target = document.getElementById('target').getBoundingClientRect();
@@ -412,7 +434,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       }
     } finally {
       await setVisionSettings({ beaconSize: 'm' });
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -422,7 +444,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     // it reads every top-level .oc-beacon-transient element, not just cheshire's single
     // svg root, but cheshire only ever mounts that one element, so the result is identical.
     async function renderedTimings() {
-      await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+      await replayFrozen(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
       return page.evaluate(collectAnimationTimings);
     }
 
@@ -510,7 +532,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     // variable itself, which is exactly what a re-signing bug in that variable could
     // not expose.
     async function grinDriftTop() {
-      await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+      await replayFrozen(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
       return page.evaluate(() => {
         const svg = document.querySelector('svg.oc-beacon-transient');
         const anims = svg.getAnimations({ subtree: true });
@@ -531,12 +553,12 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     try {
       // Above branch: ~400px of headroom, the same scroll the "document-space
       // correctness" test above uses to force animateCheshire's own `above` branch.
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 400)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 400));
       const aboveDelta = await grinDriftTop();
 
       // Below branch: only 20px of headroom, the same scroll the "placement fallback"
       // test above uses to force animateCheshire's own below-match branch.
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - 20)), targetDocY);
+      await scrollPageTo(page, Math.max(0, targetDocY - 20));
       const belowDelta = await grinDriftTop();
 
       assert.ok(
@@ -562,12 +584,12 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
         `above/below drift magnitudes should be comparable, got above=${aboveDelta} below=${belowDelta} (ratio ${ratio})`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
   test('the grin outlasts the body: once every dissolve fragment has faded, the grin is still visible', async () => {
-    await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+    await replayFrozen(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
 
     // Seeks every WAAPI animation directly to fixed points on its own timeline
     // (Animation.currentTime), rather than polling real wall-clock time -- a real-time
@@ -628,7 +650,9 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
   });
 
   test('natural completion: nothing remains in the DOM once the full sequence finishes, with no cancel', async () => {
-    const mounted = await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+    // Latched, not frozen: the animation must run to its own end. The latch survives a poll
+    // that lands after the cat has already gone.
+    const mounted = await replayFrozen(() => (window.__beaconMounted ? true : null), { freeze: false });
     assert.ok(mounted, 'sanity check: the cat must actually mount before it can complete naturally');
 
     // No cancelBeacons() call here -- this is the natural-completion path (dissolve,
@@ -640,7 +664,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
   });
 
   test('cancellation mid-animation: no .oc-beacon-transient nodes survive, and every WAAPI animation on the cat (fragments and grin included) is actually canceled', async () => {
-    const mounted = await replay(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
+    const mounted = await replayFrozen(() => (document.querySelector('svg.oc-beacon-transient') ? true : null));
     assert.ok(mounted, 'sanity check: the cat must actually mount before it can be cancelled');
 
     // Snapshot every live Animation on the svg AND its descendants BEFORE cancelling --
@@ -688,7 +712,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       };
     }
 
-    const full = await replay(snapshot);
+    const full = await replayFrozen(snapshot);
     assert.ok(full, 'expected a mounted cheshire svg in full mode');
     assert.strictEqual(full.fragmentCount, 6, 'full mode must render all six dissolve fragments');
     assert.strictEqual(full.hasBoxShadow, false, 'full mode never had a box-shadow glow to begin with');
@@ -696,7 +720,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
 
     try {
       await setSettings({ performanceMode: true });
-      const lite = await replay(snapshot);
+      const lite = await replayFrozen(snapshot);
       assert.ok(lite, 'expected a mounted cheshire svg in Lite Mode');
       assert.strictEqual(lite.fragmentCount, 6, 'Lite Mode must still render all six dissolve fragments -- they are the effect');
       assert.strictEqual(lite.hasBoxShadow, false, 'Lite Mode must still have no box-shadow glow');
@@ -752,14 +776,17 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       // so firing must fall back to some other effect rather than mount a cheshire svg
       // or throw.
       await setSettings({ effect: 'cheshire', enabledPacks: [] });
-      let geom = await replay(() => (document.querySelector('.oc-beacon-transient') ? {
-        catMounted: !!document.querySelector('svg.oc-beacon-transient'),
-      } : null));
+      // Latched at the mount, not polled: the fallback effect's own end timer can remove its
+      // root before a stalled poll lands (oculist-ns64).
+      let geom = await replayFrozen(() => (window.__beaconMounted ? {
+        catMounted: window.__beaconRootTags.indexOf('svg') >= 0,
+      } : null), { freeze: false });
       assert.strictEqual(
         geom.catMounted,
         false,
         'while the pack is disabled, the runtime fallback must not render a cheshire cat'
       );
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, {
         timeout: POLL_TIMEOUT,
       });
@@ -768,9 +795,10 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       // if the disable step above had rewritten settings.effect, this would now fire
       // whatever it was rewritten to instead.
       await setSettings({ enabledPacks: ['halloween'] });
-      geom = await replay(() => (document.querySelector('svg.oc-beacon-transient') ? { catMounted: true } : null));
+      geom = await replayFrozen(() => (window.__beaconMounted ? { catMounted: window.__beaconRootTags.indexOf('svg') >= 0 } : null), { freeze: false });
       assert.strictEqual(geom.catMounted, true, 'the stored cheshire selection must survive the disable/re-enable round trip');
 
+      await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, {
         timeout: POLL_TIMEOUT,
       });
