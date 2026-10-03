@@ -1,7 +1,7 @@
 // oculist-i955: the 300ms auto-scroll grace was counted from the trigger and detached on expiry, so a
 // renderer stall before the first own scroll event dropped suppression for the whole own scroll and
 // the first own scroll faded the beacon. The stall is forced deterministically: the content
-// script's window.scrollBy is deferred 700ms after starting the native smooth scroll, so the grace timer
+// script's window.scrollBy busy-waits 700ms before starting the native smooth scroll, so the grace timer
 // can only run after the stall with the own scroll events still queued behind it.
 
 const { test, describe, before, after } = require('node:test');
@@ -81,8 +81,11 @@ describe('auto-scroll flag survives a stall before the first own scroll event (o
       }, true);
       var orig = window.scrollBy;
       window.scrollBy = function () {
-        var args = arguments;
-        setTimeout(function () { orig.apply(window, args); }, 700);
+        // oculist-hdr7: a synchronous stall (no frames run), not a setTimeout: the flag's early release
+        // counts animation frames, and a scroll starting 700ms later with frames still ticking is not a stall.
+        var t = performance.now();
+        while (performance.now() - t < 700);
+        orig.apply(window, arguments);
       };`);
     // Typing navigates to the first match, which triggers the smooth scroll.
     await page.fill(INPUT, TERM);
