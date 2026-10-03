@@ -11064,7 +11064,9 @@
       // Rendered-tree container: a root-level or slotted text node has no (useful) parentElement.
       var element = flatTreeParent(activeRange.startContainer);
       if (element) {
-        triggerAutoScrollFlag(element, expectsOwnScroll(element));
+        var expectScroll = expectsOwnScroll(element);
+        triggerAutoScrollFlag(element, expectScroll);
+        if (expectScroll) observeOwnScroll(element);
         var behavior = settings.scrollBehavior === 'instant' ? 'auto' : 'smooth';
         if (shouldAnimate) {
           if (behavior === 'smooth') {
@@ -11387,9 +11389,48 @@
     return false;
   }
   function onAutoScrollEnd(e) { if (isOwnAutoScroll(e)) clearAutoScrollFlag(); }
-  function onAutoScrollScroll(e) { if (isOwnAutoScroll(e)) extendAutoScrollFlag(); }
+  function onAutoScrollScroll(e) { if (isOwnAutoScroll(e)) { autoScrollSeen = true; extendAutoScrollFlag(); } }
+
+  // oculist-hdr7: expectsOwnScroll is a prediction and can say true when nothing scrolls (html overflow:clip,
+  // mandatory snap-back, page-overridden scrollBy, a match clipped only horizontally). Rather than refine it,
+  // observe: snapshot the scroll positions of the match's chain before our scroll call, and if no scroll event
+  // and no position change shows up within AUTO_SCROLL_OBSERVE_FRAMES animation frames, release the 1.5s hold
+  // so a user scroll fades the beacon. Frames, not wall clock: a renderer stall delays rAF too, so it cannot
+  // shorten the window. Measured (chromium + webkit, smooth scrollIntoView): first scroll event at frame 1-2,
+  // first position change at frame 2-3, so 6 leaves 2x margin (~100ms at 60Hz). A user scroll inside the window
+  // reads as "a scroll happened" and keeps the hold: that is main's behaviour.
+  var AUTO_SCROLL_OBSERVE_FRAMES = 6;
+  var autoScrollSeen = false;
+  var autoScrollObserveRaf = 0;
+  function cancelAutoScrollObserve() {
+    if (autoScrollObserveRaf) { cancelAnimationFrame(autoScrollObserveRaf); autoScrollObserveRaf = 0; }
+  }
+  function autoScrollPositions(element) {
+    var list = [];
+    for (var n = element; n && n.nodeType === 1; n = flatTreeParent(n)) list.push([n, n.scrollLeft, n.scrollTop]);
+    list.push([window, window.scrollX, window.scrollY]);
+    return list;
+  }
+  function autoScrollMoved(list) {
+    return list.some(function (r) {
+      return r[0] === window ? (window.scrollX !== r[1] || window.scrollY !== r[2]) : (r[0].scrollLeft !== r[1] || r[0].scrollTop !== r[2]);
+    });
+  }
+  // Call right before the own scroll call(s), after triggerAutoScrollFlag.
+  function observeOwnScroll(element) {
+    var before = autoScrollPositions(element);
+    var frames = 0;
+    var tick = function () {
+      autoScrollObserveRaf = 0;
+      if (!isAutoScrolling || autoScrollSeen || autoScrollMoved(before)) return;
+      if (++frames >= AUTO_SCROLL_OBSERVE_FRAMES) { clearAutoScrollFlag(); return; }
+      autoScrollObserveRaf = requestAnimationFrame(tick);
+    };
+    autoScrollObserveRaf = requestAnimationFrame(tick);
+  }
 
   function clearAutoScrollFlag() {
+    cancelAutoScrollObserve();
     isAutoScrolling = false;
     autoScrollElement = null;
     if (autoScrollTimer) { clearTimeout(autoScrollTimer); autoScrollTimer = null; }
@@ -11403,6 +11444,8 @@
   }
 
   function triggerAutoScrollFlag(element, expectScroll) {
+    cancelAutoScrollObserve();
+    autoScrollSeen = false;
     isAutoScrolling = true;
     autoScrollElement = element;
     // Re-entrant-safe: a navigation superseding an already-in-flight auto-scroll removes
