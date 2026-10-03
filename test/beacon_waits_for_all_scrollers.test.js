@@ -155,6 +155,12 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
     }
   });
 
+  // oculist-88su: the wheel row has no scroll bound on purpose. Chromium (headless, shell and headed) delivers the wheel event
+  // to the page mid-scroll (scrollY ~100-1500) but does not let it cancel a programmatic smooth scroll: with
+  // the extension unloaded, a page's own scrollTo({behavior:'smooth'}) also runs on to its target under
+  // mouse.wheel (-100, -3000, repeated), CDP dispatchMouseEvent mouseWheel and synthesizeScrollGesture, while PageUp does stop it. So the page ending at the match
+  // (~5009) is browser behaviour, not the extension resuming the scroll. The row's only checkable effect is
+  // the extension's interrupt handler, which the beacon-null assertion covers.
   const refocusNothing = (page) => page.evaluate(() => document.activeElement.blur());
   for (const [label, interrupt, bound] of [
     ['wheel', (page) => page.mouse.wheel(0, -100)],
