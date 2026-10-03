@@ -1766,12 +1766,14 @@
       { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
     ], { duration: duration, fill: 'forwards' })];
 
+    // destroyBeacon (not remove): rightArrow's own animation can still be running when
+    // leftArrow's finishes under load (oculist-w0xo).
     anim.finished.then(function () {
-      leftArrow.remove();
-      rightArrow.remove();
+      destroyBeacon(leftArrow);
+      destroyBeacon(rightArrow);
     }).catch(function () {
-      leftArrow.remove();
-      rightArrow.remove();
+      destroyBeacon(leftArrow);
+      destroyBeacon(rightArrow);
     });
   }
 
@@ -9154,16 +9156,18 @@
         { opacity: 0, transform: 'translateX(' + (5 * scale) + 'px)' }
       ], { duration: duration, fill: 'forwards' })];
 
+      // destroyBeacon (not remove): the siblings' own animations can outlast glow's
+      // under load (oculist-w0xo).
       anim.finished.then(function () {
-        overlay.remove();
-        glow.remove();
-        leftArrow.remove();
-        rightArrow.remove();
+        destroyBeacon(overlay);
+        destroyBeacon(glow);
+        destroyBeacon(leftArrow);
+        destroyBeacon(rightArrow);
       }).catch(function () {
-        overlay.remove();
-        glow.remove();
-        leftArrow.remove();
-        rightArrow.remove();
+        destroyBeacon(overlay);
+        destroyBeacon(glow);
+        destroyBeacon(leftArrow);
+        destroyBeacon(rightArrow);
       });
       return;
     }
