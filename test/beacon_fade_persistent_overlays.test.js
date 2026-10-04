@@ -72,6 +72,30 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
       message: 'never observed the content script isolated execution context',
     });
 
+    // oculist-qjns: a fresh --load-extension fires background.js's onInstalled, whose seed
+    // writes (default blocklist, Halloween pack, and performanceMode under 4 cores) are
+    // each a read-modify-write of oc-settings. A test write that lands between one of those
+    // reads and its set is overwritten, silently dropping borderStyle:'thick' (measured:
+    // visionSettings was {motionSensitivity} alone at draw time, so no border was drawn
+    // and the persistent-overlay poll timed out). Wait for all of them before writing.
+    await waitForCondition(
+      () =>
+        evalInContentScript(
+          'new Promise(function (resolve) {' +
+            "chrome.storage.sync.get('oc-settings', function (d) {" +
+            "resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency });" +
+            '});' +
+            '})'
+        ),
+      ({ s, cores }) =>
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      {
+        timeout: POLL_TIMEOUT,
+        interval: 100,
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+      }
+    );
+
     // hud (Anime Laser) is content.js's own DEFAULTS.effect, but pin it explicitly rather
     // than rely on that.
     await setSettings({ effect: 'hud' });
