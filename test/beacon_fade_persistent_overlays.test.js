@@ -21,6 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { armBeaconFreeze, disarmBeaconFreeze } = require('./helpers/freeze_beacons');
 const { scrollPageTo, waitForCondition, waitForContentScriptValue, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -195,8 +196,14 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
   // Fires the beacon fresh, tags the persistent border overlay(s) so they can be told
   // apart from the transient beacon after the DOM churns, and returns how many of each
   // existed right after the draw.
-  async function fireAndTagBeacon() {
+  async function fireAndTagBeacon({ freeze = false } = {}) {
     await evalInContentScript('window.__ocTest.cancelBeacons()');
+    // The reduced-motion beacon self-removes on its WAAPI clock (~3s). A poll that starts
+    // late under load (oculist-vla4) would find only the persistent overlay and time out,
+    // so that caller pins the timeline at the mount (oculist-ltsj helper). The full-motion
+    // hud beacon removes itself on a setTimeout, which a WAAPI pause cannot hold, so it
+    // does not freeze.
+    if (freeze) await armBeaconFreeze(page);
     await page.keyboard.press('Enter');
 
     // Waiting on a bare '.oc-beacon' is not enough.
@@ -246,13 +253,27 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
     // ~50ms after cancelBeacons(), with no further ADDS -- the only later mutation is the
     // fade's own removal. There is no second churn cycle left to
     // wait out, so the quiet-period wait was removed.)
-    await page.waitForFunction(
-      () =>
-        document.querySelector('.oc-beacon:not(.oc-beacon-transient)') &&
-        document.querySelector('.oc-beacon-transient'),
-      null,
-      { timeout: POLL_TIMEOUT }
-    );
+    try {
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.oc-beacon:not(.oc-beacon-transient)') &&
+          document.querySelector('.oc-beacon-transient'),
+        null,
+        { timeout: POLL_TIMEOUT }
+      );
+    } catch (e) {
+      const snap = await page
+        .evaluate(() => ({
+          persistent: document.querySelectorAll('.oc-beacon:not(.oc-beacon-transient)').length,
+          transient: document.querySelectorAll('.oc-beacon-transient').length,
+          scrollY: window.scrollY,
+          mounted: window.__beaconMounted,
+        }))
+        .catch((err) => ({ evalFailed: String(err) }));
+      console.error('beacon snapshot at timeout: ' + JSON.stringify(snap));
+      throw e;
+    }
+    if (freeze) await disarmBeaconFreeze(page);
 
     return page.evaluate(() => {
       var persistent = Array.from(document.querySelectorAll('.oc-beacon:not(.oc-beacon-transient)'));
@@ -356,7 +377,7 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
       'this test only means anything on the reduced-motion branch'
     );
 
-    const before = await fireAndTagBeacon();
+    const before = await fireAndTagBeacon({ freeze: true });
     assert.ok(before.persistentCount > 0, 'expected the thick border overlay to be drawn under reduced motion');
     assert.ok(before.transientCount > 0, 'expected the reduced-motion transient beacon to be drawn');
 
