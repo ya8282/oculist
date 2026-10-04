@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, scrollPageTo, POLL_TIMEOUT } = require('./helpers/wait');
 const { armBeaconFreeze, disarmBeaconFreeze } = require('./helpers/freeze_beacons');
 const { enableAccessibilityDomain } = require('./helpers/accessible_name');
 
@@ -56,6 +56,18 @@ const BRACKET_BORDER = 2;
 // Sub-pixel/transform-compositing rounding tolerance, not a slack "somewhere near" window —
 // see the per-corner assertion below for why this can be this tight.
 const BRACKET_TOLERANCE = 3;
+
+// Pads the page taller, then centres #target with a settle-aware scroll (scrollPageTo awaits
+// the scroll event) so a late event from this setup scroll cannot land after Enter and fade
+// the beacon early (oculist-mbgj; same race as ns64 scrollPageTo). Today y is 0 here, so this is hardening.
+async function padAndCentreTarget(page) {
+  await page.evaluate(() => { document.body.style.paddingBottom = '2000px'; });
+  const y = await page.evaluate(() => {
+    const r = document.getElementById('target').getBoundingClientRect();
+    return Math.max(0, Math.round(r.top + window.scrollY - window.innerHeight / 2 + r.height / 2));
+  });
+  await scrollPageTo(page, y);
+}
 
 describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   let server, ctx, page, client, isolatedContextId, origin;
@@ -661,23 +673,36 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // when the match is NOT already fully in the viewport, and that flag makes
     // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
     // first guarantees replay()'s own Enter never sets it.
+    //
+    // oculist-59v1: the beacon self-removes on its own clock, so a snapshot taken from Node after
+    // a stalled poll finds nothing. Snapshot in the page, in the microtask after the beacon mounts,
+    // and record the play states then (a stall past the beacon's life lets the self-removal timer
+    // cancel first, so the scroll path then goes unproven rather than red).
     try {
+      await padAndCentreTarget(page);
+
       await page.evaluate(() => {
-        document.body.style.paddingBottom = '2000px';
-        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
+        window.__waapiSnapshot = null;
+        window.__waapiStatesAtMount = null;
+        window.__waapiObserver = new MutationObserver(() => {
+          if (window.__waapiSnapshot) return;
+          const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
+          const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
+          const anims = elems.flatMap((el) => el.getAnimations());
+          if (!anims.length) return;
+          window.__waapiSnapshot = anims;
+          window.__waapiStatesAtMount = anims.map((x) => x.playState);
+        });
+        window.__waapiObserver.observe(document.documentElement, { childList: true, subtree: true });
       });
 
       await replay();
+      await page.waitForFunction(() => window.__waapiSnapshot !== null, null, { timeout: POLL_TIMEOUT });
 
-      const snapshotCount = await page.evaluate(() => {
-        const beacons = Array.from(document.querySelectorAll('.oc-beacon'));
-        const elems = beacons.flatMap((b) => [b, ...b.querySelectorAll('*')]);
-        window.__waapiSnapshot = elems.flatMap((el) => el.getAnimations());
-        return window.__waapiSnapshot.length;
-      });
+      const snapshotCount = await page.evaluate(() => window.__waapiSnapshot.length);
       assert.ok(snapshotCount > 0, 'sanity check: expected at least one live WAAPI animation under a .oc-beacon element, got 0');
 
-      const before = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
+      const before = await page.evaluate(() => window.__waapiStatesAtMount);
       assert.ok(
         before.some((s) => s === 'running'),
         `sanity check: expected at least one animation 'running' before the scroll, got ${JSON.stringify(before)}`
@@ -708,6 +733,9 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
         window.scrollTo(0, 0);
         document.body.style.paddingBottom = '';
         delete window.__waapiSnapshot;
+        delete window.__waapiStatesAtMount;
+        if (window.__waapiObserver) window.__waapiObserver.disconnect();
+        delete window.__waapiObserver;
       });
     }
   });
@@ -755,10 +783,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // Enter must never trigger highlightActiveRange()'s triggerAutoScrollFlag(), which would
     // make handleScroll() ignore the scroll this test fires (isAutoScrolling, content.js).
     try {
-      await page.evaluate(() => {
-        document.body.style.paddingBottom = '2000px';
-        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-      });
+      await padAndCentreTarget(page);
       await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
 
       await armScrollRace();
