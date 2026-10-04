@@ -74,13 +74,17 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     // onInstalled listener fires and seeds the default blocklist. That write races this
     // file's own seedOcSettings() calls below — wait for it to land first (same pattern as
     // default_blocklist.test.js), or the extension's own seed can clobber this file's first
-    // legacy-value seed before the first page ever loads.
+    // legacy-value seed before the first page ever loads. seedHalloweenPack() runs as a
+    // second onInstalled write right after the blocklist one (oculist-qd7e), so wait for
+    // BOTH flags: its read-modify-write can otherwise land after this file's first seed and
+    // replace it with a snapshot that has no legacy field, so no migration ever runs.
     await sw.evaluate(
       () =>
         new Promise((resolve) => {
           const poll = () =>
             chrome.storage.sync.get('oc-settings', (d) => {
-              if (d && d['oc-settings'] && d['oc-settings'].seededDefaultBlocklist) resolve();
+              const s = d && d['oc-settings'];
+              if (s && s.seededDefaultBlocklist && s.seededHalloweenPack) resolve();
               else setTimeout(poll, 100);
             });
           poll();
