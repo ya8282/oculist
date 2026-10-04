@@ -384,4 +384,45 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
       await page.close();
     }
   });
+
+  // oculist-nnia: a fixed+clipped match the navigation cannot scroll to, while page script scrolls the
+  // window itself. The native scrollend (match unmoved) takes the oculist-r425 retry, so the beacon waits
+  // an extra fallback. No exact rule exists to skip it safely, so this pins the behaviour: the right match (fixed, so it never moves),
+  // drawn once, under the 3s cap.
+  for (const behavior of ['smooth', 'instant']) {
+    test(`a fixed clipped match with page script scrolling the window (${behavior}) draws one beacon at the match under the 3s cap`, async () => {
+      const page = await open('fixedClipped');
+      try {
+        await page.evaluate((b) => {
+          window.__count = 0;
+          new MutationObserver((records) => {
+            for (const r of records) for (const n of r.addedNodes) {
+              if (n.nodeType === 1 && n.classList && n.classList.contains('oc-beacon-transient')) window.__count++;
+            }
+          }).observe(document.documentElement, { childList: true, subtree: true });
+          window.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || window.__t0) return;
+            window.__t0 = Date.now();
+            requestAnimationFrame(() => window.scrollTo({ top: 400, behavior: b }));
+          }, true);
+        }, behavior);
+        await page.fill(INPUT, TERM);
+        await page.keyboard.press('Enter');
+        const t0 = await page.evaluate(() => window.__t0);
+        await waitForCondition(() => page.evaluate(() => window.__beacon), Boolean, { timeout: POLL_TIMEOUT, interval: 20, message: 'no beacon drawn' });
+        const latency = Date.now() - t0;
+        console.log(`# nnia ${behavior} latency ${latency}ms`);
+        assert.ok(latency < 3000, `beacon drawn ${latency}ms after Enter`);
+        await new Promise((r) => setTimeout(r, 1500));
+        const { count, beacon, mid } = await page.evaluate(() => {
+          const r = [...CSS.highlights.get('oculist-active-match')][0].getBoundingClientRect();
+          return { count: window.__count, beacon: window.__beacon.mid, mid: r.top + r.height / 2 };
+        });
+        assert.strictEqual(count, 1, 'beacon drawn more than once');
+        assert.ok(Math.abs(beacon - mid) <= TOLERANCE, `beacon at ${beacon}, match at ${mid}`);
+      } finally {
+        await page.close();
+      }
+    });
+  }
 });
