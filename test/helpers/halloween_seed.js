@@ -52,4 +52,32 @@ async function waitForHalloweenSeedSettled(evalInContentScript, opts = {}) {
   );
 }
 
-module.exports = { waitForHalloweenSeedSettled };
+// oculist-hmql: waits, via the extension service worker, for every write background.js's
+// onInstalled makes (seededDefaultBlocklist, seededHalloweenPack, and performanceMode on
+// machines with under 4 cores) to land in chrome.storage.sync 'oc-settings'. A test's own
+// settings write issued before they land can be clobbered by a seed's late read-modify-write.
+// Called once per extension launch from the launchPersistentContext patch in wait.js.
+async function waitForOnInstalledSeeds(ctx, opts = {}) {
+  const { timeout = POLL_TIMEOUT } = opts;
+  const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout }));
+  await waitForCondition(
+    () =>
+      sw.evaluate(
+        () =>
+          new Promise((resolve) =>
+            chrome.storage.sync.get('oc-settings', (d) =>
+              resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency })
+            )
+          )
+      ),
+    ({ s, cores }) =>
+      !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+    {
+      timeout,
+      interval: 20,
+      message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+    }
+  );
+}
+
+module.exports = { waitForHalloweenSeedSettled, waitForOnInstalledSeeds };
