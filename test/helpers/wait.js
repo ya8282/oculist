@@ -33,6 +33,18 @@ const originalLaunchPersistentContext = chromium.launchPersistentContext.bind(ch
 chromium.launchPersistentContext = async (...args) => {
   const ctx = await originalLaunchPersistentContext(...args);
   ctx.setDefaultTimeout(DEFAULT_ACTION_TIMEOUT * TIMEOUT_SCALE);
+  // oculist-hmql: every launch that loads the extension waits out onInstalled's seed writes,
+  // so no test's own oc-settings write can be clobbered by one landing late. Lazy require:
+  // halloween_seed.js requires this file.
+  const launchArgs = (args[1] && args[1].args) || [];
+  if (launchArgs.some((a) => /^--(load-extension|disable-extensions-except)/.test(a))) {
+    try {
+      await require('./halloween_seed').waitForOnInstalledSeeds(ctx);
+    } catch (err) {
+      await ctx.close().catch(() => {});
+      throw err;
+    }
+  }
   return ctx;
 };
 
