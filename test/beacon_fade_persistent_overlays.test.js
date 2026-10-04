@@ -196,13 +196,37 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
   // Fires the beacon fresh, tags the persistent border overlay(s) so they can be told
   // apart from the transient beacon after the DOM churns, and returns how many of each
   // existed right after the draw.
+  // The full-motion hud beacon removes itself on a setTimeout that a WAAPI pause cannot hold
+  // (oculist-a93a). Swallow only that self-removal timer (a callback calling destroyBeacon
+  // with a delay over 1s; the scroll fade's own 50ms timer is untouched) in the
+  // content-script world, so the beacon lives until the scroll fade removes it. A late
+  // poll cannot miss it, and if the fade stops removing it the beacon never goes away.
+  async function holdSelfRemoval() {
+    await evalInContentScript(`(function () {
+      if (window.__ocRealSetTimeout) return;
+      window.__ocRealSetTimeout = window.setTimeout;
+      window.setTimeout = function (fn, ms) {
+        if (typeof fn === 'function' && ms > 1000 && String(fn).indexOf('destroyBeacon(') !== -1) return 0;
+        return window.__ocRealSetTimeout.apply(window, arguments);
+      };
+    })()`);
+  }
+
+  async function releaseSelfRemoval() {
+    await evalInContentScript(`(function () {
+      if (!window.__ocRealSetTimeout) return;
+      window.setTimeout = window.__ocRealSetTimeout;
+      delete window.__ocRealSetTimeout;
+    })()`);
+  }
+
   async function fireAndTagBeacon({ freeze = false } = {}) {
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     // The reduced-motion beacon self-removes on its WAAPI clock (~3s). A poll that starts
     // late under load (oculist-vla4) would find only the persistent overlay and time out,
     // so that caller pins the timeline at the mount (oculist-ltsj helper). The full-motion
     // hud beacon removes itself on a setTimeout, which a WAAPI pause cannot hold, so it
-    // does not freeze.
+    // is held by holdSelfRemoval() in its own test instead.
     if (freeze) await armBeaconFreeze(page);
     await page.keyboard.press('Enter');
 
@@ -349,6 +373,7 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
 
   test('full motion: scroll fades the transient beacon but the thick border overlay survives', async () => {
     try {
+      await holdSelfRemoval();
       const before = await fireAndTagBeacon();
       assert.strictEqual(
         await evalInContentScript('window.__ocTest.getEffectiveMotion()'),
@@ -365,6 +390,7 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
         'the persistent border overlay must survive a scroll while the transient beacon is faded'
       );
     } finally {
+      await releaseSelfRemoval();
       await scrollPageTo(page, 0);
     }
   });
