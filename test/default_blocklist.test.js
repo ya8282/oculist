@@ -9,7 +9,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, POLL_TIMEOUT, LONG_TIMEOUT } = require('./helpers/wait');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const BODY = '<!doctype html><meta charset="utf-8"><p>hello quarklet world</p>';
@@ -59,18 +59,26 @@ describe('Default site blocklist', () => {
       viewport: { width: 1280, height: 800 },
     });
     // An empty user-data dir means this counts as a fresh install, so onInstalled fires
-    // and seeds the blocklist. Wait for that to land before asserting anything.
+    // and seeds the blocklist, then the Halloween pack, then (under 4 cores) performanceMode.
+    // Wait for all of them to land before asserting anything (oculist-ah9v).
     const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
-    await sw.evaluate(
+    await waitForCondition(
       () =>
-        new Promise((resolve) => {
-          const poll = () =>
-            chrome.storage.sync.get('oc-settings', (d) => {
-              if (d && d['oc-settings'] && d['oc-settings'].seededDefaultBlocklist) resolve();
-              else setTimeout(poll, 100);
-            });
-          poll();
-        })
+        sw.evaluate(
+          () =>
+            new Promise((resolve) =>
+              chrome.storage.sync.get('oc-settings', (d) =>
+                resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency })
+              )
+            )
+        ),
+      ({ s, cores }) =>
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      {
+        timeout: POLL_TIMEOUT,
+        interval: 100,
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+      }
     );
   });
 
