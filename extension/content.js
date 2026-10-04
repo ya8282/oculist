@@ -10410,6 +10410,42 @@
     return -1;
   }
 
+  // oculist-6xyq: when a page re-render collapses the navigated match's live Range, identify
+  // it again by its text plus the text around it, saved at navigation time.
+  // ponytail: ceiling is a context window of CTX chars; identical matches resolve to the one nearest the old index, so an identical match inserted above can shift it one row (as the index clamp does).
+  var CTX = 40;
+  var activeMatchSig = null;
+  function matchSignature(range) {
+    try {
+      var host = range.startContainer.parentElement;
+      if (!host) return null;
+      var pre = document.createRange();
+      pre.selectNodeContents(host);
+      pre.setEnd(range.startContainer, range.startOffset);
+      var post = document.createRange();
+      post.selectNodeContents(host);
+      post.setStart(range.endContainer, range.endOffset);
+      var b = pre.toString(), a = post.toString();
+      return { text: range.toString(), before: b.slice(-CTX), after: a.slice(0, CTX) };
+    } catch (e) { return null; }
+  }
+  // Among several hits (identical rows with empty context) the one nearest the old index wins.
+  function indexOfSignature(sig, nearIdx) {
+    if (!sig) return -1;
+    var best = -1;
+    for (var i = 0; i < searchRanges.length; i++) {
+      var c = matchSignature(searchRanges[i]);
+      if (c && c.text === sig.text && c.before === sig.before && c.after === sig.after &&
+          (best < 0 || Math.abs(i - nearIdx) < Math.abs(best - nearIdx))) best = i;
+    }
+    return best;
+  }
+  // Index of the equivalent of a navigated match whose live Range collapsed, or -1. The
+  // in-flight scroll's draw rebinds to searchRanges[activeIndex] (see onScrollEnd).
+  function indexOfCollapsedMatch(old, sig, nearIdx) {
+    return old && old.collapsed ? indexOfSignature(sig, nearIdx) : -1;
+  }
+
   function rescanAfterMutation() {
     remountIfDetached();
     // Fires as long as there is either a draft term in flight or a committed working
@@ -10448,10 +10484,12 @@
       // lone-search, no-chips case.
       var previousDraftIndex = activeIndex;
       var previousDraftRange = searchRanges[activeIndex];
+      var draftSig = activeMatchSig;
       if (workListTerms.length > 0) performListSearch();
       performDraftSearch(lastTerm);
       if (searchRanges.length > 0) {
         var sameDraftIdx = indexOfSameMatch(previousDraftRange);
+        if (sameDraftIdx < 0) sameDraftIdx = indexOfCollapsedMatch(previousDraftRange, draftSig, previousDraftIndex);
         activeIndex = sameDraftIdx >= 0 ? sameDraftIdx : Math.min(Math.max(previousDraftIndex, 0), searchRanges.length - 1);
         firstEnter = false;
         // skipScroll: a background rescan re-attaches highlights, it must not yank the
@@ -10463,9 +10501,11 @@
 
     var previousActiveIndex = activeIndex;
     var previousActiveRange = searchRanges[activeIndex];
+    var activeSig = activeMatchSig;
     performListSearch();
     if (searchRanges.length > 0) {
       var sameIdx = indexOfSameMatch(previousActiveRange);
+      if (sameIdx < 0) sameIdx = indexOfCollapsedMatch(previousActiveRange, activeSig, previousActiveIndex);
       activeIndex = sameIdx >= 0 ? sameIdx : Math.min(Math.max(previousActiveIndex, 0), searchRanges.length - 1);
       firstEnter = false;
       // skipScroll: a background rescan re-attaches highlights, it must not yank the
@@ -11037,6 +11077,7 @@
     if (searchRanges.length === 0 || activeIndex < 0) return;
 
     var activeRange = searchRanges[activeIndex];
+    activeMatchSig = matchSignature(activeRange);
 
     try {
       if (typeof Highlight !== 'undefined' && CSS.highlights) {
@@ -11195,6 +11236,9 @@
               if (activeScrollEndHandler === onScrollEnd) activeScrollEndHandler = null;
               if (activeScrollDebounceHandler === onScrollEndDebounced) activeScrollDebounceHandler = null;
               clearActiveScrollHandles();
+              // oculist-6xyq: a re-render collapsed the Range this navigation captured; the rescan
+              // re-identified the match, so draw on that one.
+              if (activeRange.collapsed && searchRanges[activeIndex]) activeRange = searchRanges[activeIndex];
               var freshRect = activeRange.getBoundingClientRect();
               // oculist-h1ns: a layout shift mid-scroll can leave the match off-screen at settle;
               // re-issue the navigation once, then draw wherever it ends up. oculist-u6x3: not when
