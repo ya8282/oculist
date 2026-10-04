@@ -48,10 +48,43 @@ function loadBackground({
   // Deliberately a flag rather than a per-call predicate: the one test that needs it
   // makes exactly one get(), so per-call granularity would be untested machinery.
   rawGet,
+  // oculist-xpaz: model chrome.storage.onChanged (oldValue/newValue per change, fired on a
+  // macrotask after the write applies, only when the value actually changes). Opt-in so
+  // every other test keeps the no-op event.
+  emitChanges,
+  // 'before' (measured Chrome order) fires onChanged before the set callback; 'after' fires it
+  // on a later macrotask. Chrome also returns storage objects with keys sorted recursively.
+  changeOrder = 'before',
 }) {
   const calls = { get: 0, set: 0 };
   let onInstalledListener = null;
   const noopEvent = () => ({ addListener: () => {} });
+  const changeListeners = [];
+  const sortKeys = (v) => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === 'object') {
+      const o = {};
+      Object.keys(v).sort().forEach((k) => { o[k] = sortKeys(v[k]); });
+      return o;
+    }
+    return v;
+  };
+  // Returns a function that fires the change event; callers pick when.
+  function applyWrite(obj) {
+    const changes = {};
+    Object.keys(obj).forEach((k) => {
+      const oldValue = backing[k];
+      const newValue = emitChanges ? sortKeys(obj[k]) : obj[k];
+      if (JSON.stringify(oldValue) === JSON.stringify(newValue)) return;
+      changes[k] = { oldValue: oldValue, newValue: JSON.parse(JSON.stringify(newValue)) };
+    });
+    Object.keys(obj).forEach((k) => { backing[k] = emitChanges ? sortKeys(obj[k]) : obj[k]; });
+    return () => {
+      if (emitChanges && Object.keys(changes).length) {
+        changeListeners.slice().forEach((l) => l(changes, 'sync'));
+      }
+    };
+  }
 
   // Node ships its own read-only `navigator` global (with the host's real core
   // count), so a plain `global.navigator = ...` assignment is silently ignored.
@@ -92,7 +125,7 @@ function loadBackground({
           const failThisCall = getLastErrorOnCall === calls.get;
           const snapshot = rawGet
             ? { [key]: backing[key] }
-            : JSON.parse(JSON.stringify({ [key]: backing[key] }));
+            : JSON.parse(JSON.stringify({ [key]: emitChanges ? sortKeys(backing[key]) : backing[key] }));
           // Fires synchronously right after the snapshot is captured but before the
           // callback's macrotask is even scheduled to run — i.e. exactly the gap a
           // concurrent writer (the popup) can land in and still have this get()'s
@@ -116,12 +149,15 @@ function loadBackground({
               try { if (cb) cb(); } finally { delete chrome.runtime.lastError; }
               return;
             }
-            Object.assign(backing, obj);
-            if (cb) cb();
+            const fire = applyWrite(obj);
+            if (changeOrder === 'before') { fire(); if (cb) cb(); } else { setTimeout(fire, 0); if (cb) cb(); }
           }, 0);
         },
       },
-      onChanged: noopEvent(),
+      onChanged: emitChanges ? {
+        addListener: (fn) => { changeListeners.push(fn); },
+        removeListener: (fn) => { const i = changeListeners.indexOf(fn); if (i !== -1) changeListeners.splice(i, 1); },
+      } : noopEvent(),
     },
     tabs: {
       create: (opts) => {
@@ -138,7 +174,7 @@ function loadBackground({
   require('../extension/background.js');
 
   assert.ok(onInstalledListener, 'background.js should register a runtime.onInstalled listener');
-  return { calls, fire: (details) => onInstalledListener(details) };
+  return { calls, fire: (details) => onInstalledListener(details), foreignWrite: (obj) => { const fire = applyWrite(obj); setTimeout(fire, 0); } };
 }
 
 // Flushes the setTimeout(0) chain far enough to let both get/mutate/set round trips
@@ -607,4 +643,60 @@ test('(e) the confirm-then-retry (oculist-b65) path still calls done exactly onc
     'the seed write must still land after the retry: ' + JSON.stringify(backing['oc-settings'])
   );
   assert.strictEqual(backing['oc-settings'].concurrentWrite, true, 'the concurrent write must survive: ' + JSON.stringify(backing['oc-settings']));
+});
+
+for (const changeOrder of ['before', 'after']) {
+test(`(oculist-xpaz, onChanged ${changeOrder} the set callback) a foreign save landing between the confirming read and the set survives, and the seed still lands`, async () => {
+  const backing = { 'oc-settings': { disabledSites: [], theme: 'dark' } };
+  let foreignWriteDone = false;
+  // eslint-disable-next-line prefer-const
+  let h;
+  h = loadBackground({
+    backing,
+    hardwareConcurrency: 8,
+    emitChanges: true,
+    changeOrder,
+    // The first seed's confirming re-read is get #2: inject right after its snapshot is
+    // taken, so the write lands before the seed's set() applies.
+    onGetSnapshot: (n) => {
+      if (n === 2 && !foreignWriteDone) {
+        foreignWriteDone = true;
+        h.foreignWrite({ 'oc-settings': Object.assign({}, backing['oc-settings'], { userNote: 'popup-save-in-window' }) });
+      }
+    },
+  });
+  h.fire({ reason: 'update' });
+  await flush(60);
+
+  const settings = backing['oc-settings'];
+  assert.strictEqual(foreignWriteDone, true, 'the foreign save must actually have been injected');
+  assert.strictEqual(settings.userNote, 'popup-save-in-window', 'foreign save must survive: ' + JSON.stringify(settings));
+  assert.strictEqual(settings.theme, 'dark', 'untouched key survives');
+  assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must be set: ' + JSON.stringify(settings));
+  assert.ok(settings.disabledSites.includes('github.com'), 'seed must land: ' + JSON.stringify(settings));
+  assert.strictEqual(settings.seededHalloweenPack, true, 'second seed must land: ' + JSON.stringify(settings));
+});
+}
+
+test('(oculist-xpaz, onChanged after the set callback) a newer save on the same key as the foreign save is never overwritten by the older one', async () => {
+  const backing = { 'oc-settings': { disabledSites: [], theme: 'dark' } };
+  // eslint-disable-next-line prefer-const
+  let h;
+  h = loadBackground({
+    backing,
+    hardwareConcurrency: 8,
+    emitChanges: true,
+    changeOrder: 'after',
+    onGetSnapshot: (n) => {
+      if (n === 2) h.foreignWrite({ 'oc-settings': Object.assign({}, backing['oc-settings'], { theme: 'light' }) });
+      if (n === 3) h.foreignWrite({ 'oc-settings': Object.assign({}, backing['oc-settings'], { theme: 'blue' }) });
+    },
+  });
+  h.fire({ reason: 'update' });
+  await flush(60);
+
+  const settings = backing['oc-settings'];
+  assert.strictEqual(settings.theme, 'blue', 'the newer save must not be overwritten by the older one: ' + JSON.stringify(settings));
+  assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must land: ' + JSON.stringify(settings));
+  assert.strictEqual(settings.seededHalloweenPack, true, 'second seed must land: ' + JSON.stringify(settings));
 });
