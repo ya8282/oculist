@@ -1252,6 +1252,7 @@
 
   var domObserver           = null;
   var domObserverTimer      = null;
+  var domObserverPendingSince = 0;
   var noticeEl              = null;
   // oculist-tdj.3: the pack-discovery notice's own element, separate from noticeEl/
   // dismissedNotices above — those are showNotice()'s session-only banner (cleared by
@@ -10514,19 +10515,71 @@
     }
   }
 
+  // oculist-6kd1: longest a stream of mutations may postpone a rescan. A per-frame counter
+  // that rewrites a text node's children resets the 350ms trailing debounce forever, so
+  // new matches were never counted. 1000ms bounds the staleness to about a second while
+  // capping rescans on such a page at one per second (a 3000-paragraph scan is ~100ms).
+  var DOM_RESCAN_MAX_WAIT_MS = 1000;
+
+  // oculist-6kd1: can an in-place edit of this text node change the match set? Yes when it
+  // sits in a current match (the edit may remove it), or when the value, joined with its
+  // adjacent text-node siblings, now contains an active term. Folding mirrors findRanges
+  // (lowercase, accents, collapsed whitespace) so this agrees with the real matcher. A term
+  // split across inline elements (a<b>b</b>) is not seen: only same-parent adjacent text
+  // nodes are joined, which covers insertData/React splits; the next childList rescan or
+  // search catches the rest. Further residual gaps: the join looks one sibling each way; in
+  // Lite Mode an edit that removes an inactive chip's match goes unseen (no Ranges exist);
+  // matches past the 999/2000 caps have no Range either. Costs nothing when no search is active.
+  function characterDataMayChangeMatches(node) {
+    var terms = workListTerms.slice();
+    if (lastTerm) terms.push(lastTerm);
+    if (terms.length === 0 || !node.isConnected) return false;
+    var i, j;
+    var groups = [searchRanges].concat(termRanges);
+    for (i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      // Lite Mode stores inactive chips as holes (count only), never Ranges: skip the group
+      // by its first slot rather than touching every hole.
+      if (!g || !g[0] || typeof g[0].intersectsNode !== 'function') continue;
+      for (j = 0; j < g.length; j++) {
+        if (g[j].intersectsNode(node)) return true;
+      }
+    }
+    var norm = function (t) { return foldAccentsSafe(t.toLowerCase()).replace(/\s+/g, ' '); };
+    var maxLen = 0;
+    var normTerms = terms.map(function (t) { var n = norm(t); if (n.length > maxLen) maxLen = n.length; return n; });
+    var prev = node.previousSibling, next = node.nextSibling;
+    var text = (prev && prev.nodeType === 3 ? prev.data.slice(-maxLen) : '') +
+      node.data +
+      (next && next.nodeType === 3 ? next.data.slice(0, maxLen) : '');
+    var folded = norm(text);
+    for (i = 0; i < normTerms.length; i++) {
+      if (normTerms[i] && folded.indexOf(normTerms[i]) !== -1) return true;
+    }
+    return false;
+  }
+
   function startDomObserver() {
     if (domObserver || !window.MutationObserver) return;
     domObserver = new window.MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {
-        if (isOculistMutation(mutations[i])) continue;
-        if (domObserverTimer) clearTimeout(domObserverTimer);
-        domObserverTimer = setTimeout(rescanAfterMutation, 350);
+        var m = mutations[i];
+        if (isOculistMutation(m)) continue;
+        if (m.type === 'characterData' && !characterDataMayChangeMatches(m.target)) continue;
+        var now = Date.now();
+        if (!domObserverTimer) domObserverPendingSince = now;
+        else clearTimeout(domObserverTimer);
+        var delay = Math.max(0, Math.min(350, domObserverPendingSince + DOM_RESCAN_MAX_WAIT_MS - now));
+        domObserverTimer = setTimeout(function () {
+          domObserverTimer = null;
+          rescanAfterMutation();
+        }, delay);
         return;
       }
     });
     // documentElement, not body — an observer bound to a body that gets swapped out goes
     // deaf, and the swap itself is a mutation we need to see.
-    domObserver.observe(document.documentElement, { childList: true, subtree: true });
+    domObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   }
 
   // ── Site override detection ─────────────────────────────────────────────────

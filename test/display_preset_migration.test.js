@@ -81,18 +81,23 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     // oculist-ajzz: on a machine with under 4 cores onInstalled makes a third write
     // (performanceMode = true, no flag), after both seeds. performanceMode defaults to
     // false, so true only appears once that write has landed; wait for it too.
-    await sw.evaluate(
+    await waitForCondition(
       () =>
-        new Promise((resolve) => {
-          const poll = () =>
-            chrome.storage.sync.get('oc-settings', (d) => {
-              const s = d && d['oc-settings'];
-              const lowCores = navigator.hardwareConcurrency && navigator.hardwareConcurrency < 4;
-              if (s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!lowCores || s.performanceMode === true)) resolve();
-              else setTimeout(poll, 100);
-            });
-          poll();
-        })
+        sw.evaluate(
+          () =>
+            new Promise((resolve) =>
+              chrome.storage.sync.get('oc-settings', (d) =>
+                resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency })
+              )
+            )
+        ),
+      ({ s, cores }) =>
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      {
+        timeout: POLL_TIMEOUT,
+        interval: 100,
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+      }
     );
   });
 

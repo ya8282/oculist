@@ -139,6 +139,19 @@ const DEFAULT_DISABLED_SITES = ['github.com'];
 //      and no confirming re-read either.
 const MAX_SETTINGS_WRITE_ATTEMPTS = 3;
 
+// Chrome returns storage objects (get results, onChanged old/newValue) with keys sorted
+// recursively, so any comparison of storage-derived JSON must not depend on insertion order.
+function canonJson(v) {
+  return JSON.stringify(v, (_k, x) => {
+    if (x && typeof x === 'object' && !Array.isArray(x)) {
+      const o = {};
+      Object.keys(x).sort().forEach((k) => { o[k] = x[k]; });
+      return o;
+    }
+    return x;
+  });
+}
+
 // oculist-6tp: every branch below is written to call `done` (when present) exactly
 // once, and to never call chrome.storage.sync.set() with a settings object derived
 // from a failed read or a mutate() that threw partway through. `done` is called with
@@ -147,8 +160,40 @@ const MAX_SETTINGS_WRITE_ATTEMPTS = 3;
 // fix), and with a single error argument (the lastError object, or the thrown error) on
 // every failure path, so a caller that wants to distinguish success from failure can,
 // while a caller that ignores arguments (the existing ones) keeps working unchanged.
-function updateSettings(mutate, done, attemptsLeft) {
+function updateSettings(mutate, done, attemptsLeft, restore) {
   if (attemptsLeft === undefined) attemptsLeft = MAX_SETTINGS_WRITE_ATTEMPTS - 1;
+  if (restore) {
+    // oculist-xpaz repair pass: `restore.base` is a foreign value our previous set()
+    // overwrote. Rebuild the write on top of it and commit it unconditionally (even when
+    // mutate() has nothing left to add, the foreign value must come back).
+    const settings = JSON.parse(restore.base);
+    if (OculistSettingsMigration && typeof OculistSettingsMigration.normalizeOcSettings === 'function') {
+      OculistSettingsMigration.normalizeOcSettings(settings);
+    }
+    try {
+      mutate(settings);
+    } catch (err) {
+      console.error('Oculist: mutate() threw in updateSettings.', err);
+      if (done) done(err);
+      return;
+    }
+    chrome.storage.sync.get('oc-settings', (freshData) => {
+      if (chrome.runtime.lastError) {
+        console.error('Oculist: chrome.storage.sync.get (restore re-read) failed in updateSettings.', chrome.runtime.lastError);
+        if (done) done(chrome.runtime.lastError);
+        return;
+      }
+      const freshRaw = (freshData && freshData['oc-settings']) || {};
+      if (canonJson(freshRaw) !== restore.expected) {
+        // A later writer landed after our overwrite. Never resurrect the older foreign
+        // value over it; accept losing that save in this double race.
+        if (done) done();
+        return;
+      }
+      commitSettings(settings, restore.expected, mutate, done, attemptsLeft);
+    });
+    return;
+  }
   chrome.storage.sync.get('oc-settings', (data) => {
     if (chrome.runtime.lastError) {
       // A failed read must never be treated as "no stored settings" — data would be
@@ -162,7 +207,7 @@ function updateSettings(mutate, done, attemptsLeft) {
     // Snapshot the exact raw shape mutate() is about to run against, before
     // normalization or mutation touch it in place, so the drift check below compares
     // like with like.
-    const basedOn = JSON.stringify(settings);
+    const basedOn = canonJson(settings);
     // Normalize the just-read snapshot before mutate() touches it, so a stale legacy
     // field (e.g. 'visionProfile') this get() happened to catch mid-flight from another
     // surface's write never gets carried into this write-back (oculist-hzr). Runs on
@@ -189,14 +234,7 @@ function updateSettings(mutate, done, attemptsLeft) {
       return;
     }
     if (attemptsLeft <= 0) {
-      chrome.storage.sync.set({ 'oc-settings': settings }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Oculist: chrome.storage.sync.set failed in updateSettings.', chrome.runtime.lastError);
-          if (done) done(chrome.runtime.lastError);
-          return;
-        }
-        if (done) done();
-      });
+      commitSettings(settings, basedOn, mutate, done, 0);
       return;
     }
     chrome.storage.sync.get('oc-settings', (freshData) => {
@@ -215,21 +253,68 @@ function updateSettings(mutate, done, attemptsLeft) {
         return;
       }
       const freshRaw = (freshData && freshData['oc-settings']) || {};
-      if (JSON.stringify(freshRaw) !== basedOn) {
+      if (canonJson(freshRaw) !== basedOn) {
         // Something else wrote between our get() and this confirming re-read.
         // Recompute the mutation against that fresh state instead of clobbering it.
         updateSettings(mutate, done, attemptsLeft - 1);
         return;
       }
-      chrome.storage.sync.set({ 'oc-settings': settings }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Oculist: chrome.storage.sync.set failed in updateSettings.', chrome.runtime.lastError);
-          if (done) done(chrome.runtime.lastError);
-          return;
-        }
-        if (done) done();
-      });
+      commitSettings(settings, basedOn, mutate, done, attemptsLeft);
     });
+  });
+}
+
+// oculist-xpaz: the set() itself. A foreign write can still land between the confirming
+// re-read and this set() applying, and set() would silently overwrite it. chrome.storage
+// has no compare-and-set, but the onChanged event for OUR write carries oldValue, i.e.
+// exactly what we replaced. If that is not `expectedOld` (the raw JSON we based this
+// write on), a foreign save was clobbered: its value is in hand, so rebuild on top of it
+// via updateSettings' restore pass (bounded by attemptsLeft). Our event is identified by
+// newValue matching what we wrote; foreign events differ and are ignored. A fail-open
+// miss (event never arrives, e.g. our value equalled the stored one, so nothing was
+// overwritten) just removes the listener after a timeout. `done` fires on the set()
+// callback as before; if our event already arrived by then, the repair runs first and
+// carries `done`.
+function commitSettings(settings, expectedOld, mutate, done, attemptsLeft) {
+  const written = canonJson(settings);
+  const events = chrome.storage.onChanged;
+  let drift = null;   // { base } once our event shows a clobbered foreign value
+  let seen = false;
+  let finished = false;
+  let timer = null;
+  const stop = () => {
+    if (timer) clearTimeout(timer);
+    if (events && events.removeListener) events.removeListener(listener);
+  };
+  function listener(changes, area) {
+    if (area !== 'sync') return;
+    const c = changes && changes['oc-settings'];
+    if (seen || !c || canonJson(c.newValue) !== written) return;
+    seen = true;
+    stop();
+    const prior = c.oldValue === undefined ? '{}' : canonJson(c.oldValue);
+    if (prior === expectedOld || attemptsLeft <= 0) return;
+    drift = { base: prior };
+    if (finished) repair(undefined);
+  }
+  function repair(cb) {
+    updateSettings(mutate, cb, attemptsLeft - 1, { base: drift.base, expected: written });
+  }
+  if (events && events.addListener) {
+    events.addListener(listener);
+    timer = setTimeout(stop, 5000);
+    if (timer && timer.unref) timer.unref();
+  }
+  chrome.storage.sync.set({ 'oc-settings': settings }, () => {
+    if (chrome.runtime.lastError) {
+      stop();
+      console.error('Oculist: chrome.storage.sync.set failed in updateSettings.', chrome.runtime.lastError);
+      if (done) done(chrome.runtime.lastError);
+      return;
+    }
+    finished = true;
+    if (drift) { repair(done); return; }
+    if (done) done();
   });
 }
 
