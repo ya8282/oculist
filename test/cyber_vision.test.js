@@ -661,7 +661,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   // on an already-detached element, so the references have to be captured while the
   // beacon is still live (mirrors test/waapi_beacon_cancel.test.js's
   // snapshotBeaconAnimations()).
-  test('a real scroll mid-flight cancels every WAAPI animation via fadeActiveBeacons(), not just removes the element', async () => {
+  test('a real scroll mid-flight cancels every WAAPI animation via fadeActiveBeacons(), not just removes the element', async (t) => {
     // This suite's page is exactly one viewport tall (scrollHeight === innerHeight), so a
     // real wheel scroll has nothing to scroll — window.scrollY would stay 0 and this test
     // would silently pass for the wrong reason (every animation reaching its own natural
@@ -691,6 +691,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
           const anims = elems.flatMap((el) => el.getAnimations());
           if (!anims.length) return;
           window.__waapiSnapshot = anims;
+          window.__waapiBeacons = beacons;
           window.__waapiStatesAtMount = anims.map((x) => x.playState);
         });
         window.__waapiObserver.observe(document.documentElement, { childList: true, subtree: true });
@@ -708,6 +709,14 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
         `sanity check: expected at least one animation 'running' before the scroll, got ${JSON.stringify(before)}`
       );
 
+      // A stall past the beacon's life lets self-removal clear it before the wheel, which would
+      // leave the scroll path unproven rather than red: skip instead of passing vacuously.
+      const liveAtWheel = await page.evaluate(() => document.querySelectorAll('.oc-beacon-transient').length);
+      if (liveAtWheel === 0) {
+        t.skip('no transient beacon was mounted when the wheel fired (stalled past its life); scroll path not exercised');
+        return;
+      }
+
       // A real wheel scroll, exactly as the bug reproduction used — not a synthetic
       // dispatchEvent('scroll'), which would prove nothing about the real browser scroll
       // path handleScroll() is wired to.
@@ -722,6 +731,18 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
         timeout: POLL_TIMEOUT,
       });
 
+      // Self-removal also clears the beacon and cancels its animations. Only fadeActiveBeacons()
+      // writes this inline fade style (opacity 0 plus the 50ms transition) onto the beacon.
+      const faded = await page.evaluate(() =>
+        window.__waapiBeacons
+          .filter((b) => b.classList.contains('oc-beacon-transient'))
+          .map((b) => b.style.opacity === '0' && b.style.transition.indexOf('opacity 50ms') !== -1)
+      );
+      assert.ok(
+        faded.length > 0 && faded.every(Boolean),
+        `expected the scroll's fadeActiveBeacons() to have faded every transient beacon, got ${JSON.stringify(faded)}`
+      );
+
       const after = await page.evaluate(() => window.__waapiSnapshot.map((a) => a.playState));
       assert.ok(
         after.every((s) => s !== 'running'),
@@ -733,6 +754,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
         window.scrollTo(0, 0);
         document.body.style.paddingBottom = '';
         delete window.__waapiSnapshot;
+        delete window.__waapiBeacons;
         delete window.__waapiStatesAtMount;
         if (window.__waapiObserver) window.__waapiObserver.disconnect();
         delete window.__waapiObserver;
