@@ -32,6 +32,12 @@ const FILL = 'x'.repeat(170);
 const STALLED_NEGMARGIN = `<!doctype html><style>body{margin:0;height:3000px;font:14px/18px monospace}#wrap{position:absolute;top:300px;left:0;width:100%;overflow-x:hidden}#box{height:50px;padding-top:150px;width:3000px;text-indent:1500px;scroll-margin-top:-80px}</style><div id="wrap"><div id="box">${TERM}</div></div>${STALL}`;
 // (b): scroll-padding-left:200px on an overflow-x:hidden wrapper at scrollLeft 300; inline nearest scrolls it 300 -> 200.
 const STALLED_PADLEFT = `<!doctype html><style>body{margin:0;height:3000px;font:14px/18px monospace}#wrap{position:absolute;top:300px;left:0;width:100%;overflow-x:hidden;scroll-padding-left:200px}#box{height:50px;padding-top:150px;width:200px;margin-left:400px;white-space:nowrap}</style><div id="wrap"><div id="box">${FILL}${TERM}</div><div style="width:4000px;height:1px"></div></div><script>document.getElementById('wrap').scrollLeft=300</script>${STALL}`;
+// oculist-kqsw: html scroll-snap-type y mandatory, 800px snap areas. The match straddles the viewport bottom (not fully
+// visible), so we scroll to centre it: at y=790 the target (~390) is nearer snap 0, so the snap resolves net zero
+// (measured chromium+webkit: no scroll event, no movement); at y=1190 it lands on the neighbouring snap at 800.
+const snapPage = (y) => `<!doctype html><style>html{scroll-snap-type:y mandatory}body{margin:0;font:14px/18px monospace}.s{position:relative;height:800px;scroll-snap-align:start}</style><div class=s><span style="position:absolute;top:${y}px">${TERM}</span></div><div class=s></div><div class=s></div>${STALL}`;
+const SNAP_BACK = snapPage(790);
+const SNAP_OTHER = snapPage(1190).replace('<div class=s></div><div class=s></div>', '<div class=s></div>');
 const PAGE = `<!doctype html><style>body{margin:0;height:3000px;font:14px/18px monospace}
 #wrap{position:absolute;top:300px;left:0;width:100%;overflow-x:hidden;overflow-y:visible}
 #box{height:50px;padding-top:150px;width:3000px;text-indent:1500px}</style><div id="wrap"><div id="box">${TERM}</div></div>`;
@@ -39,7 +45,7 @@ const PAGE = `<!doctype html><style>body{margin:0;height:3000px;font:14px/18px m
 describe('expectsOwnScroll with a horizontal-only clip (oculist-hdr7)', () => {
   let server, ctx, origin;
   before(async () => {
-    server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(req.url === '/stalled' ? STALLED : req.url === '/stalled-rtl' ? STALLED_RTL : req.url === '/stalled-pad' ? STALLED_PAD : req.url === '/stalled-bodyrtl' ? STALLED_BODYRTL : req.url === '/stalled-negmargin' ? STALLED_NEGMARGIN : req.url === '/stalled-padleft' ? STALLED_PADLEFT : PAGE); });
+    server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(req.url === '/stalled' ? STALLED : req.url === '/stalled-rtl' ? STALLED_RTL : req.url === '/stalled-pad' ? STALLED_PAD : req.url === '/stalled-bodyrtl' ? STALLED_BODYRTL : req.url === '/stalled-negmargin' ? STALLED_NEGMARGIN : req.url === '/snap-back' ? SNAP_BACK : req.url === '/snap-other' ? SNAP_OTHER : req.url === '/stalled-padleft' ? STALLED_PADLEFT : PAGE); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${server.address().port}`;
     ctx = await chromium.launchPersistentContext('', {
@@ -149,6 +155,33 @@ describe('expectsOwnScroll with a horizontal-only clip (oculist-hdr7)', () => {
     await waitForCondition(() => page.evaluate(() => document.getElementById('wrap').scrollLeft), (x) => x < 300, { timeout: POLL_TIMEOUT, interval: 20, message: 'wrapper never scrolled' });
     await page.waitForTimeout(1200);
     assert.strictEqual(await ev('window.__ocTest.getActiveBeacons()'), 1, 'own scroll faded the beacon');
+    await page.close();
+  });
+
+  // Mandatory snap resolves our centring scroll back to the original snap point: net zero. A user scroll
+  // after that must fade the beacon instead of waiting out the 1.5s hold.
+  test('mandatory snap-back to the original position: a user scroll fades the beacon', async () => {
+    const { page, ev } = await open('/snap-back');
+    await page.fill(INPUT, TERM);
+    await page.keyboard.press('Enter');
+    await waitForCondition(() => ev('window.__ocTest.getActiveBeacons()'), (n) => n === 1, { timeout: POLL_TIMEOUT, interval: 10, message: 'no beacon drawn' });
+    await page.waitForTimeout(250);
+    assert.strictEqual(await page.evaluate(() => scrollY), 0, 'snap did not return to the original position');
+    await page.mouse.move(600, 100);
+    await page.mouse.wheel(0, 800);
+    await waitForCondition(() => page.evaluate(() => scrollY), (y) => y > 0, { timeout: POLL_TIMEOUT, interval: 20, message: 'wheel did not scroll the page' });
+    await waitForCondition(() => ev('window.__ocTest.getActiveBeacons()'), (n) => n === 0, { timeout: 800, interval: 20, message: 'user scroll did not fade the beacon' });
+    await page.close();
+  });
+
+  // The same snap container, but our scroll lands on a different snap point: a real own scroll, beacon kept.
+  test('mandatory snap landing on a different snap point is an own scroll: the beacon stays', async () => {
+    const { page, ev } = await open('/snap-other');
+    await page.fill(INPUT, TERM);
+    await page.keyboard.press('Enter');
+    await waitForCondition(() => page.evaluate(() => scrollY), (y) => y >= 800, { timeout: POLL_TIMEOUT, interval: 20, message: 'page never snapped forward' });
+    await page.waitForTimeout(1200);
+    assert.strictEqual(await ev('window.__ocTest.getActiveBeacons()'), 1, 'own snap scroll faded the beacon');
     await page.close();
   });
 });
