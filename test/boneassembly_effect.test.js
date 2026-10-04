@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, LONG_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -250,7 +250,8 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
     });
 
     try {
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+      const vh = await page.evaluate(() => window.innerHeight);
+      await scrollPageTo(page, Math.max(0, targetDocY - vh / 2));
 
       const geom = await replay(page, figureSnapshot);
       assert.ok(geom, 'expected a mounted .oc-beacon-transient figure');
@@ -279,7 +280,7 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
         `figure document top: expected ~${expectedDocTop}, got ${actualDocTop}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -290,7 +291,8 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
     });
 
     try {
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+      const vh = await page.evaluate(() => window.innerHeight);
+      await scrollPageTo(page, Math.max(0, targetDocY - vh / 2));
 
       const geom0 = await replay(page, figureSnapshot);
       assert.ok(geom0, 'expected a mounted figure at scrollX=0');
@@ -327,7 +329,7 @@ describe('Skeleton Trot: a skeleton scatters in, snaps together, the skull rolls
         `figure document left must stay invariant under horizontal scroll (the page's own content didn't move): expected ~0 shift, got ${actualDelta}`
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 

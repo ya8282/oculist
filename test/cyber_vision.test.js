@@ -17,6 +17,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { armBeaconFreeze, disarmBeaconFreeze } = require('./helpers/freeze_beacons');
 const { enableAccessibilityDomain } = require('./helpers/accessible_name');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -468,33 +469,40 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   });
 
   test('the readout is aria-hidden and absent from the accessibility tree', async () => {
-    await replay();
-    await page.waitForSelector(READOUT, { timeout: POLL_TIMEOUT });
+    // oculist-1q4q: the effect self-removes on its own clock, so a read after a stalled poll finds
+    // the readout gone. Freeze the timeline at the mount (test/helpers/freeze_beacons.js).
+    await armBeaconFreeze(page);
+    try {
+      await replay();
+      await page.waitForSelector(READOUT, { timeout: POLL_TIMEOUT });
 
-    const ariaHiddenAttr = await page.evaluate((sel) => document.querySelector(sel).getAttribute('aria-hidden'), READOUT);
-    assert.strictEqual(ariaHiddenAttr, 'true', `expected the readout's aria-hidden attribute to be "true", got ${JSON.stringify(ariaHiddenAttr)}`);
+      const ariaHiddenAttr = await page.evaluate((sel) => document.querySelector(sel).getAttribute('aria-hidden'), READOUT);
+      assert.strictEqual(ariaHiddenAttr, 'true', `expected the readout's aria-hidden attribute to be "true", got ${JSON.stringify(ariaHiddenAttr)}`);
 
-    // Confirm the COMPUTED accessibility tree actually excludes it (not merely that the
-    // attribute is set — see test/helpers/accessible_name.js's own reasoning for why the
-    // two can diverge). Accessibility.getPartialAXTree on an aria-hidden element reports
-    // ignored:true with an ariaHiddenElement reason, and no name at all.
-    const evalResult = await client.send('Runtime.evaluate', {
-      expression: `document.querySelector(${JSON.stringify(READOUT)})`,
-      returnByValue: false,
-    });
-    assert.ok(evalResult.result && evalResult.result.objectId, 'expected the readout element to resolve to a real DOM node');
-    const ax = await client.send('Accessibility.getPartialAXTree', {
-      objectId: evalResult.result.objectId,
-      fetchRelatives: false,
-    });
-    const axNode = ax.nodes && ax.nodes[0];
-    assert.ok(axNode, 'expected an accessibility node for the readout element');
-    assert.strictEqual(axNode.ignored, true, `expected the readout to be ignored by the accessibility tree, got node ${JSON.stringify(axNode)}`);
-    assert.ok(
-      Array.isArray(axNode.ignoredReasons) && axNode.ignoredReasons.some((r) => r.name === 'ariaHiddenElement'),
-      `expected the readout's ignoredReasons to include ariaHiddenElement, got ${JSON.stringify(axNode.ignoredReasons)}`
-    );
-    assert.strictEqual(axNode.name, undefined, `expected the readout to carry no computed accessible name, got ${JSON.stringify(axNode.name)}`);
+      // Confirm the COMPUTED accessibility tree actually excludes it (not merely that the
+      // attribute is set — see test/helpers/accessible_name.js's own reasoning for why the
+      // two can diverge). Accessibility.getPartialAXTree on an aria-hidden element reports
+      // ignored:true with an ariaHiddenElement reason, and no name at all.
+      const evalResult = await client.send('Runtime.evaluate', {
+        expression: `document.querySelector(${JSON.stringify(READOUT)})`,
+        returnByValue: false,
+      });
+      assert.ok(evalResult.result && evalResult.result.objectId, 'expected the readout element to resolve to a real DOM node');
+      const ax = await client.send('Accessibility.getPartialAXTree', {
+        objectId: evalResult.result.objectId,
+        fetchRelatives: false,
+      });
+      const axNode = ax.nodes && ax.nodes[0];
+      assert.ok(axNode, 'expected an accessibility node for the readout element');
+      assert.strictEqual(axNode.ignored, true, `expected the readout to be ignored by the accessibility tree, got node ${JSON.stringify(axNode)}`);
+      assert.ok(
+        Array.isArray(axNode.ignoredReasons) && axNode.ignoredReasons.some((r) => r.name === 'ariaHiddenElement'),
+        `expected the readout's ignoredReasons to include ariaHiddenElement, got ${JSON.stringify(axNode.ignoredReasons)}`
+      );
+      assert.strictEqual(axNode.name, undefined, `expected the readout to carry no computed accessible name, got ${JSON.stringify(axNode.name)}`);
+    } finally {
+      await disarmBeaconFreeze(page);
+    }
   });
 
   // Does not press Escape — the scroll-cancellation test below it still needs the finder

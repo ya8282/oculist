@@ -31,6 +31,8 @@ const PAGES = {
   hscroll: `<!doctype html>${STYLE}<div id=h tabindex=0 style="width:300px;height:30px;overflow-x:auto;white-space:nowrap"><div style="width:2000px">x</div></div><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   areaScrolled: `<!doctype html>${STYLE}<textarea id=t rows=3></textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   oneline: `<!doctype html>${STYLE}<textarea id=t rows=3>abcd</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
+  // oculist-wnn3: one logical line (no newline) that soft-wraps to several visual lines in a 3-row textarea.
+  softwrap: `<!doctype html>${STYLE}<textarea id=t rows=3 cols=20>${Array.from({ length: 60 }, () => 'word').join(' ')}</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   caretarea: `<!doctype html>${STYLE}<textarea id=t rows=3>${Array.from({ length: 40 }, () => 'abcd').join('\n')}</textarea><pre id=p>${lines(400, 300).join('\n')}</pre>`,
   wheel: `<!doctype html>${STYLE}<pre id=p>${lines(400, 300).join('\n')}</pre>`,
 };
@@ -242,8 +244,17 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
     window.addEventListener('scroll', () => { if (down !== null && scrollY < down) window.__revealed = true; }, true);
   });
   const revealed = (page) => page.evaluate(() => window.__revealed === true);
+  const caretAt = (n) => (page) => page.evaluate((c) => {
+    const t = document.getElementById('t');
+    t.focus({ preventScroll: true });
+    t.setSelectionRange(c < 0 ? t.value.length + c + 1 : c, c < 0 ? t.value.length + c + 1 : c);
+    window.__revealed = false;
+    let down = null;
+    window.addEventListener('keydown', () => { down = scrollY; }, true);
+    window.addEventListener('scroll', () => { if (down !== null && scrollY < down) window.__revealed = true; }, true);
+  }, n);
   const navigated = (page) => page.evaluate(() => CSS.highlights.has('oculist-active-match'));
-  const START = { controls: 1500, caretarea: 1500, areaScrolled: 1500, oneline: 1500 };
+  const START = { controls: 1500, caretarea: 1500, areaScrolled: 1500, oneline: 1500, softwrap: 1500 };
   for (const [label, name, focus, key, takeover, premise, offScreenOk] of [
     ['ArrowRight with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowRight', false],
     ['ArrowLeft with body focus on a page with no horizontal overflow', 'wheel', offInput, 'ArrowLeft', false],
@@ -252,6 +263,14 @@ describe('beacon waits for the whole navigation scroll (oculist-h1ns)', () => {
     ['ArrowUp in an empty page textarea with the page scrolled down', 'areaScrolled', focusRecordingReveal, 'ArrowUp', true, revealed],
     ['ArrowDown in an off-screen one-line textarea with the caret at the end', 'oneline', (page) => page.evaluate(() => { const t = document.getElementById('t'); t.focus({ preventScroll: true }); t.setSelectionRange(4, 4); }), 'ArrowDown', false],
     ['ArrowUp in an off-screen textarea with the caret at 0', 'caretarea', (page) => page.evaluate(() => { const t = document.getElementById('t'); t.focus({ preventScroll: true }); t.setSelectionRange(0, 0); }), 'ArrowUp', false],
+    // oculist-wnn3: measured chromium+webkit: on a soft-wrapped single logical line the browser moves the caret
+    // (and reveals the textarea) exactly when it is not at 0 (Up) / the end (Down), whatever visual line it is on
+    ['ArrowUp in a soft-wrapped textarea with the caret at 0', 'softwrap', caretAt(0), 'ArrowUp', false],
+    ['ArrowDown in a soft-wrapped textarea with the caret at the end', 'softwrap', caretAt(-1), 'ArrowDown', false],
+    ['ArrowUp in a soft-wrapped textarea with the caret on a middle visual line', 'softwrap', caretAt(120), 'ArrowUp', true, revealed],
+    ['ArrowDown in a soft-wrapped textarea with the caret on a middle visual line', 'softwrap', caretAt(120), 'ArrowDown', true, revealed],
+    ['ArrowUp in a soft-wrapped textarea with the caret on the first visual line but not at 0', 'softwrap', caretAt(5), 'ArrowUp', true, revealed],
+    ['ArrowDown in a soft-wrapped textarea with the caret on the last visual line but not at the end', 'softwrap', caretAt(-4), 'ArrowDown', true, revealed],
     ['ArrowRight in an empty page textarea', 'area', focusId('t'), 'ArrowRight', false],
     ['ArrowRight with body focus on a page that overflows horizontally', 'wide', offInput, 'ArrowRight', true, async (page) => (await page.evaluate(() => window.scrollX)) > 0],
     // oculist-7ki8: exemptions per key and type

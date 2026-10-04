@@ -30,7 +30,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -278,7 +278,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       const r = document.getElementById(elId).getBoundingClientRect();
       return r.top + window.scrollY;
     }, id);
-    await page.evaluate((y) => window.scrollTo(0, y), Math.max(0, docTop - topOffset));
+    await scrollPageTo(page, Math.max(0, docTop - topOffset));
   }
 
   // Scrolls so #id's own BOTTOM lands `gap` px above the viewport's bottom edge -- used to
@@ -289,7 +289,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       return r.bottom + window.scrollY;
     }, id);
     const vh = await page.evaluate(() => window.innerHeight);
-    await page.evaluate((y) => window.scrollTo(0, y), Math.max(0, docBottom - vh + gap));
+    await scrollPageTo(page, Math.max(0, docBottom - vh + gap));
   }
 
   // Mirrors content.js's own planTentacle()/domeVisible formula verbatim (see
@@ -438,7 +438,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -464,7 +464,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
   });
 
   test('starting from a genuinely unscrolled page (scrollY=0), Enter still finds and plays the effect correctly, via the extension\'s own scroll-into-view', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
     const scrollBefore = await page.evaluate(() => window.scrollY);
     assert.strictEqual(scrollBefore, 0, 'sanity check: page must start genuinely unscrolled');
 
@@ -476,7 +476,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
 
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
   });
 
   // NOTE: #edgeTarget's own rect is wider than a 320px viewport, so BOTH sides overlap
@@ -639,7 +639,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
 
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -658,7 +658,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       await evalInContentScript('window.__ocTest.cancelBeacons()');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -718,7 +718,7 @@ describe('Tentacle Rise: a pair of tentacles rise from below the match, curl inw
       // NEXT test's replay() can otherwise mount its own fresh beacon inside this window and
       // have it torn down by this restore's trailing repositionActiveOverlays() (oculist-f7vx).
       await waitForOverlayResizeSettled(page, evalInContentScript, VIEWPORT);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     }
   });
