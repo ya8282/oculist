@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, TIMEOUT_SCALE, waitForOverlayResizeSettled } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, TIMEOUT_SCALE, waitForOverlayResizeSettled } = require('./helpers/wait');
 const { waitForSessionAccess } = require('./helpers/session_access');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -415,7 +415,7 @@ describe('Active-match magnifier overlay', () => {
   beforeEach(async () => {
     await page.keyboard.press('Escape').catch(() => {});
     await waitForOverlayClosed();
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await scrollPageTo(page, 0);
 
     await resetVisionSettings();
     await evalInContentScript(

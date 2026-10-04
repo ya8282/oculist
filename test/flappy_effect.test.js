@@ -18,7 +18,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
+const { scrollPageTo, POLL_TIMEOUT, waitForCondition } = require('./helpers/wait');
 const { collectAnimationTimings } = require('./helpers/waapi_timings');
 
 const EXTENSION = path.resolve(__dirname, '../extension');
@@ -257,7 +257,8 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     });
 
     try {
-      await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+      const vh = await page.evaluate(() => window.innerHeight);
+      await scrollPageTo(page, Math.max(0, targetDocY - vh / 2));
 
       const geom = await replay(flappyBirdSnapshot);
       assert.ok(geom, 'expected a mounted .oc-flappy-bird');
@@ -298,7 +299,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
         'a left-of-match start must not carry the mirror transform'
       );
     } finally {
-      await page.evaluate(() => window.scrollTo(0, 0));
+      await scrollPageTo(page, 0);
     }
   });
 
@@ -387,7 +388,8 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       const r = document.getElementById('target').getBoundingClientRect();
       return r.top + window.scrollY + r.height / 2;
     });
-    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+    const vh = await page.evaluate(() => window.innerHeight);
+    await scrollPageTo(page, Math.max(0, targetDocY - vh / 2));
 
     // Measured 2026-09-23 (headless Chromium, this fixture, CONTACT_T=900) in both
     // directions -- normal (mouse at 200,120, left of match) and mirrored (mouse at
@@ -532,7 +534,8 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       return r.top + window.scrollY + r.height / 2;
     });
     await page.mouse.move(200, 120);
-    await page.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+    const vh = await page.evaluate(() => window.innerHeight);
+    await scrollPageTo(page, Math.max(0, targetDocY - vh / 2));
 
     // Collects across BOTH top-level .oc-beacon-transient elements animateFlappy mounts --
     // the bird and the absorption flash, created synchronously in the same animateFlappy()
@@ -722,7 +725,8 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
         const r = document.getElementById('target').getBoundingClientRect();
         return r.top + window.scrollY + r.height / 2;
       });
-      await page2.evaluate((y) => window.scrollTo(0, Math.max(0, y - window.innerHeight / 2)), targetDocY);
+      const vh2 = await page2.evaluate(() => window.innerHeight);
+      await scrollPageTo(page2, Math.max(0, targetDocY - vh2 / 2));
 
       await evalInContentScript('window.__ocTest.cancelBeacons()', { client: client2, contextId: isolatedContextId2 });
       await page2.keyboard.press('Enter');
