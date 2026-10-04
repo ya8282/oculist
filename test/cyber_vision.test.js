@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { waitForCondition, waitForContentScriptValue, POLL_TIMEOUT } = require('./helpers/wait');
+const { waitForCondition, waitForContentScriptValue, scrollPageTo, POLL_TIMEOUT } = require('./helpers/wait');
 const { armBeaconFreeze, disarmBeaconFreeze } = require('./helpers/freeze_beacons');
 const { enableAccessibilityDomain } = require('./helpers/accessible_name');
 
@@ -56,6 +56,18 @@ const BRACKET_BORDER = 2;
 // Sub-pixel/transform-compositing rounding tolerance, not a slack "somewhere near" window —
 // see the per-corner assertion below for why this can be this tight.
 const BRACKET_TOLERANCE = 3;
+
+// Pads the page taller, then centres #target with a settle-aware scroll (scrollPageTo awaits
+// the scroll event) so a late event from this setup scroll cannot land after Enter and fade
+// the beacon early (oculist-mbgj; same race as ns64 scrollPageTo). Today y is 0 here, so this is hardening.
+async function padAndCentreTarget(page) {
+  await page.evaluate(() => { document.body.style.paddingBottom = '2000px'; });
+  const y = await page.evaluate(() => {
+    const r = document.getElementById('target').getBoundingClientRect();
+    return Math.max(0, Math.round(r.top + window.scrollY - window.innerHeight / 2 + r.height / 2));
+  });
+  await scrollPageTo(page, y);
+}
 
 describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
   let server, ctx, page, client, isolatedContextId, origin;
@@ -662,10 +674,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // handleScroll() ignore the very scroll this test is about to fire for 800ms. Centring
     // first guarantees replay()'s own Enter never sets it.
     try {
-      await page.evaluate(() => {
-        document.body.style.paddingBottom = '2000px';
-        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-      });
+      await padAndCentreTarget(page);
 
       await replay();
 
@@ -755,10 +764,7 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     // Enter must never trigger highlightActiveRange()'s triggerAutoScrollFlag(), which would
     // make handleScroll() ignore the scroll this test fires (isAutoScrolling, content.js).
     try {
-      await page.evaluate(() => {
-        document.body.style.paddingBottom = '2000px';
-        document.getElementById('target').scrollIntoView({ block: 'center', behavior: 'instant' });
-      });
+      await padAndCentreTarget(page);
       await page.evaluate(() => document.querySelectorAll('.oc-beacon').forEach((el) => el.remove()));
 
       await armScrollRace();
