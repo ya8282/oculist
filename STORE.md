@@ -112,7 +112,7 @@ done
 - **Description**: lead with the pain point, then grouped feature bullets, then close
   with the local-only privacy line. Pull the feature list from the newest `CHANGELOG.md`
   section so the listing and the release agree.
-  As of 1.7.0, work the pack system into that description rather than the previously listed
+  As of 1.8.0, work the pack system into that description rather than the previously listed
   effects (the live listing still names six effects from v1.0.0 — stale, not false, and this
   is the release that corrects it):
 

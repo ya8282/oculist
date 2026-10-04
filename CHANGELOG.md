@@ -5,7 +5,7 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [1.7.0] — 2026-09-01
+## [1.8.0] — Unreleased
 
 ### Added
 
@@ -16,6 +16,11 @@ below the 1.5.0 heading is what landed across that span.
   panel when a pack is available that you have not switched on. **Halloween is the first pack**, and it ships turned on by default and
   free for both new installs and everyone already running Oculist — nothing to buy or opt into
   to see it, though it switches off the same way as any other pack.
+
+## [1.7.0] — 2026-09-01
+
+### Added
+
 * **Speed Lines.** A new effect that fires horizontal light streaks blasting outward from the
   match; the streak hue rides your beacon colour.
 * **Chrono Tunnel.** A new effect with kaleidoscopic rings rushing outward in a slit-scan smear;
