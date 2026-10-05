@@ -82,8 +82,9 @@ describe('Speed Lines: horizontal streak field radiating from the match', () => 
     });
 
     // Select the Speed Lines effect for the whole suite before ever opening the finder —
-    // every test below assumes this baseline.
-    await setSettings({ effect: 'speedlines' });
+    // every test below assumes this baseline. performanceMode is forced off because
+    // onInstalled auto-enables Lite Mode on <4-core machines (oculist-ymyz).
+    await setSettings({ effect: 'speedlines', performanceMode: false });
 
     await openFinder();
     await page.locator(INPUT).type('quarklet', { delay: 30 });
