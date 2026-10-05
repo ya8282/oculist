@@ -111,8 +111,9 @@ describe('Cyber-Vision: a targeting HUD sweep resolves onto the match', () => {
     });
 
     // Select the Cyber-Vision effect for the whole suite before ever opening the finder —
-    // every test below assumes this baseline.
-    await setSettings({ effect: 'cybervision' });
+    // every test below assumes this baseline. performanceMode is forced off because
+    // onInstalled auto-enables Lite Mode on <4-core machines (oculist-ymyz).
+    await setSettings({ effect: 'cybervision', performanceMode: false });
 
     await openFinder();
     await page.locator(INPUT).type('phosphorescent', { delay: 30 });
