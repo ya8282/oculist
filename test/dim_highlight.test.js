@@ -96,6 +96,9 @@ describe('Dim highlight registry for inactive terms', () => {
     await waitForSessionAccess(client, isolatedContextId);
     await page.keyboard.press('Escape');
     await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
+    // onInstalled auto-enables Lite Mode on <4-core machines, which builds no dim ranges;
+    // these tests assume full mode (oculist-ymyz).
+    await setLiteMode(false);
   });
 
   after(async () => {
