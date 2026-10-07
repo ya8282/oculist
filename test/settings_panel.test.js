@@ -662,14 +662,14 @@ describe('Oculist Preference Panel Tests', () => {
       createDOMEnvironment();
       const codePath = path.join(__dirname, '../extension/content.js');
       const original = fs.readFileSync(codePath, 'utf8');
-      const target = "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }\n  };";
+      const target = "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' }\n  };";
       assert.ok(
         original.includes(target),
         'fixture setup: expected the effectsRegistry closing entry not found — did its shape change?'
       );
       const patched = original.replace(
         target,
-        "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }, " +
+        "vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' }, " +
           "auroraGamma: { label: 'Aurora Gamma', run: animateCyberVision, pack: 'aurora' }, " +
           "auroraAlpha: { label: 'Aurora Alpha', run: animateCyberVision, pack: 'aurora' }\n  };"
       );

@@ -1,14 +1,14 @@
 // Cheshire Cat beacon effect (oculist-e2m.6): promotes fxCheshire (artifacts/prototypes/
 // effects-playground.html, the geometric-dissolve redraw from oculist-e2m.8/.9) into
-// extension/content.js as the third entry in the Halloween pack. A hand-drawn cat fades
+// extension/content.js as the third entry in the Adventure pack. A hand-drawn cat fades
 // in above the match (or below it when there is no room), its six head/body regions
 // dissolve while its grin settles toward the match, pops, holds, then fades -- the grin
 // outlasts the body, it does not persist.
 //
 // Modeled on test/trail_effect.test.js (document-space + Lite Mode idioms) and
-// test/flappy_effect.test.js (this Halloween pack's own sibling, same fixture/helper
+// test/flappy_effect.test.js (this Adventure pack's own sibling, same fixture/helper
 // shape and the same pack-enumeration coverage) -- against the REAL extension, since
-// cheshire is a genuine effectsRegistry entry under pack:'halloween', no fixture copy
+// cheshire is a genuine effectsRegistry entry under pack:'adventure', no fixture copy
 // needed for either.
 //
 // Needs a real browser for the same reasons as those two: WAAPI, real layout, and
@@ -95,7 +95,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     // Select Cheshire Cat and turn its pack on for the whole suite before ever opening the
     // finder -- every tab of this persistent context shares this chrome.storage.sync
     // write.
-    await setSettings({ effect: 'cheshire', enabledPacks: ['halloween'] });
+    await setSettings({ effect: 'cheshire', enabledPacks: ['adventure'] });
 
     await openFinder(page);
     await page.locator(INPUT).type('quarklet', { delay: 30 });
@@ -730,7 +730,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
     }
   });
 
-  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
+  test('pack enumeration: absent while adventure is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -759,7 +759,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       await closeSettings();
 
       // Enabled: present in both.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('cheshire'), -1, 'cheshire must be present in availableEffects() once its pack is enabled');
 
@@ -794,7 +794,7 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       // Selection restored on re-enable: no explicit re-selection of 'cheshire' here --
       // if the disable step above had rewritten settings.effect, this would now fire
       // whatever it was rewritten to instead.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       geom = await replayFrozen(() => (window.__beaconMounted ? { catMounted: window.__beaconRootTags.indexOf('svg') >= 0 } : null), { freeze: false });
       assert.strictEqual(geom.catMounted, true, 'the stored cheshire selection must survive the disable/re-enable round trip');
 
@@ -806,12 +806,12 @@ describe('Cheshire Cat: a hand-drawn cat fades in above (or below) the match, di
       // chrome.storage only fires onChanged when the stored value actually differs
       // (test/active_match_magnifier.test.js documents the same gotcha) -- the happy
       // path above already leaves settings at exactly { effect: 'cheshire', enabledPacks:
-      // ['halloween'] }, so restoring straight to that value here would be a no-op write
+      // ['adventure'] }, so restoring straight to that value here would be a no-op write
       // that setSettings()'s echo-wait would hang on. Routing through a sentinel value
       // first guarantees both writes are genuine changes, regardless of which line above
       // (if any) actually threw.
       await setSettings({ enabledPacks: ['__oc_cheshire_test_reset__'] });
-      await setSettings({ effect: 'cheshire', enabledPacks: ['halloween'] });
+      await setSettings({ effect: 'cheshire', enabledPacks: ['adventure'] });
     }
   });
 });

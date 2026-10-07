@@ -174,8 +174,8 @@ test('enabledPacks stored as a non-array (a string) is coerced, not thrown on', 
 
   const settings = backing['oc-settings'];
   assert.deepStrictEqual(
-    settings.enabledPacks, ['halloween'],
-    'a non-array enabledPacks must be replaced with an array containing just halloween: ' +
+    settings.enabledPacks, ['halloween', 'adventure'],
+    'a non-array enabledPacks must be replaced with an array containing both default packs: ' +
       JSON.stringify(settings)
   );
   assert.strictEqual(settings.seededHalloweenPack, true);
@@ -194,8 +194,30 @@ test('seeding does not clobber a pack list that already contains other pack ids'
 
   const settings = backing['oc-settings'];
   assert.deepStrictEqual(
-    settings.enabledPacks.slice().sort(), ['halloween', 'seasonal'],
+    settings.enabledPacks.slice().sort(), ['adventure', 'halloween', 'seasonal'],
     'seeding must add halloween alongside an existing pack, not replace the list: ' +
       JSON.stringify(settings)
   );
 });
+
+// oculist-wi8u: the one seed (one flag) turns on both default packs, Halloween and Adventure.
+test('one seed run yields both halloween and adventure on an upgrade profile', async () => {
+  const backing = { 'oc-settings': { seededDefaultBlocklist: true, disabledSites: [], enabledPacks: [] } };
+  const { fire } = loadBackground({ backing });
+  fire({ reason: 'update' });
+  await flush(20);
+  assert.deepStrictEqual(backing['oc-settings'].enabledPacks, ['halloween', 'adventure']);
+  assert.strictEqual(backing['oc-settings'].seededHalloweenPack, true);
+});
+
+for (const [removed, kept] of [['halloween', 'adventure'], ['adventure', 'halloween']]) {
+  test(`already-seeded user who removed ${removed} is not re-seeded`, async () => {
+    const backing = {
+      'oc-settings': { seededDefaultBlocklist: true, seededHalloweenPack: true, disabledSites: [], enabledPacks: [kept] },
+    };
+    const { fire } = loadBackground({ backing });
+    fire({ reason: 'update' });
+    await flush(20);
+    assert.deepStrictEqual(backing['oc-settings'].enabledPacks, [kept]);
+  });
+}

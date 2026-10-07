@@ -1,13 +1,13 @@
 // Flappy beacon effect (oculist-e2m.5): promotes fxFlappy (artifacts/prototypes/
 // effects-playground.html) into extension/content.js as the second entry in the
-// Halloween pack. A small bird flies a sawtooth of parabolic arcs from the cursor (or
+// Adventure pack. A small bird flies a sawtooth of parabolic arcs from the cursor (or
 // its fallback) to the match, perches on the match's top edge, then the absorption
 // flash animateTrail already uses fires on the match rect.
 //
 // Modeled on test/trail_effect.test.js (cursor-fallback + document-space + Lite Mode
 // idioms, since Flappy shares animateTrail's own start-point cascade) and
 // test/boneassembly_effect.test.js (pack enumeration idioms) -- against the REAL
-// extension, since flappy is a genuine effectsRegistry entry under pack:'halloween',
+// extension, since flappy is a genuine effectsRegistry entry under pack:'adventure',
 // no fixture copy needed for either.
 //
 // Needs a real browser for the same reasons as those two: WAAPI, offset-path, real
@@ -84,7 +84,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     // Select Flappy and turn its pack on for the whole suite before ever opening the
     // finder -- every tab of this persistent context shares this chrome.storage.sync
     // write.
-    await setSettings({ effect: 'flappy', enabledPacks: ['halloween'] });
+    await setSettings({ effect: 'flappy', enabledPacks: ['adventure'] });
 
     await openFinder(page);
     await page.locator(INPUT).type('quarklet', { delay: 30 });
@@ -856,7 +856,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
     }
   });
 
-  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
+  test('pack enumeration: absent while adventure is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -885,7 +885,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       await closeSettings();
 
       // Enabled: present in both.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('flappy'), -1, 'flappy must be present in availableEffects() once its pack is enabled');
 
@@ -917,7 +917,7 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       // Selection restored on re-enable: no explicit re-selection of 'flappy' here -- if
       // the disable step above had rewritten settings.effect, this would now fire
       // whatever it was rewritten to instead.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       geom = await replay(() => (document.querySelector('.oc-flappy-bird') ? { birdMounted: true } : null));
       assert.strictEqual(geom.birdMounted, true, 'the stored flappy selection must survive the disable/re-enable round trip');
 
@@ -928,12 +928,12 @@ describe('Flappy: a bird flies a sawtooth of parabolic arcs from the cursor to t
       // chrome.storage only fires onChanged when the stored value actually differs
       // (test/active_match_magnifier.test.js documents the same gotcha) -- the happy
       // path above already leaves settings at exactly { effect: 'flappy', enabledPacks:
-      // ['halloween'] }, so restoring straight to that value here would be a no-op write
+      // ['adventure'] }, so restoring straight to that value here would be a no-op write
       // that setSettings()'s echo-wait would hang on. Routing through a sentinel value
       // first guarantees both writes are genuine changes, regardless of which line above
       // (if any) actually threw.
       await setSettings({ enabledPacks: ['__oc_flappy_test_reset__'] });
-      await setSettings({ effect: 'flappy', enabledPacks: ['halloween'] });
+      await setSettings({ effect: 'flappy', enabledPacks: ['adventure'] });
     }
   });
 });

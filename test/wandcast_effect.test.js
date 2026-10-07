@@ -1,5 +1,5 @@
 // Fairy Cast beacon effect (oculist-nq1x.10): promotes fxWandCast (artifacts/prototypes/
-// effects-playground.html) into extension/content.js as the ninth entry in the Halloween pack.
+// effects-playground.html) into extension/content.js as the ninth entry in the Adventure pack.
 // A sparkling amber fairy lands beside the match (right by default, left if the right side has
 // no room), casts through three wand poses, then launches six sparkles from the wand tip that
 // swirl the match on an orbiting ellipse before fading.
@@ -171,7 +171,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       message: 'never observed the content script isolated execution context',
     });
 
-    await setSettings({ effect: 'wandcast', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'wandcast', enabledPacks: ['adventure'], scrollBehavior: 'instant' });
 
     await openFinder(page);
     await page.locator(INPUT).type('hexbloomspark', { delay: 30 });
@@ -1193,7 +1193,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
     }
   });
 
-  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
+  test('pack enumeration: absent while adventure is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -1221,7 +1221,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       );
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('wandcast'), -1, 'wandcast must be present in availableEffects() once its pack is enabled');
 
@@ -1244,7 +1244,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
       // Selection restored on re-enable: no explicit re-selection of 'wandcast' here.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       geom = await replay(() => (document.querySelector('.oc-beacon-transient[data-wandcast="figure"]') ? { mounted: true } : null));
       assert.strictEqual(geom.mounted, true, 'the stored wandcast selection must survive the disable/re-enable round trip');
 
@@ -1254,7 +1254,7 @@ describe('Fairy Cast: an amber fairy lands beside the match, casts, and launches
       // through a sentinel value first so both writes are genuine changes regardless of which
       // line above (if any) threw.
       await setSettings({ enabledPacks: ['__oc_wandcast_test_reset__'] });
-      await setSettings({ effect: 'wandcast', enabledPacks: ['halloween'] });
+      await setSettings({ effect: 'wandcast', enabledPacks: ['adventure'] });
     }
   });
 });

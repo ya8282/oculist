@@ -15,7 +15,7 @@
 // (absent means core — see availableEffects() in extension/content.js). That
 // splits every site's enumeration in two: the twelve core effects, listed the
 // same way they always were, and any packed effects, listed separately under a
-// dedicated "Optional effect packs: ..." sentence (or, in the settings-panel
+// dedicated per-pack "<Pack label> pack: ..." sentence (oculist-wi8u) (or, in the settings-panel
 // mockup <select>, a dedicated block of <option> tags appended after a marker
 // comment). Both halves are still checked for missing entries (assertLabelsInOrder)
 // and orphaned leftovers (assertNoOrphanLabels) — packs do not weaken either
@@ -181,32 +181,69 @@ function assertNoOrphanLabels(names, labels, siteDescription) {
   }
 }
 
-// Scans one "Optional effect packs: A, B, and C." (or "...: None in this
-// release.") sentence within fileContent[searchFrom, searchTo), and asserts it
-// stays in sync with packedLabels. Used by welcome.html's prose paragraph and
-// both docs/index.html sites — every prose site's packed slice is bounded the
-// same way as its core slice: from just after the "Optional effect packs:"
-// lead-in to the sentence's own closing period, so trailing sentences appended
-// after it in the same <p> aren't parsed as bogus labels.
-function assertPackedProseSite(fileContent, searchFrom, searchTo, packedLabels, siteDescription) {
+// Reads the pack id -> display label map out of content.js's PACK_LABELS literal.
+function extractPackLabels(contentJsSource) {
+  const m = contentJsSource.match(/var PACK_LABELS = \{([^}]*)\}/);
+  assert.ok(m, `could not find "var PACK_LABELS = {" in ${CONTENT_JS}`);
+  const labels = {};
+  const re = /(\w+)\s*:\s*'((?:[^'\\]|\\.)*)'/g;
+  let e;
+  while ((e = re.exec(m[1])) !== null) labels[e[1]] = unescapeJsStringLiteral(e[2]);
+  return labels;
+}
+
+// oculist-wi8u: packed effects are listed per pack, "<Pack label> pack: A, B, and C."
+// Scans fileContent[searchFrom, searchTo) and asserts that, for every pack the registry
+// carries, a "<PACK_LABELS label> pack:" sentence exists and lists exactly that pack's
+// labels (missing, extra, wrong-pack and out-of-order all fail), and that no pack heading
+// appears in the prose that the registry does not carry. With no packed entries at all,
+// the region must read "Optional effect packs: None in this release."
+function assertPackedProseSite(fileContent, searchFrom, searchTo, packedEntries, packLabels, siteDescription) {
   const region = fileContent.slice(searchFrom, searchTo);
-  const markerText = 'Optional effect packs:';
-  const markerIdx = region.indexOf(markerText);
-  assert.notStrictEqual(
-    markerIdx,
-    -1,
-    `${siteDescription}: could not find the "Optional effect packs:" sentence — did it get removed or reworded?`
-  );
-  const listStart = searchFrom + markerIdx + markerText.length;
-  const listEnd = fileContent.indexOf('.', listStart);
-  assert.notStrictEqual(
-    listEnd,
-    -1,
-    `${siteDescription}: could not find the closing period of the "Optional effect packs:" sentence`
-  );
-  const slice = fileContent.slice(listStart, listEnd);
-  assertLabelsInOrder(slice, packedLabels, siteDescription + ' (packed effects)');
-  assertNoOrphanLabels(extractPackedNames(slice), packedLabels, siteDescription + ' (packed effects)');
+  const packIds = [];
+  for (const e of packedEntries) if (packIds.indexOf(e.pack) === -1) packIds.push(e.pack);
+
+  if (packIds.length === 0) {
+    const markerText = 'Optional effect packs:';
+    const idx = region.indexOf(markerText);
+    assert.notStrictEqual(idx, -1, `${siteDescription}: could not find the "${markerText}" sentence`);
+    const start = idx + markerText.length;
+    const end = region.indexOf('.', start);
+    assert.deepStrictEqual(
+      extractPackedNames(region.slice(start, end)), [],
+      `${siteDescription}: lists packed effects but the registry carries none`
+    );
+    return;
+  }
+
+  const expectedHeadings = [];
+  for (const packId of packIds) {
+    const heading = packLabels[packId];
+    assert.ok(heading, `${siteDescription}: pack "${packId}" has no entry in PACK_LABELS in extension/content.js`);
+    expectedHeadings.push(heading);
+    const marker = heading + ' pack:';
+    const idx = region.indexOf(marker);
+    assert.notStrictEqual(
+      idx, -1,
+      `${siteDescription}: registry has pack "${packId}" but no "${marker}" prose list was found`
+    );
+    const start = idx + marker.length;
+    const end = region.indexOf('.', start);
+    assert.notStrictEqual(end, -1, `${siteDescription}: could not find the closing period of the "${marker}" sentence`);
+    const slice = region.slice(start, end);
+    const labels = packedEntries.filter((e) => e.pack === packId).map((e) => e.label);
+    assertLabelsInOrder(slice, labels, `${siteDescription} ("${marker}" list)`);
+    assertNoOrphanLabels(extractDelimitedNames(slice), labels, `${siteDescription} ("${marker}" list)`);
+  }
+
+  const headingPattern = /\b([A-Z][\w-]*(?: [A-Z][\w-]*)*) pack:/g;
+  let h;
+  while ((h = headingPattern.exec(region)) !== null) {
+    assert.ok(
+      expectedHeadings.indexOf(h[1]) !== -1,
+      `${siteDescription}: prose has a "${h[1]} pack:" list but the registry carries no pack with that label`
+    );
+  }
 }
 
 test('extractKeyedStringLiteral is escape-aware (oculist-cfyh)', () => {
@@ -232,6 +269,8 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
   const registryEntries = extractRegistryEntries(contentJsSource);
   const coreLabels = registryEntries.filter((e) => !e.pack).map((e) => e.label);
   const packedLabels = registryEntries.filter((e) => e.pack).map((e) => e.label);
+  const packedEntries = registryEntries.filter((e) => e.pack);
+  const packLabels = extractPackLabels(contentJsSource);
 
   const welcomeHtml = fs.readFileSync(WELCOME_HTML, 'utf8');
   const docsIndexHtml = fs.readFileSync(DOCS_INDEX_HTML, 'utf8');
@@ -272,7 +311,7 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
   // packs: A, B, and C." (or the empty placeholder). Scoped from the end of
   // the core paragraph to the end of the file's <body> is generous but safe:
   // welcome.html only has one "Optional effect packs:" sentence.
-  assertPackedProseSite(welcomeHtml, proseListEnd, welcomeHtml.length, packedLabels, proseSiteDescription);
+  assertPackedProseSite(welcomeHtml, proseListEnd, welcomeHtml.length, packedEntries, packLabels, proseSiteDescription);
 
   // Site 2: welcome.html's settings-panel mockup <select> (Step 4 live
   // preview) — a separate, independently-maintained <option> list that names
@@ -377,7 +416,7 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
     -1,
     'docs/index.html: could not find the closing </p> for the "Make it yours" intro paragraph'
   );
-  assertPackedProseSite(docsIndexHtml, introEnd, introEndTag, packedLabels, introSiteDescription);
+  assertPackedProseSite(docsIndexHtml, introEnd, introEndTag, packedEntries, packLabels, introSiteDescription);
 
   const showingSiteDescription = 'docs/index.html ("Showing / Also included" Effects section line, near line 610)';
   const showingMarker = 'Showing: Anime Laser (default)';
@@ -416,7 +455,7 @@ test('welcome.html and docs/index.html stay in sync with effectsRegistry', () =>
     -1,
     'docs/index.html: could not find the closing "Effects" section </div> after the "Showing / Also included" line'
   );
-  assertPackedProseSite(docsIndexHtml, showingEnd, showingBlockEnd, packedLabels, showingSiteDescription);
+  assertPackedProseSite(docsIndexHtml, showingEnd, showingBlockEnd, packedEntries, packLabels, showingSiteDescription);
 });
 
 test('welcome.html "Choose from N core effects" count matches effectsRegistry\'s core entries', () => {
