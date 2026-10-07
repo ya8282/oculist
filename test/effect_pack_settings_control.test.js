@@ -89,24 +89,22 @@ function createPackedFixtureExtension() {
     "ocTdj5PackedEffect: { label: 'OC TDJ5 Packed Effect', run: animateCyberVision, pack: 'seasonal' }, " +
     fillerEntries;
   assert.notStrictEqual(original.indexOf(target), -1);
-  let contentJs = original.replace(target, patched);
+  // Strip the real packs first so the fixture's own pack ids (patched in below) survive.
+  let contentJs = original;
+  const realPackFieldCount = (contentJs.match(/,\s*pack:\s*'[a-z]+'/g) || []).length;
+  contentJs = contentJs.replace(/,\s*pack:\s*'[a-z]+'/g, '');
+  contentJs = contentJs.replace(target, patched);
 
-  // oculist-nq1x.5 / oculist-e2m.5: the real Halloween pack's own entries (boneassembly,
-  // flappy, and every future promotion into the same pack) now exist on the real tree,
-  // which would otherwise inflate knownPacks() to eleven-plus distinct ids (this
-  // fixture's own ten plus 'halloween') and break this file's ten-row assertions. Strip
-  // `pack: 'halloween'` off EVERY entry that carries it, in THIS FIXTURE COPY ONLY —
-  // extension/content.js itself is never touched — so each one counts as a core
-  // (unpacked) entry here, same as it did before any real pack shipped. A global regex
-  // rather than one literal target per entry, so a later promotion into this same pack
-  // (e.g. oculist-e2m.6's Cheshire Cat) does not silently re-break this fixture's count the
-  // way this one entry's own absence just did.
-  const halloweenPackFieldCount = (contentJs.match(/,\s*pack:\s*'halloween'/g) || []).length;
+  // oculist-nq1x.5 / oculist-wi8u: the real packs' own entries ('halloween' and 'adventure',
+  // plus any future pack) exist on the real tree and would inflate knownPacks() beyond this
+  // fixture's ten distinct ids, breaking the ten-row assertions. The strip above removes
+  // any `pack: '...'` field off EVERY real entry, in THIS FIXTURE COPY ONLY (extension/content.js
+  // itself is never touched), before the fixture's own packed entries are patched in. A global
+  // regex rather than one literal target per pack, so a new real pack does not re-break the count.
   assert.ok(
-    halloweenPackFieldCount > 0,
-    "fixture setup: expected at least one \", pack: 'halloween'\" entry in extension/content.js — did the Halloween pack ship its first entry under a different id?"
+    realPackFieldCount > 0,
+    "fixture setup: expected at least one \", pack: '...'\" entry in extension/content.js — did the real packs move to a different shape?"
   );
-  contentJs = contentJs.replace(/,\s*pack:\s*'halloween'/g, '');
 
   fs.writeFileSync(contentJsPath, contentJs, 'utf8');
 

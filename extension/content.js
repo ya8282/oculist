@@ -796,10 +796,10 @@
     // feature says "effect pack" or "seasonal effects", and avoids the extension-store
     // vocabulary that would frame this as a separate installable module.
     packsLabel: 'Optional Effect Packs',
-    packsDesc: 'Turn on a pack to add its seasonal effects to the list above',
+    packsDesc: 'Turn on a pack to add its effects to the list above',
     // oculist-tdj.3: one-time discovery prompt for the packsLabel/packsDesc toggle above —
     // same store-review copy constraint (never "plugin"/"add-on").
-    packsNoticeText: 'New seasonal effects are available as an optional effect pack — turn them on in Settings.',
+    packsNoticeText: 'New effects are available as optional effect packs — turn them on in Settings.',
     packsNoticeCta: 'Open Settings',
     packsNoticeDismiss: 'Dismiss',
     panelPosition: 'Panel Position',
@@ -843,7 +843,7 @@
     effectChronoTunnel: 'Chrono Tunnel',
     effectCyberVision: 'Cyber-Vision',
 
-    // Halloween pack (oculist-nq1x)
+    // Halloween and Adventure pack effects (oculist-nq1x, oculist-wi8u)
     effectBoneAssembly: 'Skeleton Trot',
     effectFlappy: 'Flappy',
     effectCheshire: 'Cheshire Cat',
@@ -968,16 +968,16 @@
     chrono: { label: i18n.effectChronoTunnel, run: animateChronoTunnel },
     cybervision: { label: i18n.effectCyberVision, run: animateCyberVision },
     boneassembly: { label: i18n.effectBoneAssembly, run: animateBoneAssembly, pack: 'halloween' },
-    flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'halloween' },
-    cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'halloween' },
+    flappy: { label: i18n.effectFlappy, run: animateFlappy, pack: 'adventure' },
+    cheshire: { label: i18n.effectCheshire, run: animateCheshire, pack: 'adventure' },
     jackolantern: { label: i18n.effectJackOLantern, run: animateJackOLantern, pack: 'halloween' },
     horseman: { label: i18n.effectHorseman, run: animateHorseman, pack: 'halloween' },
     tentaclerise: { label: i18n.effectTentacleRise, run: animateTentacleRise, pack: 'halloween' },
     reanimate: { label: i18n.effectReanimate, run: animateReanimate, pack: 'halloween' },
     batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
-    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'halloween' },
-    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'halloween' },
-    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'halloween' }
+    wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'adventure' },
+    arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'adventure' },
+    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -1032,7 +1032,8 @@
   // Falls back to a title-cased version of the id rather than the raw id string, so a
   // pack that ships without an entry here still reads as a name, not a slug.
   var PACK_LABELS = {
-    halloween: 'Halloween'
+    halloween: 'Halloween',
+    adventure: 'Adventure'
   };
   function packLabel(packId) {
     if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];

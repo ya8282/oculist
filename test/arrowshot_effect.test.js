@@ -1,5 +1,5 @@
 // Arrow Shot beacon effect (oculist-nq1x.11): promotes fxArrowShot (artifacts/prototypes/
-// effects-playground.html) into extension/content.js as the tenth entry in the Halloween pack.
+// effects-playground.html) into extension/content.js as the tenth entry in the Adventure pack.
 // An archer (a bycocket hat with a red feather) dissolves in at a viewport edge, draws and
 // looses an arrow that arcs to the match, and concentric target rings bloom around the impact
 // point as the arrow lands and quivers.
@@ -133,7 +133,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       message: 'never observed the content script isolated execution context',
     });
 
-    await setSettings({ effect: 'arrowshot', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'arrowshot', enabledPacks: ['adventure'], scrollBehavior: 'instant' });
 
     await openFinder(page);
     await page.locator(INPUT).type('glimmerpath', { delay: 30 });
@@ -1078,7 +1078,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
     );
   });
 
-  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
+  test('pack enumeration: absent while adventure is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely while disabled', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -1106,7 +1106,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       );
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('arrowshot'), -1, 'arrowshot must be present in availableEffects() once its pack is enabled');
 
@@ -1129,7 +1129,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
       // Selection restored on re-enable: no explicit re-selection of 'arrowshot' here.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       geom = await replay(() => (document.querySelector('.oc-beacon-transient[data-arrowshot="archer"]') ? { mounted: true } : null));
       assert.strictEqual(geom.mounted, true, 'the stored arrowshot selection must survive the disable/re-enable round trip');
 
@@ -1139,7 +1139,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       // through a sentinel value first so both writes are genuine changes regardless of which
       // line above (if any) threw.
       await setSettings({ enabledPacks: ['__oc_arrowshot_test_reset__'] });
-      await setSettings({ effect: 'arrowshot', enabledPacks: ['halloween'] });
+      await setSettings({ effect: 'arrowshot', enabledPacks: ['adventure'] });
     }
   });
 });

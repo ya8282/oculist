@@ -329,7 +329,7 @@ function seedDefaultBlocklist(done) {
   }, done);
 }
 
-// oculist-nq1x.2: seeds the Halloween pack ON by default, exactly once, for both fresh
+// oculist-nq1x.2 / oculist-wi8u: seeds the default-on packs (Halloween and Adventure) ON, exactly once, for both fresh
 // installs and existing users picking up an update — same shape as seedDefaultBlocklist
 // just above, including the early-return flag that makes this a one-time default rather
 // than a standing override: once a user turns the pack back off, seededHalloweenPack is
@@ -341,7 +341,9 @@ function seedHalloweenPack(done) {
     // or a legacy/corrupt sync blob) — availableEffects()'s own read-side guard
     // (oculist-nq1x.1) is a separate fix and does not cover this mutation.
     if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
-    if (settings.enabledPacks.indexOf('halloween') === -1) settings.enabledPacks.push('halloween');
+    ['halloween', 'adventure'].forEach((pack) => {
+      if (settings.enabledPacks.indexOf(pack) === -1) settings.enabledPacks.push(pack);
+    });
     settings.seededHalloweenPack = true;
   }, done);
 }
