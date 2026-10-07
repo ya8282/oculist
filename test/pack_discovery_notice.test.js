@@ -671,8 +671,8 @@ describe('Pack discovery notice: default install with Halloween seeded on (oculi
     });
     evalInContentScript = evalInContentScriptFactory(() => client, () => isolatedContextId);
 
-    // Real install on the real tree: knownPacks() returns only 'halloween' (boneassembly's
-    // real registry entry). Waits for background.js's seed write AND for content.js's own
+    // Real install on the real tree: knownPacks() returns only 'halloween' and 'adventure'
+    // (both seeded on). Waits for background.js's seed write AND for content.js's own
     // onChanged listener to apply it, so enabledPacks reliably contains 'halloween' before
     // the assertions below run — see helpers/halloween_seed.js for why both halves matter.
     await waitForHalloweenSeedSettled(evalInContentScript);
@@ -694,7 +694,7 @@ describe('Pack discovery notice: default install with Halloween seeded on (oculi
       noticeCount,
       0,
       'the pack-discovery notice must not appear on a default install once every known pack ' +
-      '(halloween) is already enabled by the seed'
+      '(halloween, adventure) is already enabled by the seed'
     );
 
     const dismissed = await evalInContentScript(READ_DISMISSED_FLAG_EXPR);

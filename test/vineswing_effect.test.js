@@ -1,6 +1,6 @@
 // Vine Swing beacon effect (oculist-nq1x.12): promotes fxVineSwing (artifacts/prototypes/
 // effects-playground.html:6426) into extension/content.js as the eleventh entry in the
-// Halloween pack. A figure swings in on a vine anchored off-screen above, releases near the
+// Adventure pack. A figure swings in on a vine anchored off-screen above, releases near the
 // bottom of the arc, and lands beside the match on a short ballistic hop while the riderless
 // vine swings on and fades.
 //
@@ -138,7 +138,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
       message: 'never observed the content script isolated execution context',
     });
 
-    await setSettings({ effect: 'vineswing', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'vineswing', enabledPacks: ['adventure'], scrollBehavior: 'instant' });
 
     await openFinder(page);
     await page.locator(INPUT).type('vinewestward', { delay: 30 });
@@ -989,7 +989,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
     );
   });
 
-  test('pack enumeration: absent from the picker with enabledPacks empty, present when halloween is enabled, stored selection NOT rewritten when the pack is disabled, runtime fallback safe, selection restored on re-enable', async () => {
+  test('pack enumeration: absent from the picker with enabledPacks empty, present when adventure is enabled, stored selection NOT rewritten when the pack is disabled, runtime fallback safe, selection restored on re-enable', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -1017,7 +1017,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
       );
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('vineswing'), -1, 'vineswing must be present in availableEffects() once its pack is enabled');
 
@@ -1040,7 +1040,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
       // Selection restored on re-enable: no explicit re-selection of 'vineswing' here.
-      await setSettings({ enabledPacks: ['halloween'] });
+      await setSettings({ enabledPacks: ['adventure'] });
       geom = await replay(() => (document.querySelector('.oc-beacon-transient[data-vineswing="vine"]') ? { mounted: true } : null));
       assert.strictEqual(geom.mounted, true, 'the stored vineswing selection must survive the disable/re-enable round trip');
 
@@ -1050,7 +1050,7 @@ describe('Vine Swing: a figure swings in on a vine, releases at the bottom of th
       // through a sentinel value first so both writes are genuine changes regardless of which
       // line above (if any) threw.
       await setSettings({ enabledPacks: ['__oc_vineswing_test_reset__'] });
-      await setSettings({ effect: 'vineswing', enabledPacks: ['halloween'] });
+      await setSettings({ effect: 'vineswing', enabledPacks: ['adventure'] });
     }
   });
 });
