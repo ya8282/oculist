@@ -78,25 +78,24 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
     // second onInstalled write right after the blocklist one (oculist-qd7e), so wait for
     // BOTH flags: its read-modify-write can otherwise land after this file's first seed and
     // replace it with a snapshot that has no legacy field, so no migration ever runs.
-    // oculist-ajzz: on a machine with under 4 cores onInstalled makes a third write
-    // (performanceMode = true, no flag), after both seeds. performanceMode defaults to
-    // false, so true only appears once that write has landed; wait for it too.
+    // The launch helper also waits out the under-4-core performanceMode write and clears
+    // auto-Lite (oculist-7dcg), so only the two flags are checked here.
     await waitForCondition(
       () =>
         sw.evaluate(
           () =>
             new Promise((resolve) =>
               chrome.storage.sync.get('oc-settings', (d) =>
-                resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency })
+                resolve({ s: d && d['oc-settings'] })
               )
             )
         ),
-      ({ s, cores }) =>
-        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      ({ s }) =>
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack),
       {
         timeout: POLL_TIMEOUT,
         interval: 100,
-        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, the launch helper handles performanceMode) never all landed',
       }
     );
   });
