@@ -59,8 +59,8 @@ describe('Default site blocklist', () => {
       viewport: { width: 1280, height: 800 },
     });
     // An empty user-data dir means this counts as a fresh install, so onInstalled fires
-    // and seeds the blocklist, then the Halloween pack, then (under 4 cores) performanceMode.
-    // Wait for all of them to land before asserting anything (oculist-ah9v).
+    // and seeds the blocklist, then the Halloween pack. The launch helper waits out the seeds
+    // and clears auto-Lite (oculist-7dcg); wait for both flags here before asserting (oculist-ah9v).
     const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: LONG_TIMEOUT }));
     await waitForCondition(
       () =>
@@ -68,16 +68,16 @@ describe('Default site blocklist', () => {
           () =>
             new Promise((resolve) =>
               chrome.storage.sync.get('oc-settings', (d) =>
-                resolve({ s: d && d['oc-settings'], cores: navigator.hardwareConcurrency })
+                resolve({ s: d && d['oc-settings'] })
               )
             )
         ),
-      ({ s, cores }) =>
-        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      ({ s }) =>
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack),
       {
         timeout: POLL_TIMEOUT,
         interval: 100,
-        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, performanceMode on <4 cores) never all landed',
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, the launch helper handles performanceMode) never all landed',
       }
     );
   });
