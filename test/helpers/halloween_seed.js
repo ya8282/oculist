@@ -80,4 +80,36 @@ async function waitForOnInstalledSeeds(ctx, opts = {}) {
   );
 }
 
-module.exports = { waitForHalloweenSeedSettled, waitForOnInstalledSeeds };
+// oculist-7dcg: on a <4-core machine onInstalled auto-enables Lite Mode, so every test would
+// start in Lite and a test's own setSettings({performanceMode:true}) would be a no-op write
+// with no onChanged echo. Called right after waitForOnInstalledSeeds (which, on <4 cores,
+// already waited for performanceMode === true to land), this resets it to the full-motion
+// default. Writes nothing when performanceMode is already falsy (>= 4 cores), so those
+// machines see no extra storage write.
+async function clearAutoLiteMode(ctx, opts = {}) {
+  const { timeout = POLL_TIMEOUT } = opts;
+  const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout }));
+  await sw.evaluate(
+    () =>
+      new Promise((resolve) =>
+        chrome.storage.sync.get('oc-settings', (d) => {
+          const s = d && d['oc-settings'];
+          if (!s || !s.performanceMode) return resolve();
+          chrome.storage.sync.set({ 'oc-settings': Object.assign({}, s, { performanceMode: false }) }, resolve);
+        })
+      )
+  );
+  await waitForCondition(
+    () =>
+      sw.evaluate(
+        () =>
+          new Promise((resolve) =>
+            chrome.storage.sync.get('oc-settings', (d) => resolve(!!(d && d['oc-settings'] && d['oc-settings'].performanceMode)))
+          )
+      ),
+    (lite) => lite === false,
+    { timeout, interval: 20, message: 'oc-settings.performanceMode never read back false after the launch helper cleared it' }
+  );
+}
+
+module.exports = { waitForHalloweenSeedSettled, waitForOnInstalledSeeds, clearAutoLiteMode };

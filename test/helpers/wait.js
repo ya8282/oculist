@@ -39,7 +39,9 @@ chromium.launchPersistentContext = async (...args) => {
   const launchArgs = (args[1] && args[1].args) || [];
   if (launchArgs.some((a) => /^--(load-extension|disable-extensions-except)/.test(a))) {
     try {
-      await require('./halloween_seed').waitForOnInstalledSeeds(ctx);
+      const seed = require('./halloween_seed');
+      await seed.waitForOnInstalledSeeds(ctx);
+      await seed.clearAutoLiteMode(ctx);
     } catch (err) {
       await ctx.close().catch(() => {});
       throw err;
