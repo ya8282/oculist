@@ -1,9 +1,9 @@
 # Privacy Policy — Oculist
 
-**Last updated:** 2026-08-31
+**Last updated:** 2026-10-07
 
-<!-- KEEP IN SYNC WITH docs/privacy.html, the hosted copy the Chrome Web Store's
-     Privacy tab points at. If you change one, change the other. -->
+<!-- KEEP IN SYNC WITH docs/privacy.html, the site copy. The Chrome Web Store's
+     Privacy tab uses the raw PRIVACY.md URL. If you change one, change the other. -->
 
 Oculist contacts no server, sends nothing to its developer or to any third
 party, and has no analytics of any kind. Your settings stay in your own
@@ -34,7 +34,7 @@ Oculist stores three kinds of data, and nothing else:
   highlight effect, beacon colors, Lite Mode, the display preset you've
   chosen and its individual rendering values (palette, beacon size,
   animation speed, motion sensitivity, border style, text labels, magnifier,
-  and any custom colors), and the hostnames you have switched Oculist off
+  and any custom colors), which effect packs are on, one-time flags recording that a default was already applied, the setup wizard was finished, or a notice was dismissed, and the hostnames you have switched Oculist off
   on.
 - **Saved search-term lists**, in `chrome.storage.sync`, one key per list
   (`oc-list-<id>`) holding that list's name and terms. A saved list is
