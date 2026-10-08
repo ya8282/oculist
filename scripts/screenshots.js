@@ -129,6 +129,45 @@ async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
   await page.locator(GEAR).click();
   await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
   await page.waitForTimeout(600); // panel open animation
+  // The chip row adds ~34px that the panel's max-height cap does not count, so the pack
+  // toggles fall past the 800px frame. This shot is about the panel: hide the row.
+  await page.evaluate(() => {
+    const row = document.querySelector('#oc-wrap').shadowRoot.querySelector('.oc-chip-row');
+    if (row) row.style.display = 'none';
+  });
+  // Chrono Tunnel (picked for 03) sits far up the list, out of frame; select Spotlight, a
+  // core effect in frame beside the pack subheading, so a checked radio is visible.
+  await page.locator('#oc-wrap >> .oc-radio-list >> text=Spotlight').first().click();
+  await page.waitForTimeout(300);
+  // v1.8.0: show the effect-pack UI. Scroll the effect list so the last few core effects
+  // (Spotlight, the selected one, among them) sit above the "Halloween" subheading
+  // with the first Halloween rows below it, snapped so only whole rows touch the list's
+  // top and bottom edges. Then scroll the panel to its end so the pack toggles are in frame.
+  await page.evaluate(() => {
+    const root = document.querySelector('#oc-wrap').shadowRoot;
+    const panel = root.querySelector('#oc-settings-panel');
+    const list = root.querySelector('.oc-radio-list');
+    // 'instant': the Scroll Behavior setting defaults to smooth, which would leave the
+    // scrolls mid-flight at screenshot time.
+    const rel = (el) => el.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    const heads = [...list.querySelectorAll('.oc-radio-group-heading')].sort((x, y) => rel(x) - rel(y));
+    const rows = [...list.querySelectorAll('.oc-radio-item')];
+    if (heads.length) {
+      const h = rel(heads[0]);
+      const above = rows.filter((r) => rel(r) < h);
+      // Top edge: the 4th core row above the heading (a row boundary, no cut text).
+      const first = above[Math.max(0, above.length - 4)];
+      const top = rel(first) - 2;
+      list.scrollTo({ top, behavior: 'instant' });
+      // Bottom edge: shrink the viewport to end exactly after the last whole row.
+      const fit = rows.filter((r) => rel(r) - top + r.offsetHeight <= list.clientHeight);
+      const last = fit[fit.length - 1];
+      list.style.maxHeight = (rel(last) - top + last.offsetHeight + 2) + 'px';
+      list.scrollTo({ top, behavior: 'instant' });
+    }
+    panel.scrollTo({ top: panel.scrollHeight, behavior: 'instant' });
+  });
+  await page.waitForTimeout(300);
   await page.screenshot({ path: `${OUT}/04-settings.png` });
   await page.locator(GEAR).click(); // close settings before the popup section below
   await page.waitForTimeout(200);
