@@ -61,7 +61,7 @@ Run the suite first; a green suite is the cheapest check that the packaged code 
 code you tested.
 
 ```bash
-npm test    # expect: pass 308, fail 0
+npm test    # expect: fail 0
 ```
 
 Run only one `npm test` at a time. The suite is not robust to concurrent invocations
@@ -117,8 +117,8 @@ done
   is the release that corrects it):
 
   > On top of the twelve core effects, effects now also come in packs. Switch any pack on or
-  > off from the settings panel. The Halloween pack ships with Oculist, preloaded, free,
-  > and on by default — nothing to buy or set up to see it.
+  > off from the settings panel. Two packs, Halloween and Adventure, ship with
+  > Oculist, preloaded, free, and on by default. Nothing to buy or set up to see them.
 
   Do not name or describe individual pack effects in the listing; users discover them by
   using the pack, and the description should stay accurate as packs change independently of

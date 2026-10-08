@@ -13,9 +13,36 @@ below the 1.5.0 heading is what landed across that span.
   ship with Oculist directly, switched on and off individually from a new pack toggle list in
   the settings panel. Turning a pack on folds its effects straight into the effect picker, no
   reload needed. A one-time dismissible notice under the find bar points you to the settings
-  panel when a pack is available that you have not switched on. **Halloween is the first pack**, and it ships turned on by default and
-  free for both new installs and everyone already running Oculist — nothing to buy or opt into
-  to see it, though it switches off the same way as any other pack.
+  panel when a pack is available that you have not switched on. **Halloween and Adventure are
+  the two packs**, and both ship turned on by default and free for both new installs and
+  everyone already running Oculist. Nothing to buy or opt into to see them, and each switches
+  off the same way as any other pack. The effect list in settings groups effects by pack under
+  subheadings.
+
+### Fixed
+
+* **Scrolling to matches.** Matches inside inner scroll containers, shadow DOM, and slotted
+  content now scroll into view and land centered, including matches clipped by their scroller
+  or in text taller than the viewport. Navigation retries when a page's own script cancels the
+  smooth scroll.
+* **Beacon timing.** The beacon draws once every scroller has settled instead of mid-scroll, and
+  draws promptly when scroll anchoring is the only movement. The beacon no longer fades away
+  moments after a long smooth scroll to a distant match.
+* **Beacon and keys.** Arrow keys and other keys that cannot scroll anything no longer cancel
+  the beacon, and the beacon fades and its markers refresh when you scroll an inner container.
+* **Zoom and resize.** The beacon and viewport markers land on the match on pages with CSS
+  zoom, and transient beacons clear as soon as you start resizing the window instead of
+  drifting off the match during the drag.
+* **Highlight follows you.** The highlight and beacon stay on the match you navigated to
+  through rescans and page re-renders, and a draft term keeps its highlight. Text edited in
+  place on the page now triggers a rescan.
+* **Search-term lists.** Restoring a working list late no longer drops chips you added, and
+  keeps your place in the matches and the highlight on a term you are still typing.
+* **Settings.** A settings change saved at the same moment as another is no longer lost, and
+  settings changes made during startup are no longer missed.
+* **Effects clean up.** Effects, including Cyber-Vision, now stop all their animations when
+  they finish, so nothing keeps running after a run.
+* **Settings panel.** Hovered radio and checkbox rows no longer grow past their scrolling list.
 
 ## [1.7.0] — 2026-09-01
 
