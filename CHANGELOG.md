@@ -5,7 +5,7 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [1.8.0] — Unreleased
+## [1.8.0] — 2026-10-09
 
 ### Added
 
