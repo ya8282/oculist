@@ -41,6 +41,10 @@
     // would be dropped from storage on the next whole-object write, and the Halloween
     // pack would re-seed itself back on for a user who deliberately turned it off.
     seededHalloweenPack: false,
+    // oculist-l0bs.2: pack II's own seeded flag, written by background.js, never read here.
+    // Same round-trip reasoning: missing from SETTINGS_KEYS it would be dropped on the next
+    // whole-object write and pack II would re-seed on every update.
+    seededHollowPack: false,
     // oculist-tdj: which optional effect packs are turned on, an array of pack ids. Empty
     // means core-only — today's twelve effects, unchanged for every existing user. Read
     // exclusively through availableEffects() (defined by the effectsRegistry below);
@@ -59,7 +63,7 @@
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist', 'seededHalloweenPack', 'enabledPacks', 'packsNoticeDismissed'
+    'seededDefaultBlocklist', 'seededHalloweenPack', 'seededHollowPack', 'enabledPacks', 'packsNoticeDismissed'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -1033,7 +1037,8 @@
   // pack that ships without an entry here still reads as a name, not a slug.
   var PACK_LABELS = {
     halloween: 'Halloween',
-    adventure: 'Adventure'
+    adventure: 'Adventure',
+    hollow: 'Haunted Hollow'
   };
   function packLabel(packId) {
     if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
