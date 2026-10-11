@@ -865,6 +865,7 @@
     effectGhostSweep: 'Ghost Sweep',
     effectSpiderDrop: 'Spider Drop',
     effectBlackCatPounce: 'Black Cat Pounce',
+    effectGraveHands: 'Grave Hands',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -991,7 +992,8 @@
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
     spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
     witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
-    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' }
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' },
+    gravehands: { label: i18n.effectGraveHands, run: animateGraveHands, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -4861,6 +4863,288 @@
     // dome not visible), anims is empty and this resolves immediately.
     function removeRiseWrap() { riseWrap.remove(); }
     Promise.allSettled(anims.map(function (a) { return a.finished; })).then(removeRiseWrap);
+  }
+
+  // oculist-l0bs.7: Grave Hands, Haunted Hollow pack (pack II). A strip of soil appears
+  // BELOW the match; a zombie hand bursts through it (three clods fly off), the forearm and
+  // ragged sleeve rise and lean toward the match, a smaller mirrored second hand pops up a
+  // beat later, both curl into a clutching claw, hold, then sink back and the mound fades.
+  // There is no prototype: this is built directly from the approved character sheet's three
+  // canonical poses (burst, reach, grab), redrawn as flat inline SVG (skin, highlight and
+  // shadow tones only). Every hand has exactly five digits (data-gh-finger).
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the whole box (mound, both hands and
+  // the clods) sits below the match rect plus CLEAR (6px) and the SVG clips its contents, so
+  // no paint can enter the glyph box in any frame. The page's text is never recoloured,
+  // hidden or covered. The sheet's "reaching toward the match" is expressed as a lean only.
+  //
+  // PLACEMENT: below the match only. The fit check is made against the PRE-SCROLL viewport
+  // rect (room below on screen); only the final left/top are converted to document space
+  // (rule 2). If there is no room below, or the box is wider than the viewport, suppress.
+  //
+  // Fixed identity palette from the sheet brief; no neighbouring effect uses the effective
+  // beacon colour as an accent on its figure, so getEffectiveColors() is never read.
+  //
+  // LITE MODE drops: the flying clods and the second (mirrored) hand. It keeps the mound,
+  // the first hand's burst -> reach -> grab and the sink.
+  function animateGraveHands(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var SKIN = '#8FA878', SKIN_HI = '#B7CDA0', SKIN_SH = '#5C7552', OUTLINE = '#1B2616', NAIL = '#D8CFA8';
+    var SLEEVE = '#4A3F58', SLEEVE_SH = '#2B2436';
+    var SOIL = '#4B3322', SOIL_HI = '#6E4C32', SOIL_SH = '#2B1D12', PEBBLE = '#8C8070';
+
+    var VB_W = 136, VB_H = 100, GROUND_Y = 86;
+    var H1_X = 36, H2_X = 100, H2_SCALE = 0.78;
+    var CLEAR = 6, GAP = 2, EDGE = 4;
+    var SINK = 90;
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var beaconScale = getBeaconScale();
+    var f = getBeaconDuration(1);
+
+    // Roughly 80px tall at Beacon Size M for a normal body-text match.
+    var figH = Math.max(64, Math.min(90, rect.height * 3.4)) * beaconScale;
+    var u = figH / VB_H;
+    var figW = VB_W * u;
+
+    // ---- Placement (viewport space, pre-scroll): below the match only ----
+    var boxTop = rect.bottom + CLEAR + GAP;
+    if (boxTop + figH > vh - EDGE) return;          // no room below: suppress
+    if (figW > vw - 2 * EDGE) return;               // wider than the viewport: suppress
+    var boxLeft = rect.left + rect.width / 2 - figW / 2;
+    boxLeft = Math.max(EDGE, Math.min(vw - EDGE - figW, boxLeft));
+    var docLeft = boxLeft + window.scrollX, docTop = boxTop + window.scrollY;
+
+    // ---- Timeline (base ms, scaled through getBeaconDuration) ----
+    var T = { dur: 3500, mound: 250, h1: 150, h2: 700, riseDur: 450, swap: 550, swapDur: 400, grab1: 1700, grab2: 2000, sink: 2900, sinkDur: 500, clodStart: 150, clodEnd: 850 };
+    var DUR = T.dur;
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function skin(d, parent, fill) {
+      return addShape('path', { d: d, fill: fill || SKIN, stroke: OUTLINE, 'stroke-width': '1.4', 'stroke-linejoin': 'round' }, parent);
+    }
+    function flat(d, fill, parent) {
+      return addShape('path', { d: d, fill: fill }, parent);
+    }
+    function pt(p) { return p[0].toFixed(2) + ' ' + p[1].toFixed(2); }
+
+    // One finger or thumb: a tapered, rounded-tip strip along a bent centreline, with a nail.
+    // segs are [angleDegrees (0 = up, clockwise positive), length] pairs.
+    function digit(parent, bx, by, segs, w0, w1) {
+      var pts = [[bx, by]], dirs = [], x = bx, y = by;
+      segs.forEach(function (s) {
+        var a = s[0] * Math.PI / 180, dx = Math.sin(a), dy = -Math.cos(a);
+        x += dx * s[1]; y += dy * s[1];
+        pts.push([x, y]); dirs.push([dx, dy]);
+      });
+      var n = pts.length, L = [], R = [], tipD = dirs[n - 2], tipW = w1 / 2;
+      for (var i = 0; i < n; i++) {
+        var d;
+        if (i === 0) d = dirs[0];
+        else if (i === n - 1) d = dirs[n - 2];
+        else {
+          var mx = dirs[i - 1][0] + dirs[i][0], my = dirs[i - 1][1] + dirs[i][1], ml = Math.sqrt(mx * mx + my * my) || 1;
+          d = [mx / ml, my / ml];
+        }
+        var w = (w0 + (w1 - w0) * i / (n - 1)) / 2;
+        L.push([pts[i][0] - d[1] * w, pts[i][1] + d[0] * w]);
+        R.push([pts[i][0] + d[1] * w, pts[i][1] - d[0] * w]);
+      }
+      var tip = [pts[n - 1][0] + tipD[0] * tipW * 0.9, pts[n - 1][1] + tipD[1] * tipW * 0.9];
+      var g = addShape('g', { 'data-gh-finger': '1' }, parent);
+      skin('M ' + L.map(pt).join(' L ') + ' L ' + pt(tip) + ' L ' + R.slice().reverse().map(pt).join(' L ') + ' Z', g);
+      // Nail: a small flat wedge over the last stretch of the final segment.
+      var last = segs[segs.length - 1][1], p2 = pts[n - 1];
+      var q = [p2[0] - tipD[0] * last * 0.4, p2[1] - tipD[1] * last * 0.4];
+      var nw = tipW * 0.7;
+      flat('M ' + pt([q[0] - tipD[1] * nw, q[1] + tipD[0] * nw]) +
+        ' L ' + pt([p2[0] + tipD[0] * tipW * 0.5 - tipD[1] * nw * 0.6, p2[1] + tipD[1] * tipW * 0.5 + tipD[0] * nw * 0.6]) +
+        ' L ' + pt([p2[0] + tipD[0] * tipW * 0.5 + tipD[1] * nw * 0.6, p2[1] + tipD[1] * tipW * 0.5 - tipD[0] * nw * 0.6]) +
+        ' L ' + pt([q[0] + tipD[1] * nw, q[1] - tipD[0] * nw]) + ' Z', NAIL, g);
+    }
+
+    // The raised arm shared by the reach and grab poses: forearm leaning toward +x, ragged
+    // sleeve with two torn points, palm. Drawn in local coords (ground line y = 0).
+    function arm(parent) {
+      skin('M -9 8 L 9 8 L 19 -34 L 7 -34 Z', parent);
+      flat('M 5 8 L 9 8 L 19 -34 L 15 -34 Z', SKIN_SH, parent);
+      flat('M -6 -2 L -4 -2 L 7 -32 L 9 -32 Z', SKIN_HI, parent);
+      skin('M -11 10 L 11 10 L 15 -8 L 13.5 -19 L 9 -12 L 5 -9 L 1 -21 L -2 -12 L -5 -4 Z', parent, SLEEVE).setAttribute('data-gh-part', 'sleeve');
+      flat('M -11 10 L 11 10 L 12 4 L -11 4 Z', SLEEVE_SH, parent);
+    }
+    function palm(parent, cx, cy, rx, ry) {
+      skin('M ' + (cx - rx) + ' ' + cy + ' A ' + rx + ' ' + ry + ' 0 1 1 ' + (cx + rx) + ' ' + cy + ' A ' + rx + ' ' + ry + ' 0 1 1 ' + (cx - rx) + ' ' + cy + ' Z', parent);
+      addShape('ellipse', { cx: cx + rx * 0.25, cy: cy + ry * 0.45, rx: rx * 0.6, ry: ry * 0.32, fill: SKIN_SH }, parent);
+      addShape('ellipse', { cx: cx - rx * 0.3, cy: cy - ry * 0.35, rx: rx * 0.4, ry: ry * 0.28, fill: SKIN_HI }, parent);
+    }
+
+    // Burst: wrist and splayed hand just through the soil.
+    function drawBurst(parent) {
+      digit(parent, -9, -20, [[-72, 12]], 5, 3.6);
+      digit(parent, -7, -28, [[-30, 16]], 5.6, 4);
+      digit(parent, 0, -30, [[0, 19]], 5.8, 4);
+      digit(parent, 6, -28, [[28, 16]], 5.4, 3.8);
+      digit(parent, 10, -23, [[56, 12]], 4.8, 3.4);
+      skin('M -7 10 L -6 -14 L 6 -14 L 7 10 Z', parent);
+      flat('M 3 10 L 3 -14 L 6 -14 L 7 10 Z', SKIN_SH, parent);
+      palm(parent, 0, -22, 11, 9);
+    }
+    // Reach: forearm fully up and leaning toward the match, five fingers spread wide.
+    function drawReach(parent) {
+      digit(parent, 3, -44, [[-58, 17]], 5.6, 4);
+      digit(parent, 7, -51, [[-22, 24]], 5.8, 4);
+      digit(parent, 14, -54, [[4, 26]], 6, 4.2);
+      digit(parent, 21, -52, [[26, 23]], 5.6, 4);
+      digit(parent, 25, -46, [[52, 17]], 5, 3.6);
+      arm(parent);
+      palm(parent, 14, -45, 12, 10);
+    }
+    // Grab: same arm, fingers curled into a clutching claw hooked toward the match.
+    function drawGrab(parent) {
+      digit(parent, 3, -44, [[-40, 10], [20, 8], [80, 6]], 5.6, 4);
+      digit(parent, 7, -51, [[-5, 12], [60, 9], [125, 7]], 5.8, 4);
+      digit(parent, 14, -54, [[5, 13], [70, 9], [130, 7]], 6, 4.2);
+      digit(parent, 21, -52, [[15, 12], [78, 8], [135, 6]], 5.6, 4);
+      digit(parent, 25, -46, [[28, 10], [85, 7], [135, 5]], 5, 3.6);
+      arm(parent);
+      palm(parent, 14, -45, 12, 10);
+    }
+
+    // ---- DOM ----
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient oc-gravehands';
+    wrap.setAttribute('data-gravehands', 'hands');
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + figW + 'px', 'height:' + figH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642'
+    ].join(';');
+    mountOverlay(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(figW));
+    svg.setAttribute('height', String(figH));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    wrap.appendChild(svg);
+
+    // Static outer group carries position/mirroring; the inner 'rise' group is the animated
+    // one, so a WAAPI transform never fights an attribute transform.
+    function buildHand(index, x, scaleX) {
+      var outer = addShape('g', { 'data-gh-hand': String(index), transform: 'translate(' + x + ' ' + GROUND_Y + ') scale(' + scaleX + ' ' + Math.abs(scaleX) + ')' }, svg);
+      if (scaleX < 0) outer.setAttribute('data-gh-mirrored', '1');
+      var rise = addShape('g', { 'data-gh-part': 'rise' }, outer);
+      var burst = addShape('g', { 'data-gh-pose': 'burst', opacity: '0' }, rise);
+      var reach = addShape('g', { 'data-gh-pose': 'reach', opacity: '0' }, rise);
+      var grab = addShape('g', { 'data-gh-pose': 'grab', opacity: '0' }, rise);
+      drawBurst(burst); drawReach(reach); drawGrab(grab);
+      return { rise: rise, burst: burst, reach: reach, grab: grab };
+    }
+    // The second hand is drawn first so the larger first hand overlaps it.
+    var hand2 = lite ? null : buildHand(2, H2_X, -H2_SCALE);
+    var hand1 = buildHand(1, H1_X, 1);
+
+    // Clods: three loose lumps that fly off as the first hand bursts through (full mode).
+    var clods = [];
+    if (!lite) {
+      var cg = addShape('g', { 'data-gh-part': 'clods' }, svg);
+      [[-26, -48, 3.4], [6, -62, 2.8], [24, -50, 3.8]].forEach(function (c, i) {
+        var o = addShape('g', { transform: 'translate(' + H1_X + ' ' + (GROUND_Y - 4) + ')' }, cg);
+        var clod = addShape('g', { 'data-gh-clod': String(i), opacity: '0' }, o);
+        var r = c[2];
+        skin('M ' + (-r) + ' 0 L ' + (-r * 0.5) + ' ' + (-r) + ' L ' + (r * 0.6) + ' ' + (-r * 0.9) + ' L ' + r + ' ' + (r * 0.2) + ' L ' + (r * 0.1) + ' ' + r + ' Z', clod, SOIL).setAttribute('stroke', SOIL_SH);
+        flat('M ' + (-r * 0.5) + ' ' + (-r * 0.6) + ' L ' + (r * 0.4) + ' ' + (-r * 0.6) + ' L ' + (r * 0.2) + ' 0 L ' + (-r * 0.4) + ' ' + (-r * 0.1) + ' Z', SOIL_HI, clod);
+        clods.push({ el: clod, dx: c[0], dy: c[1] });
+      });
+    }
+
+    // Soil strip with a flat top edge, drawn over the hands' bases so they rise out of it.
+    var mound = addShape('g', { 'data-gh-part': 'mound' }, svg);
+    flat('M 0 ' + GROUND_Y + ' L ' + VB_W + ' ' + GROUND_Y + ' L ' + VB_W + ' ' + VB_H + ' L 0 ' + VB_H + ' Z', SOIL, mound);
+    flat('M 0 ' + GROUND_Y + ' L ' + VB_W + ' ' + GROUND_Y + ' L ' + VB_W + ' ' + (GROUND_Y + 3) + ' L 0 ' + (GROUND_Y + 3) + ' Z', SOIL_HI, mound);
+    flat('M 0 94 L ' + VB_W + ' 94 L ' + VB_W + ' ' + VB_H + ' L 0 ' + VB_H + ' Z', SOIL_SH, mound);
+    [[H1_X, 17, 5], [68, 10, 3.5], [H2_X, 15, 4.5]].forEach(function (l) {
+      addShape('ellipse', { cx: l[0], cy: GROUND_Y + 1, rx: l[1], ry: l[2], fill: SOIL, stroke: SOIL_SH, 'stroke-width': '1' }, mound);
+      addShape('ellipse', { cx: l[0] - l[1] * 0.25, cy: GROUND_Y - l[2] * 0.2, rx: l[1] * 0.45, ry: l[2] * 0.4, fill: SOIL_HI }, mound);
+    });
+    [[14, 92, 2.2], [76, 93, 1.8], [124, 91, 2.4]].forEach(function (p) {
+      addShape('ellipse', { cx: p[0], cy: p[1], rx: p[2], ry: p[2] * 0.7, fill: PEBBLE }, mound);
+    });
+
+    // ---- Animations ----
+    var anims = [];
+    function track(a) {
+      anims.push(a);
+      a.finished.then(function () { wrap.remove(); }).catch(function () { wrap.remove(); });
+      return a;
+    }
+    function run(node, kf) { return track(node.animate(kf, { duration: DUR * f, fill: 'both' })); }
+    function visible(node, a, b) {
+      // Hard-cut visibility window [a,b] on the base timeline: duplicate offsets, no cross-fade.
+      var kf = [];
+      if (a <= 0) kf.push({ opacity: 1, offset: 0 });
+      else kf.push({ opacity: 0, offset: 0 }, { opacity: 0, offset: a / DUR }, { opacity: 1, offset: a / DUR });
+      if (b >= DUR) kf.push({ opacity: 1, offset: 1 });
+      else kf.push({ opacity: 1, offset: b / DUR }, { opacity: 0, offset: b / DUR }, { opacity: 0, offset: 1 });
+      return run(node, kf);
+    }
+    function ty(y) { return 'translate(0px,' + y + 'px)'; }
+
+    function animateHand(h, s, grabAt) {
+      var swap = s + T.swap;
+      visible(h.burst, s, swap);
+      visible(h.reach, swap, grabAt);
+      visible(h.grab, grabAt, DUR);
+      run(h.rise, [
+        { transform: ty(SINK), offset: 0 },
+        { transform: ty(SINK), offset: s / DUR, easing: 'ease-out' },
+        { transform: ty(0), offset: (s + T.riseDur) / DUR },
+        { transform: ty(0), offset: swap / DUR },
+        { transform: ty(30), offset: swap / DUR, easing: 'ease-out' },
+        { transform: ty(0), offset: (swap + T.swapDur) / DUR },
+        { transform: ty(0), offset: T.sink / DUR, easing: 'ease-in' },
+        { transform: ty(SINK), offset: (T.sink + T.sinkDur) / DUR },
+        { transform: ty(SINK), offset: 1 }
+      ]);
+    }
+    animateHand(hand1, T.h1, T.grab1);
+    if (hand2) animateHand(hand2, T.h2, T.grab2);
+
+    run(mound, [
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: T.mound / DUR },
+      { opacity: 1, offset: (T.sink + T.sinkDur - 200) / DUR },
+      { opacity: 0, offset: 1 }
+    ]);
+
+    clods.forEach(function (c, i) {
+      var apexAt = T.clodStart + (T.clodEnd - T.clodStart) * 0.42;
+      var T0 = 'translate(0px,0px)';
+      var apex = 'translate(' + (c.dx * 0.7) + 'px,' + c.dy + 'px)';
+      var end = 'translate(' + c.dx + 'px,' + (6 + i * 2) + 'px)';
+      run(c.el, [
+        { transform: T0, opacity: 0, offset: 0 },
+        { transform: T0, opacity: 0, offset: T.clodStart / DUR },
+        { transform: T0, opacity: 1, offset: T.clodStart / DUR, easing: 'ease-out' },
+        { transform: apex, opacity: 1, offset: apexAt / DUR, easing: 'ease-in' },
+        { transform: end, opacity: 1, offset: (T.clodEnd - 120) / DUR },
+        { transform: end, opacity: 0, offset: T.clodEnd / DUR },
+        { transform: end, opacity: 0, offset: 1 }
+      ]);
+    });
+
+    wrap.__waapiAnims = anims;
   }
 
   // oculist-nq1x.8: promotes fxReanimate (artifacts/prototypes/effects-playground.html,
