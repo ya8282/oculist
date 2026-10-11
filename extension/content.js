@@ -859,6 +859,7 @@
     effectWandCast: 'Fairy Cast',
     effectArrowShot: 'Arrow Shot',
     effectVineSwing: 'Vine Swing',
+    effectWitchFlyby: 'Witch Flyby',
 
     // Haunted Hollow pack effects (oculist-l0bs)
     effectGhostSweep: 'Ghost Sweep',
@@ -987,7 +988,8 @@
     arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'adventure' },
     vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' },
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
-    spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' }
+    spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
+    witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -7791,6 +7793,359 @@
     Promise.all([vineDone, fallDone]).then(function () {
       window.removeEventListener('resize', hardCutVineSwing);
     });
+  }
+
+  // oculist-l0bs.5: Witch Flyby (Haunted Hollow pack). A witch on a broomstick crosses the
+  // screen along a lane ABOVE the match (level cruise), climbs into one loop-the-loop whose
+  // circle sits wholly above the lane, dives past the match's far side swinging her wand,
+  // and exits. A spark-trail ribbon (draw-on, same linear timing and the same polyline as the
+  // witch, so its head is always under her broom) follows her; the wand swing then draws the
+  // trail's closing stroke as an UNDERLINE beneath the match, which holds and fades after she
+  // has left. There is no prototype: the beat spec in oculist-l0bs.5 stands in for it, and the
+  // art is rebuilt as flat inline SVG from the approved witch-flyby sheet's locked palette.
+  //
+  // Protected rect (rule 10, no exceptions): every point of the witch's path stays at least
+  // (half sprite box + 10px) from the match's glyph box on the lane axis, and the sprite SVG
+  // clips its own paint to its box, so the sprite box itself never enters glyph box + 6px. The
+  // ribbon rides the same path (centre of the sprite box) so it cannot touch the box either.
+  // The underline sits >= 8px below the glyph box. The page's own text is never touched.
+  //
+  // Placement (viewport-fit decided from the PRE-SCROLL viewport rect, rule 2): 'above' lane
+  // with the loop when there is height for the loop; 'above' straight pass when there is not;
+  // 'below' straight pass when there is no room above; suppressed when neither fits.
+  // Direction (rule 9): start-point cascade (cursor, else find bar, else viewport centre)
+  // only picks which side the witch enters from; the mirrored branch flips the whole path and
+  // the sprite (scaleX(-1) on the inner SVG, never on the offset-path element).
+  //
+  // Fixed identity palette from the sheet brief; the effective beacon colour is only the small
+  // accessibility accent in the underline's inner line. All durations go through
+  // getBeaconDuration, all sizes through getBeaconScale. No Math.random: the spark positions
+  // are a fixed table.
+  //
+  // Lite Mode drops the five-point star sparks and the broom-bristle flutter; it keeps the
+  // silhouette, the pass, the loop, the wand swing and the underline.
+  function animateWitchFlyby(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var mcx = rect.left + rect.width / 2; // viewport space (rule 2)
+    var SX = window.scrollX, SY = window.scrollY;
+    var scale = getBeaconScale();
+    var lite = !!settings.performanceMode;
+    var beacon = getEffectiveColors().beacon || '#fbbf24';
+
+    var OUTLINE = '#0F0A1C', ROBE = '#3B2A5C', ROBE_HI = '#6A4FA0', ROBE_SH = '#221838';
+    var SKIN = '#8FBF7A', SKIN_SH = '#5E8F52', BAND = '#E8A53A';
+    var WOOD = '#8A5A2E', WOOD_SH = '#5A3A1C', BRISTLE = '#D9B25C';
+    var SPARK_CORE = '#FFF1A6', SPARK = '#FFD45A', SPARK_OUT = '#E8A53A';
+
+    var VB_W = 120, VB_H = 84;
+    var figH = Math.max(64, Math.min(92, 3.0 * rect.height)) * scale;
+    var figW = figH * VB_W / VB_H;
+    var hw = figW / 2, hh = figH / 2;
+
+    var CLEAR = 6;        // glyph-box clearance the contract asks for
+    var LANE_GAP = 10;    // sprite edge to the glyph box on the lane axis (>= CLEAR + 4)
+    var ow = 5 * scale;   // underline outer stroke width
+    var yU = rect.bottom + CLEAR + 2 + ow / 2; // underline centre line, edge >= 8px below
+    var underlineFits = yU + ow / 2 + 2 <= vh - 4;
+
+    // Cascade (animateTrail's): picks the entry SIDE only.
+    var startX;
+    if (lastMouseX !== null && lastMouseY !== null) {
+      startX = lastMouseX;
+    } else if (wrap) {
+      var wrapRect = wrap.getBoundingClientRect();
+      startX = wrapRect.left + wrapRect.width / 2;
+    } else {
+      startX = vw / 2;
+    }
+    var dir = startX <= mcx ? 1 : -1;
+
+    var xs = dir > 0 ? hw + 4 : vw - hw - 4;
+    var xe = dir > 0 ? vw - hw - 4 : hw + 4;
+    if (Math.abs(xe - xs) < 80) return;
+    function toU(x) { return (x - mcx) * dir; }
+    function toX(u) { return mcx + dir * u; }
+    var u0 = toU(xs), u1 = toU(xe);
+    var mw = rect.width / 2;
+
+    // Lane: centre y of the sprite box.
+    var laneA = rect.top - LANE_GAP - hh;
+    var laneB = yU + ow / 2 + 4 + hh;
+    var lane, mode;
+    if (laneA - hh >= 4) { lane = laneA; mode = 'above'; }
+    else if (underlineFits && laneB + hh <= vh - 4) { lane = laneB; mode = 'below'; }
+    else return;
+
+    var R = Math.max(18, 0.9 * rect.height + 8) * scale;
+    var loopOn = mode === 'above' && (lane - 2 * R - hh >= 4) && (u1 - u0 >= 2 * R + 40);
+    var uc = loopOn ? Math.max(u0 + R + 20, Math.min(u1 - R - 20, 0)) : 0;
+
+    // Dive: only descends when the far side of the match has room; otherwise a flat pass whose
+    // last stretch simply shows the dive pose.
+    var uf = mw + CLEAR + 4 + hw;
+    var yD = Math.min(lane + hh + 10, vh - hh - 4);
+    var descend = mode === 'above' && uf >= uc + (loopOn ? R : 0) + 8 && uf + 30 <= u1 && yD - lane >= 12;
+    var uDive = Math.max(uc + (loopOn ? R : 0) + 8, Math.min(uf, u1 - 20));
+
+    // Polyline in viewport space, then document space for the DOM.
+    var pts = [];
+    var marks = { loopStart: -1, loopEnd: -1, dive: -1 };
+    function add(u, y) { pts.push([toX(u), y]); }
+    add(u0, lane);
+    if (loopOn) {
+      add(uc, lane);
+      marks.loopStart = pts.length - 1;
+      var N = 56;
+      for (var i = 1; i <= N; i++) {
+        var th = (i / N) * 2 * Math.PI;
+        add(uc + R * Math.sin(th), lane - R + R * Math.cos(th));
+      }
+      marks.loopEnd = pts.length - 1;
+    }
+    if (descend) {
+      add(uDive, lane);
+      marks.dive = pts.length - 1;
+      add(u1, yD);
+    } else {
+      add(uDive, lane);
+      marks.dive = pts.length - 1;
+      add(u1, lane);
+    }
+
+    var cum = [0];
+    for (var k = 1; k < pts.length; k++) {
+      cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+    }
+    var total = cum[cum.length - 1] || 1;
+    function frac(idx) { return idx < 0 ? 0 : cum[idx] / total; }
+    var fLoop0 = frac(marks.loopStart), fLoop1 = frac(marks.loopEnd), fDive = frac(marks.dive);
+
+    var pathStr = 'M ' + pts.map(function (p) { return (p[0] + SX) + ' ' + (p[1] + SY); }).join(' L ');
+
+    var FLIGHT = getBeaconDuration(1900);
+    var UNDER_DUR = Math.min(getBeaconDuration(420), Math.max(60, FLIGHT * (1 - fDive)));
+    var FADE_DELAY = FLIGHT + getBeaconDuration(200);
+    var FADE_DUR = getBeaconDuration(500);
+
+    function el(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var a in attrs) n.setAttribute(a, attrs[a]);
+      if (parent) parent.appendChild(n);
+      return n;
+    }
+    function done(node, anim) {
+      anim.finished.then(function () { node.remove(); }).catch(function () { node.remove(); });
+    }
+
+    // ── Trail layer (z 2147483641) ───────────────────────────────────────────────────
+    var layer = document.createElementNS(NS, 'svg');
+    layer.setAttribute('class', 'oc-beacon oc-beacon-transient');
+    layer.setAttribute('data-witchflyby', 'trail');
+    layer.setAttribute('width', '1');
+    layer.setAttribute('height', '1');
+    layer.style.cssText = 'position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:2147483641;';
+    var group = el('g', {}, layer);
+    layer.__waapiAnims = [];
+    function track(a) { layer.__waapiAnims.push(a); return a; }
+
+    var ribbonOuter = el('path', { d: pathStr, fill: 'none', stroke: SPARK_OUT, 'stroke-width': String(5 * scale), 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: '0.85' }, group);
+    var ribbonInner = el('path', { d: pathStr, fill: 'none', stroke: SPARK, 'stroke-width': String(2.4 * scale), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, group);
+    ribbonOuter.setAttribute('data-witchflyby', 'ribbon');
+    mountOverlay(layer);
+
+    var rLen = total;
+    try { rLen = ribbonOuter.getTotalLength() || total; } catch (e) {}
+    [ribbonOuter, ribbonInner].forEach(function (p) {
+      p.setAttribute('stroke-dasharray', String(rLen));
+      p.setAttribute('stroke-dashoffset', String(rLen));
+      track(p.animate([{ strokeDashoffset: rLen }, { strokeDashoffset: 0 }], { duration: FLIGHT, easing: 'linear', fill: 'forwards' }));
+    });
+
+    // Fixed spark table: path fraction, perpendicular offset (px at scale 1), size factor.
+    var SPARKS = [
+      [0.07, 4, 0.9], [0.15, -5, 1.0], [0.23, 5, 0.8], [0.31, -4, 1.0], [0.39, 6, 0.9],
+      [0.47, -5, 1.1], [0.55, 4, 0.8], [0.63, -6, 1.0], [0.71, 5, 0.9], [0.79, -4, 1.0], [0.87, 5, 0.8]
+    ];
+    if (!lite) {
+      var STAR = '0,-6 1.76,-2.42 5.7,-1.85 2.85,0.93 3.53,4.86 0,3 -3.53,4.86 -2.85,0.93 -5.7,-1.85 -1.76,-2.42';
+      SPARKS.forEach(function (s) {
+        var idx = 0;
+        var target = s[0] * total;
+        while (idx < cum.length - 2 && cum[idx + 1] < target) idx++;
+        var nxt = Math.min(idx + 1, pts.length - 1);
+        var segLen = (cum[nxt] - cum[idx]) || 1;
+        var t = Math.min(1, Math.max(0, (target - cum[idx]) / segLen));
+        var tx = pts[nxt][0] - pts[idx][0];
+        var ty = pts[nxt][1] - pts[idx][1];
+        var tl = Math.hypot(tx, ty) || 1;
+        var off = s[1] * scale;
+        var sx = pts[idx][0] + tx * t + (-ty / tl) * off + SX;
+        var sy = pts[idx][1] + ty * t + (tx / tl) * off + SY;
+        var sz = s[2] * scale * 1.7;
+        var star = el('g', { transform: 'translate(' + sx + ' ' + sy + ') scale(' + sz + ')', 'data-witchflyby': 'spark' }, group);
+        var starIn = el('g', { opacity: '0', style: 'transform-box:fill-box;transform-origin:center;' }, star);
+        el('polygon', { points: STAR, fill: SPARK, stroke: SPARK_OUT, 'stroke-width': '1.2', 'stroke-linejoin': 'round' }, starIn);
+        el('polygon', { points: STAR, fill: SPARK_CORE, transform: 'scale(0.45)' }, starIn);
+        track(starIn.animate([
+          { opacity: 0, transform: 'scale(0.2)' },
+          { opacity: 1, transform: 'scale(1.25)', offset: 0.5 },
+          { opacity: 1, transform: 'scale(1)' }
+        ], { duration: getBeaconDuration(260), delay: s[0] * FLIGHT, easing: 'ease-out', fill: 'forwards' }));
+      });
+    }
+
+    // Closing stroke: the wand swing's underline, far side to near side.
+    if (underlineFits) {
+      var uA = toX(mw + CLEAR + 2), uB = toX(-(mw + CLEAR + 2));
+      var underD = 'M ' + (uA + SX) + ' ' + (yU + SY) + ' L ' + (uB + SX) + ' ' + (yU + SY);
+      var uOuter = el('path', { d: underD, fill: 'none', stroke: SPARK_OUT, 'stroke-width': String(ow), 'stroke-linecap': 'round', opacity: '0.9' }, group);
+      var uInner = el('path', { d: underD, fill: 'none', stroke: beacon, 'stroke-width': String(2 * scale), 'stroke-linecap': 'round' }, group);
+      uOuter.setAttribute('data-witchflyby', 'underline');
+      var uLen = Math.abs(uA - uB) || 1;
+      [uOuter, uInner].forEach(function (p) {
+        p.setAttribute('stroke-dasharray', String(uLen));
+        p.setAttribute('stroke-dashoffset', String(uLen));
+        track(p.animate([{ strokeDashoffset: uLen }, { strokeDashoffset: 0 }], {
+          duration: UNDER_DUR, delay: fDive * FLIGHT, easing: 'ease-out', fill: 'forwards'
+        }));
+      });
+    }
+
+    var fade = track(group.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: FADE_DUR, delay: FADE_DELAY, easing: 'ease-in', fill: 'forwards'
+    }));
+    done(layer, fade);
+    layer.__waapiAnims.forEach(function (a) { if (a !== fade) a.finished.catch(function () { layer.remove(); }); });
+
+    // ── Witch sprite (z 2147483642) ──────────────────────────────────────────────────
+    var witch = document.createElement('div');
+    witch.className = 'oc-beacon oc-beacon-transient';
+    witch.setAttribute('data-witchflyby', 'witch');
+    witch.style.cssText = [
+      'position:absolute', 'left:0', 'top:0',
+      'width:' + figW + 'px', 'height:' + figH + 'px',
+      'pointer-events:none', 'z-index:2147483642',
+      "offset-path:path('" + pathStr + "')", 'offset-anchor:50% 50%', 'offset-rotate:0deg',
+      'opacity:0'
+    ].join(';');
+    mountOverlay(witch);
+
+    var sprite = document.createElementNS(NS, 'svg');
+    sprite.setAttribute('width', String(figW));
+    sprite.setAttribute('height', String(figH));
+    sprite.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    sprite.style.cssText = 'display:block;overflow:hidden;' + (dir < 0 ? 'transform:scaleX(-1);' : '');
+    witch.appendChild(sprite);
+
+    var bristleGroups = [];
+    function buildPose(name, pitch, tipPts, cloakPts, wand) {
+      var g = el('g', { 'data-witchflyby-pose': name, opacity: '0' }, sprite);
+      var art = el('g', { transform: 'translate(56 47) scale(0.68) translate(-58 -46) rotate(' + pitch + ' 58 46)' }, g);
+      var OL = { stroke: OUTLINE, 'stroke-width': '2', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' };
+      function poly(points, fill, extra) {
+        var a = { points: points, fill: fill };
+        for (var k2 in (extra || {})) a[k2] = extra[k2];
+        return el('polygon', a, art);
+      }
+      // cloak first, streaming behind
+      poly(cloakPts, ROBE, OL);
+      poly('58,30 44,30 28,34 14,33 28,37 46,36 58,35', ROBE_HI);
+      poly('58,46 40,50 18,52 36,48 58,42', ROBE_SH);
+      // broom: outlined handle, wood, shadow line; bristles at the tail
+      el('path', { d: 'M 18 60 L 100 52', stroke: OUTLINE, 'stroke-width': '7', 'stroke-linecap': 'round', fill: 'none' }, art);
+      el('path', { d: 'M 18 60 L 100 52', stroke: WOOD, 'stroke-width': '4', 'stroke-linecap': 'round', fill: 'none' }, art);
+      el('path', { d: 'M 20 62 L 100 54', stroke: WOOD_SH, 'stroke-width': '1.4', 'stroke-linecap': 'round', fill: 'none' }, art);
+      var bris = el('g', {}, art);
+      el('polygon', Object.assign({ points: '22,56 6,48 2,58 8,70 22,65', fill: BRISTLE }, OL), bris);
+      el('path', { d: 'M 20 58 L 6 55 M 20 61 L 5 62 M 20 64 L 8 68', stroke: WOOD_SH, 'stroke-width': '1.2', 'stroke-linecap': 'round', fill: 'none' }, bris);
+      el('polygon', { points: '20,55 25,55 25,66 20,66', fill: WOOD_SH, stroke: OUTLINE, 'stroke-width': '1.4' }, bris);
+      bristleGroups.push(bris);
+      // legs and boots dangling sidesaddle
+      poly('54,48 62,46 64,60 56,62', ROBE_SH, OL);
+      poly('52,60 66,59 68,66 52,67', OUTLINE);
+      // torso
+      poly('52,28 66,28 69,47 54,51', ROBE, OL);
+      poly('52,40 69,41 69,47 54,51', ROBE_SH);
+      poly('55,29 61,29 60,40 55,40', ROBE_HI);
+      // head: profile with hooked nose, tiny chin, flat eye
+      el('circle', { cx: '70', cy: '21', r: '8', fill: SKIN, stroke: OUTLINE, 'stroke-width': '2' }, art);
+      poly('77,19 89,26 78,27', SKIN, OL);
+      poly('72,26 78,27 74,31 70,29', SKIN_SH);
+      el('ellipse', { cx: '74.5', cy: '20', rx: '1.8', ry: '1.2', fill: OUTLINE }, art);
+      // hat: brim, bent cone, band
+      el('ellipse', { cx: '70', cy: '14', rx: '16', ry: '3.6', fill: ROBE, stroke: OUTLINE, 'stroke-width': '2' }, art);
+      poly(tipPts, ROBE, OL);
+      poly('62,12 68,1 66,12', ROBE_HI);
+      poly('76,12 73,3 81,13', ROBE_SH);
+      poly('58,9 82,9 83,14 57,14', BAND, { stroke: OUTLINE, 'stroke-width': '1.4', 'stroke-linejoin': 'round' });
+      poly('68,9.5 73,9.5 73,13.5 68,13.5', ROBE_SH);
+      // arm to the handle, hand
+      el('path', { d: 'M 62 33 L 80 50', stroke: OUTLINE, 'stroke-width': '7', 'stroke-linecap': 'round', fill: 'none' }, art);
+      el('path', { d: 'M 62 33 L 80 50', stroke: ROBE, 'stroke-width': '4', 'stroke-linecap': 'round', fill: 'none' }, art);
+      el('circle', { cx: '82', cy: '51', r: '3.4', fill: SKIN, stroke: OUTLINE, 'stroke-width': '1.6' }, art);
+      if (wand) {
+        el('path', { d: 'M 64 32 L 84 30 L 96 22', stroke: OUTLINE, 'stroke-width': '7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }, art);
+        el('path', { d: 'M 64 32 L 84 30 L 96 22', stroke: ROBE, 'stroke-width': '4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }, art);
+        el('circle', { cx: '98', cy: '21', r: '3.4', fill: SKIN, stroke: OUTLINE, 'stroke-width': '1.6' }, art);
+        el('path', { d: 'M 99 20 L 110 11', stroke: OUTLINE, 'stroke-width': '4', 'stroke-linecap': 'round', fill: 'none' }, art);
+        el('path', { d: 'M 99 20 L 110 11', stroke: WOOD, 'stroke-width': '2', 'stroke-linecap': 'round', fill: 'none' }, art);
+        el('circle', { cx: '111', cy: '10', r: '2.4', fill: SPARK_CORE, stroke: SPARK_OUT, 'stroke-width': '1' }, art);
+      }
+      return g;
+    }
+    var poseCruise = buildPose('cruise', 0, '57,14 83,14 74,2 64,-4 54,-3 66,3', '58,28 44,28 28,32 10,30 22,38 6,42 24,46 14,52 40,52 58,48', false);
+    var poseClimb = buildPose('climb', -25, '57,14 83,14 74,3 62,-1 52,3 66,5', '58,28 44,26 28,26 10,20 24,32 6,34 26,42 14,46 40,50 58,48', false);
+    var poseDive = buildPose('dive', 25, '57,14 83,14 72,3 60,-2 50,0 64,5', '58,28 44,30 28,36 12,38 26,42 10,48 28,50 18,56 42,54 58,48', true);
+    var poses = [poseCruise, poseClimb, poseDive];
+
+    // Pose windows along the path, fractions of total length (the witch moves linearly).
+    var segs = [];
+    if (loopOn) {
+      segs.push([0, fLoop0, 0], [fLoop0, fLoop1, 1], [fLoop1, fDive, 0], [fDive, 1, 2]);
+    } else {
+      segs.push([0, fDive, 0], [fDive, 1, 2]);
+    }
+    segs = segs.filter(function (s) { return s[1] - s[0] > 1e-6; });
+    if (!segs.length) segs = [[0, 1, 0]];
+    segs[0][0] = 0;
+    segs[segs.length - 1][1] = 1;
+    var EPS = 0.0004;
+    witch.__waapiAnims = [];
+    poses.forEach(function (g, pi) {
+      var frames = [];
+      segs.forEach(function (s, si) {
+        var v = s[2] === pi ? 1 : 0;
+        frames.push({ opacity: v, offset: si === 0 ? 0 : s[0] + EPS });
+        frames.push({ opacity: v, offset: si === segs.length - 1 ? 1 : s[1] - EPS });
+      });
+      witch.__waapiAnims.push(g.animate(frames, { duration: FLIGHT, easing: 'linear', fill: 'forwards' }));
+    });
+
+    witch.__waapiAnims.push(witch.animate([
+      { offsetDistance: '0%' }, { offsetDistance: '100%' }
+    ], { duration: FLIGHT, easing: 'linear', fill: 'forwards' }));
+    var inT = Math.min(0.1, 140 / FLIGHT), outT = Math.max(0.9, 1 - 140 / FLIGHT);
+    var opacityAnim = witch.animate([
+      { opacity: 0, offset: 0 }, { opacity: 1, offset: inT }, { opacity: 1, offset: outT }, { opacity: 0, offset: 1 }
+    ], { duration: FLIGHT, easing: 'linear', fill: 'forwards' });
+    witch.__waapiAnims.push(opacityAnim);
+
+    if (!lite) {
+      // Bristle flutter: small flicks of the tail bundle around its binding.
+      bristleGroups.forEach(function (b) {
+        b.style.transformBox = 'fill-box';
+        b.style.transformOrigin = '100% 50%';
+        witch.__waapiAnims.push(b.animate([
+          { transform: 'rotate(-5deg)' }, { transform: 'rotate(6deg)' }, { transform: 'rotate(-5deg)' }
+        ], { duration: getBeaconDuration(180), iterations: Math.ceil(FLIGHT / getBeaconDuration(180)), easing: 'ease-in-out' }));
+      });
+    }
+
+    done(witch, opacityAnim);
+    witch.__waapiAnims.forEach(function (a) { if (a !== opacityAnim) a.finished.catch(function () { witch.remove(); }); });
   }
 
   function animateLightning(rect) {
