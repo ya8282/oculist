@@ -869,6 +869,7 @@
     effectOuijaPlanchette: 'Ouija Planchette',
     effectMoonrise: 'Moonrise',
     effectTrickOrTreat: 'Trick-or-Treat',
+    effectPossessedText: 'Possessed Text',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -999,7 +1000,8 @@
     gravehands: { label: i18n.effectGraveHands, run: animateGraveHands, pack: 'hollow' },
     ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'hollow' },
     moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'hollow' },
-    trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' }
+    trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' },
+    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -11378,6 +11380,220 @@
       });
       bk.push({ transform: 'translateY(0px)', offset: 1 });
       track(shell.animate(bk, { duration: ms(DUR), fill: 'both', easing: 'ease-out' }));
+    }
+  }
+
+  // oculist-l0bs.9: Possessed Text, Haunted Hollow pack (pack II). The matched word looks
+  // haunted WITHOUT the effect ever touching a glyph. Spike oculist-l0bs.8 chose candidate b
+  // (a thin possessed-red frame that glitch-offsets around the match, with a shadow-red echo
+  // copy of the frame behind it, a clean jagged slice line and a small spark cluster) over
+  // candidate a (loose echo bars read as an underline) and candidate c (duplicate echo glyphs
+  // over the word, which breaks contract rule 10 and is not shipped). There is no prototype:
+  // the sheet's four states are mapped onto the FRAME instead of the letters:
+  //   rest   -> the frame fades in, straight, broken into dashes
+  //   jitter -> main and echo frames hard-cut between small deterministic offsets
+  //   warp   -> the frame swaps to a wavy-edged version whose sides bulge OUTWARD
+  //   split  -> the frame is cut at mid-height, the top half shifts right, and a clean jagged
+  //             slice line shows in the margin on both sides (never across the letters)
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): every painted shape keeps a ring of
+  // CLEAR (6px) around the match's glyph box in every frame. The frame sits D px out, where
+  // D budgets the stroke half-width, the worst jitter-plus-wave offset and the split shift,
+  // so no sampled frame paints inside match + 6px. The overlay box itself is transparent and
+  // clipped; the page's text is never recoloured, hidden, blurred or covered.
+  //
+  // There is no placement to fall back from: the frame hugs the match on all sides. The box is
+  // clamped to the viewport's width (pre-scroll) so it can never create a horizontal scrollbar,
+  // and to the document's top-left so it never sits at negative coordinates.
+  //
+  // Fixed identity palette from the sheet brief; the effective beacon colour is not used
+  // because no neighbouring character effect uses it as an accent on a figure.
+  //
+  // LITE MODE drops: the shadow echo frame, the warp state, the split and its slice line, and
+  // the spark cluster. It keeps the red frame and its jitter, on a shorter timeline.
+  function animatePossessedText(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var RED = '#C93B2B', SHADOW = '#7E1F18', GHOST = '#BDB4D6', INK = '#17121F';
+    var CLEAR = 6;
+    var u = getBeaconScale();
+    var f = getBeaconDuration(1);
+    var SW = 1.8 * u, JIT = 3 * u, AMP = 1.5 * u, SHIFT = 5 * u, BULGE = 4 * u;
+    var D = CLEAR + SW / 2 + Math.max(JIT + AMP, SHIFT) + 1;   // frame distance from the glyph box
+    var M = D + 18 * u;                                         // overlay margin (bulge, slice, sparks)
+    var W = rect.width, H = rect.height;
+
+    // ---- Box (viewport space, pre-scroll), clamped to the viewport width and the document origin ----
+    var vw = window.innerWidth;
+    var boxL = Math.max(rect.left - M, -window.scrollX, 0);
+    var boxR = Math.min(rect.right + M, vw);
+    var boxT = Math.max(rect.top - M, -window.scrollY);
+    var boxB = rect.bottom + M;
+    var boxW = boxR - boxL, boxH = boxB - boxT;
+    if (boxW <= 0 || boxH <= 0) return;
+
+    // ---- Timeline (base ms, every duration scaled through getBeaconDuration) ----
+    var DUR = lite ? 1000 : 1600;
+    var FADE_IN = 120, FADE_OUT = 240;
+    var J0 = 120, J1 = lite ? 760 : 960;            // jitter window
+    var WARP0 = 560, WARP1 = 960, SPLIT0 = 960;
+    var STEP = 60;
+
+    var x0 = -D, x1 = W + D, y0 = -D, y1 = H + D, ym = H / 2;
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function stroke(d, color, parent, dash) {
+      var a = { d: d, fill: 'none', stroke: color, 'stroke-width': String(SW), 'stroke-linejoin': 'round' };
+      if (dash) a['stroke-dasharray'] = dash;
+      return addShape('path', a, parent);
+    }
+
+    // ---- DOM ----
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient oc-possessedtext';
+    wrap.setAttribute('data-possessedtext', 'frame');
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + (boxL + window.scrollX) + 'px', 'top:' + (boxT + window.scrollY) + 'px',
+      'width:' + boxW + 'px', 'height:' + boxH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    mountOverlay(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(boxW));
+    svg.setAttribute('height', String(boxH));
+    svg.setAttribute('viewBox', (boxL - rect.left) + ' ' + (boxT - rect.top) + ' ' + boxW + ' ' + boxH);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    wrap.appendChild(svg);
+
+    // One frame layer (main or echo): a jitter group holding the straight and the warp variant.
+    function layer(part, color, withWarp) {
+      var j = addShape('g', { 'data-pt-part': part }, svg);
+      var straight = addShape('g', { 'data-pt-state': 'straight' }, j);
+      var dash = (10 * u) + ' ' + (3 * u) + ' ' + (22 * u) + ' ' + (4 * u);
+      var top = addShape('g', { 'data-pt-half': 'top' }, straight);
+      stroke('M ' + x0 + ' ' + ym + ' L ' + x0 + ' ' + y0 + ' L ' + x1 + ' ' + y0 + ' L ' + x1 + ' ' + ym, color, top, dash);
+      var bottom = addShape('g', { 'data-pt-half': 'bottom' }, straight);
+      stroke('M ' + x0 + ' ' + ym + ' L ' + x0 + ' ' + y1 + ' L ' + x1 + ' ' + y1 + ' L ' + x1 + ' ' + ym, color, bottom, dash);
+      var warp = null;
+      if (withWarp) {
+        warp = addShape('g', { 'data-pt-state': 'warp' }, j);
+        warp.style.opacity = '0';
+        var n = 10;
+        var wave = function (y, sign) {
+          var s = '';
+          for (var i = 0; i <= n; i++) s += ' L ' + (x0 + (x1 - x0) * i / n) + ' ' + (y + (i % 2 ? -AMP : AMP) * sign);
+          return s;
+        };
+        var midY0 = (ym + y0) / 2, midY1 = (ym + y1) / 2;
+        stroke('M ' + x0 + ' ' + ym + ' Q ' + (x0 - 2 * BULGE) + ' ' + midY0 + ' ' + x0 + ' ' + y0 + wave(y0, 1) +
+          ' Q ' + (x1 + 2 * BULGE) + ' ' + midY0 + ' ' + x1 + ' ' + ym, color, warp);
+        stroke('M ' + x0 + ' ' + ym + ' Q ' + (x0 - 2 * BULGE) + ' ' + midY1 + ' ' + x0 + ' ' + y1 + wave(y1, -1) +
+          ' Q ' + (x1 + 2 * BULGE) + ' ' + midY1 + ' ' + x1 + ' ' + ym, color, warp);
+      }
+      return { j: j, straight: straight, warp: warp, top: top };
+    }
+    var echo = lite ? null : layer('echo', SHADOW, true);
+    var main = layer('main', RED, !lite);
+
+    // Slice line (clean, jagged, in the margin on both sides) and sparks: full mode only.
+    var slice = null, sparks = [];
+    if (!lite) {
+      slice = addShape('g', { 'data-pt-part': 'slice' }, svg);
+      slice.style.opacity = '0';
+      var zig = function (sign, startX) {
+        var pts = '';
+        for (var i = 0; i <= 5; i++) pts += (i ? ' L ' : 'M ') + (startX + sign * i * 2.6 * u) + ' ' + (ym + (i % 2 ? -2 : 2) * u * (i ? 1 : 0));
+        return pts;
+      };
+      stroke(zig(-1, x0 - 2 * u), RED, slice);
+      stroke(zig(1, x1 + 2 * u), RED, slice);
+      for (var s = 0; s < 5; s++) {
+        var sp = addShape('rect', {
+          'data-pt-part': 'spark', x: x1 + (3 + s * 4) * u, y: y0 - (3 + s * 3.2) * u, width: 3 * u, height: 3 * u,
+          fill: s % 2 ? GHOST : RED, stroke: INK, 'stroke-width': String(0.5 * u)
+        }, svg);
+        sp.style.opacity = '0';
+        sparks.push(sp);
+      }
+    }
+
+    // ---- Animations (all hung off the wrapper, which cancelBeacons() selects) ----
+    var anims = [];
+    wrap.__waapiAnims = anims;
+    function track(a) {
+      anims.push(a);
+      a.finished.then(function () { wrap.remove(); }).catch(function () { wrap.remove(); });
+      return a;
+    }
+    function ms(t) { return t * f; }
+
+    track(wrap.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: FADE_IN / DUR },
+      { opacity: 1, offset: (DUR - FADE_OUT) / DUR },
+      { opacity: 0, offset: 1 }
+    ], { duration: ms(DUR), fill: 'both' }));
+
+    // Hard-cut visibility windows [[a, b], ...] (opacity 1 inside, 0 outside).
+    function visible(node, wins) {
+      var kf = [{ opacity: 0, offset: 0 }];
+      wins.forEach(function (w) {
+        kf.push({ opacity: 0, offset: w[0] / DUR }, { opacity: 1, offset: w[0] / DUR },
+          { opacity: 1, offset: w[1] / DUR }, { opacity: 0, offset: w[1] / DUR });
+      });
+      kf.push({ opacity: 0, offset: 1 });
+      return track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
+    }
+
+    // Jitter: deterministic offsets, each held for STEP ms, never beyond JIT in either axis.
+    var PATTERN = [[1, -0.6], [-0.8, 0.7], [0.6, 0.9], [-1, -0.4], [0.9, 0.3], [-0.5, -0.9], [0.7, -0.7]];
+    function jitter(node, sign, scale) {
+      var kf = [{ transform: 'translate(0px,0px)', offset: 0 }, { transform: 'translate(0px,0px)', offset: J0 / DUR }];
+      var k = 0;
+      for (var t = J0; t < J1; t += STEP, k++) {
+        var p = PATTERN[(k + (sign < 0 ? 3 : 0)) % PATTERN.length];
+        kf.push({ transform: 'translate(' + (sign * p[0] * JIT * scale) + 'px,' + (sign * p[1] * JIT * scale) + 'px)', offset: t / DUR, easing: 'steps(1, end)' });
+      }
+      kf.push({ transform: 'translate(0px,0px)', offset: J1 / DUR }, { transform: 'translate(0px,0px)', offset: 1 });
+      return track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
+    }
+    jitter(main.j, 1, 1);
+    if (!lite) {
+      jitter(echo.j, -1, 0.9);
+      [main, echo].forEach(function (L) {
+        visible(L.straight, [[0, WARP0], [WARP1, DUR]]);
+        visible(L.warp, [[WARP0, WARP1]]);
+        // Split: the top half shifts right (one clean shove) and stays shifted to the end.
+        track(L.top.animate([
+          { transform: 'translateX(0px)', offset: 0 },
+          { transform: 'translateX(0px)', offset: SPLIT0 / DUR },
+          { transform: 'translateX(' + SHIFT + 'px)', offset: (SPLIT0 + 80) / DUR },
+          { transform: 'translateX(' + SHIFT + 'px)', offset: 1 }
+        ], { duration: ms(DUR), fill: 'both', easing: 'ease-out' }));
+      });
+      visible(slice, [[SPLIT0, DUR]]);
+      // Sparks: each pops in turn from the frame's top-right corner and drifts AWAY from the match.
+      sparks.forEach(function (sp, i) {
+        var st = SPLIT0 - 200 + i * 70;
+        track(sp.animate([
+          { opacity: 0, transform: 'translate(0px,0px)', offset: 0 },
+          { opacity: 1, transform: 'translate(' + (1.5 * u) + 'px,' + (-1.5 * u) + 'px)', offset: 0.25 },
+          { opacity: 1, transform: 'translate(' + (4 * u) + 'px,' + (-4 * u) + 'px)', offset: 0.7 },
+          { opacity: 0, transform: 'translate(' + (6 * u) + 'px,' + (-6 * u) + 'px)', offset: 1 }
+        ], { duration: ms(360), delay: ms(st), fill: 'both' }));
+      });
     }
   }
 
