@@ -865,6 +865,7 @@
     effectGhostSweep: 'Ghost Sweep',
     effectSpiderDrop: 'Spider Drop',
     effectBlackCatPounce: 'Black Cat Pounce',
+    effectMoonrise: 'Moonrise',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -991,7 +992,8 @@
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
     spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
     witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
-    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' }
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' },
+    moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -10315,6 +10317,248 @@
         ], { duration: total, fill: 'forwards' }));
         finishWith(webEl, webAnims);
       }
+    }
+  }
+
+  // oculist-l0bs.12: Moonrise, the Haunted Hollow pack's ('hollow') full-moon effect. No
+  // playground prototype exists; the bead's beat spec stands in. The matched line's TOP
+  // EDGE is the horizon: a sprite whose bottom edge sits 9px above the glyph box (the 6px
+  // protected clearance plus a 2px moonlit rim plus 1px) clips everything at that line, so
+  // the moon rises from behind it, a wolf pops up standing on the rim, raises its head into
+  // a howl, holds, drops back, and the moon sets. Nothing paints inside the glyph box + 6px
+  // in any frame (promotion contract rule 10); the beat spec's "feet 2px above the box" and
+  // "rim 4px outside it" are widened to that clearance rather than broken.
+  // Placement is ABOVE ONLY, judged from the PRE-SCROLL viewport rect: room for the full
+  // composition (moon + stars) -> 'full'; less -> a smaller moon with the stars moved to the
+  // sides ('small'); too small for the wolf -> crescent only ('crescent'); no room -> suppress.
+  // Fixed identity palette from the sheet brief; no flash element carries the beacon colour.
+  // Lite Mode: crescent moon, no clouds/stars/rim/edge light, the wolf just appears and
+  // disappears (no pop, no head raise).
+  function animateMoonrise(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var MOON = '#F4E9B8', MOON_HI = '#FFF8D8', MOON_SH = '#D9C98A', CRATER = '#BDAE72';
+    var WOLF = '#14101F', WOLF_EDGE = '#3A3260', EYE = '#FFD45A';
+    var CLOUD = '#4B4268', CLOUD_SH = '#2E2845', STAR = '#FFF1A6';
+
+    var HORIZON_GAP = 9, RIM_H = 2, EDGE = 4;
+    var scale = getBeaconScale();
+    var lite = !!settings.performanceMode;
+
+    // Viewport-fit decisions use the PRE-SCROLL viewport rect (promotion contract rule 2).
+    var vw = window.innerWidth;
+    var cx = rect.left + rect.width / 2;
+    var avail = rect.top - HORIZON_GAP - EDGE;
+    var D0 = 64 * scale;
+    var mode, D, Hs;
+    if (avail >= 1.25 * D0) { mode = 'full'; D = D0; Hs = 1.25 * D0; }
+    else if (avail >= 0.75 * D0) { mode = 'small'; D = Math.min(D0, avail); Hs = D; }
+    else if (avail >= 0.375 * D0) { mode = 'crescent'; D = avail; Hs = D; }
+    else return;                                  // no room above: suppress, never cover text
+    var R = D / 2;
+    var W = D * 1.5;
+    var hasWolf = mode !== 'crescent';
+    var crescent = lite || mode === 'crescent';
+    var decor = !lite && hasWolf;                 // clouds, stars, rim, edge light, craters
+
+    var svgLeft = Math.min(Math.max(cx - W / 2, EDGE), Math.max(EDGE, vw - EDGE - W));
+    var svgTop = rect.top - HORIZON_GAP - Hs;
+    var sx = window.scrollX, sy = window.scrollY;
+
+    function el(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(n);
+      return n;
+    }
+    function rnd(n) { return Math.round(n * 100) / 100; }
+    function finishWith(host, anims) {
+      host.__waapiAnims = (host.__waapiAnims || []).concat(anims);
+      var latest = Math.max.apply(null, anims.map(function (a) { return a.effect.getComputedTiming().endTime; }));
+      anims.forEach(function (a) {
+        if (a.effect.getComputedTiming().endTime < latest) return;
+        a.finished.then(function () { host.remove(); }).catch(function () { host.remove(); });
+      });
+    }
+
+    // Phases, each through getBeaconDuration(); boundaries are cumulative sums.
+    var dRise = getBeaconDuration(800);
+    var dPop = getBeaconDuration(300);
+    var dRaise = getBeaconDuration(350);
+    var dHold = getBeaconDuration(800);
+    var dDrop = getBeaconDuration(300);
+    var dSet = getBeaconDuration(650);
+    var tRise = dRise;                  // moon full
+    var tPop = tRise + dPop;            // wolf up, head down
+    var tHowl = tPop + dRaise;          // head raised
+    var tHold = tHowl + dHold;          // hold ends
+    var tDrop = tHold + dDrop;          // wolf gone
+    var total = tDrop + dSet;
+    var f = function (t) { return t / total; };
+
+    var host = document.createElement('div');
+    host.className = 'oc-beacon oc-beacon-transient oc-moonrise';
+    host.setAttribute('data-mr-mode', mode);
+    host.setAttribute('data-mr-moon-d', String(D));
+    host.setAttribute('data-mr-wolf', hasWolf ? '1' : '0');
+    host.style.cssText = [
+      'position:absolute',
+      'left:' + (svgLeft + sx) + 'px', 'top:' + (svgTop + sy) + 'px',
+      'width:' + W + 'px', 'height:' + Hs + 'px',
+      'pointer-events:none', 'z-index:2147483642'
+    ].join(';');
+    var svg = el('svg', { width: String(W), height: String(Hs), viewBox: '0 0 ' + rnd(W) + ' ' + rnd(Hs) }, null);
+    svg.style.cssText = 'display:block;overflow:hidden;';   // the clip at the horizon
+    host.appendChild(svg);
+
+    var mcx = W / 2, mcy = Hs - R;      // moon centre at rest (full)
+    var anims = [];
+
+    // Stars sit in the sky around the moon; side-only when there is no headroom above it.
+    if (decor) {
+      var four = function (r) {
+        var q = rnd(r * 0.24);
+        r = rnd(r);
+        return 'M0 ' + -r + ' L' + q + ' ' + -q + ' L' + r + ' 0 L' + q + ' ' + q + ' L0 ' + r +
+          ' L' + -q + ' ' + q + ' L' + -r + ' 0 L' + -q + ' ' + -q + ' Z';
+      };
+      var five = function (r) {
+        var d = '';
+        for (var i = 0; i < 10; i++) {
+          var a = (-90 + 36 * i) * Math.PI / 180, rr = i % 2 ? r * 0.42 : r;
+          d += (i ? ' L' : 'M') + rnd(rr * Math.cos(a)) + ' ' + rnd(rr * Math.sin(a));
+        }
+        return d + ' Z';
+      };
+      var spots = mode === 'full'
+        ? [[-0.62, -0.5, 4], [0.64, -0.3, 5], [0.3, -1.1, 4], [-0.3, -1.15, 5]]
+        : [[-0.64, -0.75, 4], [0.64, -0.3, 5], [-0.62, -0.25, 5], [0.62, -0.8, 4]];
+      var beats = [[0, 1, 0.35, 1, 0.35, 1, 0.35, 1, 0], [0, 0.35, 1, 0.35, 1, 0.35, 1, 0.35, 0]];
+      var offs = [0, 0.18, 0.3, 0.42, 0.54, 0.66, 0.78, 0.9, 1];
+      spots.forEach(function (s, i) {
+        var g = el('g', { transform: 'translate(' + rnd(mcx + s[0] * D) + ' ' + rnd(mcy + s[1] * D + R) + ')' }, svg);
+        var star = el('path', { d: s[2] === 4 ? four(0.07 * D) : five(0.065 * D), fill: STAR, opacity: '0' }, g);
+        star.setAttribute('data-mr-star', String(s[2]));
+        anims.push(star.animate(offs.map(function (o, j) { return { offset: o, opacity: beats[i % 2][j] }; }),
+          { duration: total, fill: 'both' }));
+      });
+    }
+
+    // Moon: shadow tone, lit tone, then highlight + craters (full disc) or a crescent (Lite,
+    // crescent-only). One group, translated down below the horizon at both ends.
+    var moonG = el('g', { 'data-mr-moon': crescent ? 'crescent' : 'full' }, svg);
+    if (crescent) {
+      var crescentD = function (c, r) {
+        return 'M' + rnd(c) + ' ' + rnd(mcy - r) + ' A' + rnd(r) + ' ' + rnd(r) + ' 0 0 0 ' + rnd(c) + ' ' + rnd(mcy + r) +
+          ' A' + rnd(1.25 * r) + ' ' + rnd(1.25 * r) + ' 0 0 1 ' + rnd(c) + ' ' + rnd(mcy - r) + ' Z';
+      };
+      el('path', { d: crescentD(mcx + 0.1 * R, R), fill: MOON_SH }, moonG);
+      el('path', { d: crescentD(mcx, R), fill: MOON }, moonG);
+    } else {
+      el('circle', { cx: rnd(mcx), cy: rnd(mcy), r: rnd(R), fill: MOON_SH }, moonG);
+      el('circle', { cx: rnd(mcx - 0.07 * R), cy: rnd(mcy - 0.03 * R), r: rnd(0.93 * R), fill: MOON }, moonG);
+      el('ellipse', {
+        cx: rnd(mcx - 0.38 * R), cy: rnd(mcy - 0.45 * R), rx: rnd(0.3 * R), ry: rnd(0.14 * R),
+        fill: MOON_HI, transform: 'rotate(-40 ' + rnd(mcx - 0.38 * R) + ' ' + rnd(mcy - 0.45 * R) + ')'
+      }, moonG);
+      [[-0.3, -0.4, 0.2], [0.45, -0.12, 0.1], [-0.45, 0.14, 0.13]].forEach(function (c) {
+        el('circle', { 'data-mr-crater': '1', cx: rnd(mcx + c[0] * R), cy: rnd(mcy + c[1] * R), r: rnd(c[2] * R), fill: CRATER }, moonG);
+      });
+    }
+    anims.push(moonG.animate([
+      { offset: 0, transform: 'translateY(' + D + 'px)', easing: 'ease-out' },
+      { offset: f(tRise), transform: 'translateY(0px)' },
+      { offset: f(tDrop), transform: 'translateY(0px)', easing: 'ease-in' },
+      { offset: 1, transform: 'translateY(' + D + 'px)' }
+    ], { duration: total, fill: 'both' }));
+
+    // Two cloud strips drift across the moon, behind the wolf.
+    if (decor) {
+      var cloudPath = 'M0 14 Q4 8 14 9 Q20 2 32 5 Q40 -1 54 4 Q64 1 74 6 Q90 6 100 14 Z';
+      var cloudShade = 'M3 14 Q50 9 97 14 Z';
+      [[-0.22, -0.9, 0.9], [0.1, -0.3, 0.7]].forEach(function (c, i) {
+        var wrap = el('g', { 'data-mr-cloud': String(i) }, svg);
+        var k = c[2] * D / 100;
+        var inner = el('g', { transform: 'translate(0 ' + rnd(mcy + c[0] * D) + ') scale(' + rnd(k) + ')' }, wrap);
+        el('path', { d: cloudPath, fill: CLOUD }, inner);
+        el('path', { d: cloudShade, fill: CLOUD_SH }, inner);
+        anims.push(wrap.animate([
+          { offset: 0, transform: 'translateX(' + rnd(c[1] * D) + 'px)' },
+          { offset: 1, transform: 'translateX(' + rnd(W) + 'px)' }
+        ], { duration: total, fill: 'both' }));
+      });
+    }
+
+    // Wolf: body and a separate head (rotates about the neck) in a 60x50 box, feet on the
+    // horizon. Edge light is the same silhouette shifted up-right behind it (full mode only).
+    if (hasWolf) {
+      var wk = (0.5 * D) / 50;
+      var wx = mcx - 30 * wk + 0.04 * D;
+      var BODY = 'M24 13 L37 19 L47 21 L52 24 L56 28 L60 35 L55 33 L50 30 L49 38 L51 50 L45 50 L43 41 L40 37 L35 37 L32 40 L32 50 L26 50 L25 40 L22 32 L22 20 Z';
+      var HEAD = 'M6 5 L12 6.5 L15 9 L17 3 L21 8.5 L28 15 L27 25 L19 25 L15 19 L11 14 L8 12 L10.5 9.5 Z';
+      var wolfOuter = el('g', { transform: 'translate(' + rnd(wx) + ' ' + rnd(Hs - 50 * wk) + ') scale(' + rnd(wk) + ')' }, svg);
+      var wolfG = el('g', { 'data-mr-wolf-g': '1', opacity: '0' }, wolfOuter);
+      if (!lite) {
+        var edge = el('g', { transform: 'translate(1.2 -0.8)' }, wolfG);
+        el('path', { d: BODY, fill: WOLF_EDGE }, edge);
+      }
+      el('path', { d: BODY, fill: WOLF }, wolfG);
+      var headG = el('g', { 'data-mr-head': '1' }, wolfG);
+      headG.style.transformOrigin = '25px 20px';
+      if (!lite) {
+        var hedge = el('g', { transform: 'translate(1.2 -0.8)' }, headG);
+        el('path', { d: HEAD, fill: WOLF_EDGE }, hedge);
+      }
+      el('path', { d: HEAD, fill: WOLF }, headG);
+      el('circle', { cx: '14.2', cy: '10.4', r: '1.1', fill: EYE }, headG);
+
+      if (lite) {
+        // appear/disappear only: hard cuts, no pop and no head raise.
+        anims.push(wolfG.animate([
+          { offset: 0, opacity: 0 }, { offset: f(tRise), opacity: 0 }, { offset: f(tRise), opacity: 1 },
+          { offset: f(tHold), opacity: 1 }, { offset: f(tHold), opacity: 0 }, { offset: 1, opacity: 0 }
+        ], { duration: total, fill: 'both' }));
+      } else {
+        anims.push(wolfG.animate([
+          { offset: 0, transform: 'translateY(54px)', opacity: 1 },
+          { offset: f(tRise), transform: 'translateY(54px)', opacity: 1, easing: 'ease-out' },
+          { offset: f(tPop), transform: 'translateY(0px)', opacity: 1 },
+          { offset: f(tHold), transform: 'translateY(0px)', opacity: 1, easing: 'ease-in' },
+          { offset: f(tDrop), transform: 'translateY(54px)', opacity: 1 },
+          { offset: 1, transform: 'translateY(54px)', opacity: 1 }
+        ], { duration: total, fill: 'both' }));
+        anims.push(headG.animate([
+          { offset: 0, transform: 'rotate(-38deg)' },
+          { offset: f(tPop), transform: 'rotate(-38deg)', easing: 'ease-out' },
+          { offset: f(tHowl), transform: 'rotate(0deg)' },
+          { offset: f(tHold), transform: 'rotate(0deg)', easing: 'ease-in' },
+          { offset: f(tHold + dDrop * 0.6), transform: 'rotate(-38deg)' },
+          { offset: 1, transform: 'rotate(-38deg)' }
+        ], { duration: total, fill: 'both' }));
+      }
+    }
+    // Animations on child nodes hang on the host, animateTrail's own precedent.
+    mountOverlay(host);
+    finishWith(host, anims);
+
+    // Moonlit rim: a thin stripe on the horizon line, 7-9px above the glyph box, only while
+    // the wolf holds the howl. Its own element so it never needs the sprite to clip it.
+    if (decor) {
+      var rimEl = document.createElement('div');
+      rimEl.className = 'oc-beacon oc-beacon-transient oc-moonrise-rim';
+      rimEl.style.cssText = [
+        'position:absolute',
+        'left:' + (rect.left - 4 + sx) + 'px', 'top:' + (rect.top - HORIZON_GAP + sy) + 'px',
+        'width:' + (rect.width + 8) + 'px', 'height:' + RIM_H + 'px',
+        'background:' + MOON_HI, 'border-radius:1px',
+        'pointer-events:none', 'z-index:2147483641', 'opacity:0'
+      ].join(';');
+      mountOverlay(rimEl);
+      finishWith(rimEl, [rimEl.animate([
+        { offset: 0, opacity: 0 }, { offset: f(tPop), opacity: 0 }, { offset: f(tHowl), opacity: 0.9 },
+        { offset: f(tHold), opacity: 0.9 }, { offset: f(tDrop), opacity: 0 }, { offset: 1, opacity: 0 }
+      ], { duration: total, fill: 'both' })]);
     }
   }
 
