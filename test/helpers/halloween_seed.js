@@ -36,6 +36,12 @@ const READ_SEEDED_FLAG_EXPR =
   "});" +
   "})";
 
+// oculist-l0bs.2: pack II's seed. Keyed on the seeded flag alone until the first pack II
+// effect lands in effectsRegistry; once one does, add its key to HOLLOW_PROBE_EFFECTS so the
+// wait also proves content.js applied the write.
+const HOLLOW_PROBE_EFFECTS = [];
+const READ_HOLLOW_FLAG_EXPR = READ_SEEDED_FLAG_EXPR.replace('seededHalloweenPack', 'seededHollowPack');
+
 async function waitForHalloweenSeedSettled(evalInContentScript, opts = {}) {
   const { timeout = POLL_TIMEOUT } = opts;
   await waitForCondition(() => evalInContentScript(READ_SEEDED_FLAG_EXPR), Boolean, {
@@ -50,6 +56,17 @@ async function waitForHalloweenSeedSettled(evalInContentScript, opts = {}) {
       message: 'seedHalloweenPack storage write landed but content.js never applied it (onChanged)',
     }
   );
+  await waitForCondition(() => evalInContentScript(READ_HOLLOW_FLAG_EXPR), Boolean, {
+    timeout,
+    message: 'seedHollowPack never finished writing seededHollowPack',
+  });
+  if (HOLLOW_PROBE_EFFECTS.length) {
+    await waitForCondition(
+      () => evalInContentScript('window.__ocTest.getAvailableEffectKeys()'),
+      (keys) => HOLLOW_PROBE_EFFECTS.some((k) => keys.indexOf(k) !== -1),
+      { timeout, message: 'seedHollowPack storage write landed but content.js never applied it (onChanged)' }
+    );
+  }
 }
 
 // oculist-hmql: waits, via the extension service worker, for every write background.js's
@@ -71,7 +88,7 @@ async function waitForOnInstalledSeeds(ctx, opts = {}) {
           )
       ),
     ({ s, cores }) =>
-      !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && (!(cores && cores < 4) || s.performanceMode === true)),
+      !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && s.seededHollowPack && (!(cores && cores < 4) || s.performanceMode === true)),
     {
       timeout,
       interval: 20,
