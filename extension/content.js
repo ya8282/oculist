@@ -862,6 +862,7 @@
 
     // Haunted Hollow pack effects (oculist-l0bs)
     effectGhostSweep: 'Ghost Sweep',
+    effectSpiderDrop: 'Spider Drop',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -985,7 +986,8 @@
     wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'adventure' },
     arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'adventure' },
     vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' },
-    ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' }
+    ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
+    spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -9401,6 +9403,261 @@
   // cannot reach via simulated navigation alone. Exposing the real closure directly lets a
   // test call it twice back-to-back to exercise that guard on its own terms.
   window.__ocTest.drawActiveMatchLabel = drawActiveMatchLabel;
+
+  // oculist-l0bs.4: Spider Drop, the Haunted Hollow pack's ('hollow') spider-on-a-thread
+  // effect. No playground prototype exists for it; the bead's beat spec stands in. A silk
+  // thread draws itself downward from an anchor above the match with the spider riding its
+  // tip ('descend' pose), the spider stops with its body bottom >= 8px above the match's
+  // glyph box and switches to 'hang' for two bobs, 'recoil' for one beat (thread tightens),
+  // then climbs back up the thread, which erases bottom-up. A corner web draws in at the
+  // match's top-left, OUTSIDE the glyph box plus 6px clearance, and fades with the spider.
+  // Placement is ABOVE ONLY: with no room for at least a short thread the effect suppresses
+  // (the Pumpkin Glow precedent) rather than hang over the text. Nothing is ever painted
+  // inside the match rect + 6px in any frame (promotion contract rule 10): the sprite's box
+  // bottom, even at the lowest point of a bob, sits 8px above the match.
+  // The fixed identity palette comes from the character-sheet brief; like Pumpkin Glow this
+  // effect has no flash element that would carry getEffectiveColors().beacon as an accent.
+  function animateSpiderDrop(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var BODY = '#2A2233', BODY_HI = '#52456B', BODY_SH = '#14101A', OUTLINE = '#0B0810';
+    var EYE = '#F2E94E', GLINT = '#FFFFFF', SILK = '#E6E2EE', SILK_SH = '#A9A3BD', MARK = '#C93B2B';
+
+    var VB = 64;
+    var ABOVE_GAP = 8, CLEAR = 6, EDGE = 4, MIN_THREAD = 24;
+    var scale = getBeaconScale();
+    var lite = !!settings.performanceMode;
+
+    // Viewport-fit decisions use the PRE-SCROLL viewport rect (promotion contract rule 2);
+    // everything is converted to document space only when mounted.
+    var vw = window.innerWidth;
+    var cx = rect.left + rect.width / 2;
+
+    var spSize = VB * scale;
+    var amp = 6 * scale;                         // bob depth, downward from the rest point
+    var hangBottom = rect.top - ABOVE_GAP - amp; // sprite box bottom at rest; +amp at the lowest bob
+    var spTop = hangBottom - spSize;
+    var threadLen = Math.min(110 * scale, spTop - EDGE);
+    if (!(threadLen >= MIN_THREAD)) return;      // not enough headroom: suppress, never cover text
+    var anchorY = spTop - threadLen;
+    var spLeft = Math.min(Math.max(cx - spSize / 2, EDGE), Math.max(EDGE, vw - EDGE - spSize));
+    var spX = spLeft + spSize / 2;
+    var jerk = lite ? 0 : Math.min(5 * scale, threadLen * 0.1);
+    var threadH = threadLen + amp;               // tallest the thread ever gets (bottom of a bob)
+
+    var sx = window.scrollX, sy = window.scrollY;
+
+    function el(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(n);
+      return n;
+    }
+    function finishWith(host, anims) {
+      host.__waapiAnims = (host.__waapiAnims || []).concat(anims);
+      // Removal hangs off the longest-running animation only: a delayed child animation
+      // (the web strokes) finishing early must not pull the host out from under the rest.
+      var latest = Math.max.apply(null, anims.map(function (a) { return a.effect.getComputedTiming().endTime; }));
+      anims.forEach(function (a) {
+        if (a.effect.getComputedTiming().endTime < latest) return;
+        a.finished.then(function () { host.remove(); }).catch(function () { host.remove(); });
+      });
+    }
+
+    // Phase durations, each through getBeaconDuration(); boundaries are cumulative sums, so
+    // they scale with Animation Speed instead of staying absolute.
+    var bobs = lite ? 1 : 2;
+    var dDescend = getBeaconDuration(600);
+    var dBob = getBeaconDuration(380);
+    var dRecoil = getBeaconDuration(220);
+    var dRetract = getBeaconDuration(520);
+    var tHang0 = dDescend;
+    var tRecoil0 = tHang0 + dBob * bobs;
+    var tRetract0 = tRecoil0 + dRecoil;
+    var total = tRetract0 + dRetract;
+    var fFade = (total - dRetract * 0.3) / total;
+
+    // Thread: scaleY from its top (anchor) edge, so it draws downward and erases bottom-up.
+    var threadEl = document.createElement('div');
+    threadEl.className = 'oc-beacon oc-beacon-transient oc-spiderdrop-thread';
+    threadEl.style.cssText = [
+      'position:absolute',
+      'left:' + (spX - 4 + sx) + 'px', 'top:' + (anchorY + sy) + 'px',
+      'width:8px', 'height:' + threadH + 'px',
+      'pointer-events:none', 'z-index:2147483641',
+      'transform-origin:50% 0', 'transform:scaleY(0)'
+    ].join(';');
+    var threadSvg = el('svg', { width: '8', height: String(threadH), viewBox: '0 0 8 ' + threadH }, null);
+    threadSvg.style.cssText = 'display:block;overflow:visible;';
+    el('line', { x1: '4', y1: '0', x2: '4', y2: String(threadH), stroke: SILK_SH, 'stroke-width': '3' }, threadSvg);
+    el('line', { x1: '4', y1: '0', x2: '4', y2: String(threadH), stroke: SILK, 'stroke-width': '1.4' }, threadSvg);
+    threadEl.appendChild(threadSvg);
+    mountOverlay(threadEl);
+
+    // Spider sprite: three leg poses (one visible at a time) behind a shared body.
+    var spiderEl = document.createElement('div');
+    spiderEl.className = 'oc-beacon oc-beacon-transient oc-spiderdrop';
+    spiderEl.setAttribute('data-sd-thread-len', String(threadLen));
+    spiderEl.style.cssText = [
+      'position:absolute',
+      'left:' + (spLeft + sx) + 'px', 'top:' + (anchorY + sy) + 'px',
+      'width:' + spSize + 'px', 'height:' + spSize + 'px',
+      'pointer-events:none', 'z-index:2147483642'
+    ].join(';');
+    var svg = el('svg', { width: String(spSize), height: String(spSize), viewBox: '0 0 ' + VB + ' ' + VB }, null);
+    svg.style.cssText = 'display:block;overflow:visible;';
+    spiderEl.appendChild(svg);
+
+    // Left-side legs, four per pose, three segments (three joints) each; the right side is
+    // the mirror image, so every pose has exactly eight.
+    var POSES = {
+      descend: [[27, 27, 20, 14, 12, 12, 8, 18], [26, 30, 15, 22, 8, 24, 5, 32],
+                [26, 33, 15, 32, 9, 38, 7, 46], [27, 36, 18, 40, 14, 47, 14, 55]],
+      hang:    [[27, 27, 17, 17, 8, 19, 4, 28], [26, 30, 14, 26, 5, 32, 3, 42],
+                [26, 33, 14, 36, 7, 44, 6, 55], [27, 36, 18, 44, 13, 52, 13, 61]],
+      recoil:  [[28, 27, 24, 20, 22, 26, 24, 32], [27, 30, 22, 30, 21, 36, 24, 40],
+                [27, 33, 22, 38, 22, 44, 26, 47], [28, 36, 25, 43, 25, 50, 29, 52]]
+    };
+    function legPath(pts, mirror) {
+      var d = '';
+      for (var i = 0; i < pts.length; i += 2) {
+        d += (i ? ' L ' : 'M ') + (mirror ? VB - pts[i] : pts[i]) + ' ' + pts[i + 1];
+      }
+      return d;
+    }
+    var poseGroups = {};
+    ['descend', 'hang', 'recoil'].forEach(function (name) {
+      var g = el('g', { 'data-sd-pose': name, opacity: name === 'descend' ? '1' : '0' }, svg);
+      POSES[name].forEach(function (pts) {
+        [false, true].forEach(function (mirror) {
+          var d = legPath(pts, mirror);
+          el('path', { d: d, fill: 'none', stroke: OUTLINE, 'stroke-width': '4.6', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+          el('path', { d: d, fill: 'none', stroke: BODY, 'stroke-width': '2.6', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+        });
+      });
+      poseGroups[name] = g;
+    });
+
+    // Loop where the thread attaches, abdomen (three tones) with hourglass mark, then head.
+    var LOOP = 'M 29.5 4.5 a 2.5 3.5 0 1 0 5 0 a 2.5 3.5 0 1 0 -5 0';
+    el('path', { d: LOOP, fill: 'none', stroke: SILK_SH, 'stroke-width': '2.4' }, svg);
+    el('path', { d: LOOP, fill: 'none', stroke: SILK, 'stroke-width': '1.1' }, svg);
+    el('circle', { cx: '33.5', cy: '22', r: '13', fill: BODY_SH, stroke: OUTLINE, 'stroke-width': '1.6' }, svg);
+    el('circle', { cx: '32', cy: '20', r: '12', fill: BODY }, svg);
+    if (!lite) el('ellipse', { cx: '27', cy: '14', rx: '4.5', ry: '3', fill: BODY_HI, transform: 'rotate(-35 27 14)' }, svg);
+    el('path', { d: 'M 28 14 L 36 14 L 32 20 Z M 32 20 L 36 26 L 28 26 Z', fill: MARK }, svg);
+    el('circle', { cx: '32', cy: '38', r: '9', fill: BODY, stroke: OUTLINE, 'stroke-width': '1.6' }, svg);
+    [[26, 34.5], [30, 33.2], [34, 33.2], [38, 34.5]].forEach(function (p) {
+      el('circle', { cx: String(p[0]), cy: String(p[1]), r: '1.3', fill: EYE }, svg);
+    });
+    [28.5, 35.5].forEach(function (x) {
+      el('circle', { cx: String(x), cy: '39.5', r: '2.8', fill: EYE, stroke: OUTLINE, 'stroke-width': '0.8' }, svg);
+      if (!lite) el('circle', { cx: String(x - 0.8), cy: '38.6', r: '0.9', fill: GLINT }, svg);
+    });
+    mountOverlay(spiderEl);
+
+    // Spider keyframes (sprite top relative to the anchor): descend to threadLen, bob
+    // downward (never past the 8px gap), recoil up by `jerk`, climb back to 0. The thread's
+    // scaleY keyframes share the same offsets/easings, so its bottom tracks the sprite's top.
+    var spKf = [{ offset: 0, transform: 'translateY(0px)', opacity: 1, easing: 'ease-out' }];
+    var thKf = [{ offset: 0, transform: 'scaleY(0)', easing: 'ease-out' }];
+    function addStop(t, y, easing) {
+      var off = t / total;
+      spKf.push({ offset: off, transform: 'translateY(' + y + 'px)', opacity: 1, easing: easing });
+      thKf.push({ offset: off, transform: 'scaleY(' + (y / threadH) + ')', easing: easing });
+    }
+    addStop(tHang0, threadLen, 'ease-in-out');
+    for (var b = 0; b < bobs; b++) {
+      addStop(tHang0 + dBob * (b + 0.5), threadLen + amp, 'ease-in-out');
+      addStop(tHang0 + dBob * (b + 1), threadLen, 'ease-in-out');
+    }
+    addStop(tRecoil0 + dRecoil * 0.5, threadLen - jerk, 'ease-in');
+    addStop(tRecoil0 + dRecoil, threadLen - jerk, 'ease-in');
+    // The cosmetic fade only starts for the last 30% of the climb.
+    var fadeStart = total - dRetract * 0.3;
+    var yAtFade = (threadLen - jerk) * 0.3;
+    spKf.push({ offset: fadeStart / total, transform: 'translateY(' + yAtFade + 'px)', opacity: 1, easing: 'ease-in' });
+    thKf.push({ offset: fadeStart / total, transform: 'scaleY(' + (yAtFade / threadH) + ')', easing: 'ease-in' });
+    spKf.push({ offset: 1, transform: 'translateY(0px)', opacity: 0 });
+    thKf.push({ offset: 1, transform: 'scaleY(0)' });
+
+    var spiderAnim = spiderEl.animate(spKf, { duration: total, fill: 'forwards' });
+    var threadAnim = threadEl.animate(thKf, { duration: total, fill: 'forwards' });
+
+    // Pose switches: hard cuts (paired keyframes at one offset), one animation per leg group.
+    // descend: visible [0,fD] and again from fR; hang: [fD,fH]; recoil: [fH,fR].
+    var fD = tHang0 / total, fH = tRecoil0 / total, fR = tRetract0 / total;
+    function cuts(list) {
+      var kf = [];
+      list.forEach(function (s) { kf.push({ offset: s[0], opacity: s[1] }); });
+      return kf;
+    }
+    var poseAnims = [
+      poseGroups.descend.animate(cuts([[0, 1], [fD, 1], [fD, 0], [fR, 0], [fR, 1], [1, 1]]), { duration: total, fill: 'both' }),
+      poseGroups.hang.animate(cuts([[0, 0], [fD, 0], [fD, 1], [fH, 1], [fH, 0], [1, 0]]), { duration: total, fill: 'both' }),
+      poseGroups.recoil.animate(cuts([[0, 0], [fH, 0], [fH, 1], [fR, 1], [fR, 0], [1, 0]]), { duration: total, fill: 'both' })
+    ];
+    // Animations on child nodes hang on the parent, animateTrail's own precedent.
+    finishWith(spiderEl, [spiderAnim].concat(poseAnims));
+    finishWith(threadEl, [threadAnim]);
+
+    // Corner web (full mode only): a quarter web whose vertex sits at the match's top-left
+    // corner pushed out by CLEAR, so it lives entirely up-and-left of the glyph box.
+    if (!lite) {
+      var webSize = Math.max(24, Math.min(44, rect.height * 1.4)) * scale;
+      var webLeft = rect.left - CLEAR - webSize, webTop = rect.top - CLEAR - webSize;
+      if (webLeft >= EDGE && webTop >= EDGE) {
+        var webEl = document.createElement('div');
+        webEl.className = 'oc-beacon oc-beacon-transient oc-spiderdrop-web';
+        webEl.style.cssText = [
+          'position:absolute',
+          'left:' + (webLeft + sx) + 'px', 'top:' + (webTop + sy) + 'px',
+          'width:' + webSize + 'px', 'height:' + webSize + 'px',
+          'pointer-events:none', 'z-index:2147483641'
+        ].join(';');
+        var wsvg = el('svg', { width: String(webSize), height: String(webSize), viewBox: '0 0 40 40' }, null);
+        wsvg.style.cssText = 'display:block;overflow:visible;';
+        webEl.appendChild(wsvg);
+        // Vertex (38,38): five radials from 180 to 270 degrees, three sagging rings.
+        var V = 38, R = 36, wd = '';
+        var webPt = function (r, i) {
+          var a = (180 + 22.5 * i) * Math.PI / 180;
+          return [V + r * Math.cos(a), V + r * Math.sin(a)];
+        };
+        var rnd = function (n) { return Math.round(n * 100) / 100; };
+        for (var i = 0; i < 5; i++) {
+          var e = webPt(R, i);
+          wd += 'M ' + V + ' ' + V + ' L ' + rnd(e[0]) + ' ' + rnd(e[1]) + ' ';
+        }
+        [12, 22, 32].forEach(function (r) {
+          var p = webPt(r, 0);
+          wd += 'M ' + rnd(p[0]) + ' ' + rnd(p[1]) + ' ';
+          for (var j = 0; j < 4; j++) {
+            var q = webPt(r, j + 1);
+            var m = webPt(r * 0.88, j + 0.5);
+            wd += 'Q ' + rnd(m[0]) + ' ' + rnd(m[1]) + ' ' + rnd(q[0]) + ' ' + rnd(q[1]) + ' ';
+          }
+        });
+        var webPaths = [[SILK_SH, '2.6'], [SILK, '1.2']].map(function (s) {
+          return el('path', {
+            d: wd, fill: 'none', stroke: s[0], 'stroke-width': s[1], 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+            pathLength: '1', 'stroke-dasharray': '1', 'stroke-dashoffset': '1'
+          }, wsvg);
+        });
+        mountOverlay(webEl);
+        var dWeb = getBeaconDuration(500);
+        var webAnims = webPaths.map(function (p) {
+          return p.animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }],
+            { duration: dWeb, delay: dDescend, easing: 'ease-out', fill: 'both' });
+        });
+        webAnims.push(webEl.animate([
+          { offset: 0, opacity: 1 }, { offset: fFade, opacity: 1 }, { offset: 1, opacity: 0 }
+        ], { duration: total, fill: 'forwards' }));
+        finishWith(webEl, webAnims);
+      }
+    }
+  }
 
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
   // entry: the registry's run(rect) contract only gets a rect, with no access to the
