@@ -5,6 +5,17 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
+## [1.9.0] — 2026-10-11
+
+### Added
+
+* **Haunted Hollow pack.** A third effect pack with eleven new Halloween-season highlight
+  effects: Ghost Sweep, Spider Drop, Witch Flyby, Black Cat Pounce, Grave Hands, Ouija
+  Planchette, Moonrise, Trick-or-Treat, Possessed Text, Cursed Rune, and Mummy Unwrap. Like
+  Halloween and Adventure, it ships free and turned on by default, once, for new installs and
+  everyone already running Oculist. Switch it off from the pack list in the settings panel if
+  you prefer fewer effects. None of the effects paint over or recolour the matched text.
+
 ## [1.8.0] — 2026-10-09
 
 ### Added

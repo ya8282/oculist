@@ -38,8 +38,9 @@ Oculist features a comprehensive suite of vision-specific enhancements to suppor
 ## Effect Packs (since v1.8.0)
 
 Oculist ships with twelve core effects plus effect packs, switched on and off individually from
-the settings panel. Two packs ship, Halloween and Adventure. Both come preloaded, free, and on by
-default, for new installs and existing users alike. Turn a pack off from the settings panel if
+the settings panel. Three packs ship, Halloween, Adventure, and Haunted Hollow (since v1.9.0, eleven more
+Halloween-season effects). All three come preloaded, free, and on by default, for new installs
+and existing users alike. Turn a pack off from the settings panel if
 you'd rather stick to the core effects; you can turn it back on the same way.
 
 ## Reliability & Performance Features (since v1.5.0)
