@@ -870,6 +870,7 @@
     effectMoonrise: 'Moonrise',
     effectTrickOrTreat: 'Trick-or-Treat',
     effectPossessedText: 'Possessed Text',
+    effectCursedRune: 'Cursed Rune',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -1001,7 +1002,8 @@
     ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'hollow' },
     moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'hollow' },
     trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' },
-    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'hollow' }
+    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'hollow' },
+    cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -12110,6 +12112,223 @@
         { transform: 'scaleX(' + grown + ')', offset: 1 }
       ], { duration: D, easing: 'linear', fill: 'both' }));
     }
+  }
+
+  // oculist-l0bs.11: Cursed Rune, Haunted Hollow pack (pack II). A violet sigil circle draws
+  // itself AROUND the match: the outer ring sweeps clockwise as an open arc from twelve o'clock,
+  // then the inner ring, four rune glyphs appear in the band BETWEEN the rings, and four candles
+  // stand at the cardinal points of the outer ring and light (three flame states on a fixed
+  // beat). The complete sigil pulses ~5% larger (bright tone to the runes, dark tone to the
+  // outer ring), then everything fades together. There is no prototype: built from the approved
+  // character sheet (draw / complete / pulse, ring and rune and candle parts) as flat inline SVG.
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the sheet's inscribed pentagram would cross
+  // the matched text, so it is omitted. The sigil is an ELLIPSE whose INNER ring circumscribes the
+  // glyph box inflated by 6px of clearance (radii = sqrt(2) x half the inflated box, which is the
+  // exact ellipse through that rectangle's corners, plus 4px so the stroke clears it, and never
+  // less than half the box + 12px). Everything else sits further out, and the pulse only scales
+  // OUTWARD. The page's text is never recoloured, hidden, blurred or covered.
+  //
+  // PLACEMENT: centred on the match. The fit is judged on the PRE-SCROLL viewport rect; if the
+  // sigil does not fit, the band, runes and candles shrink step by step to the smallest legal size
+  // (band 8px: inner ring + 8px) and then it is suppressed. The inner ring never shrinks below the
+  // protected rect. Only the final left/top are converted to document space (rule 2).
+  //
+  // Fixed identity palette from the sheet brief (no effect paint uses the beacon colour).
+  // LITE MODE drops: the outline underlay, wax shadow tone, flame mid/core tones, the flame
+  // flicker (one static outline flame), and all fills (outline-only fallback from the sheet). It
+  // keeps the double ring, the clockwise draw-in, the four runes, four candles and the pulse.
+  function animateCursedRune(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var SIG = '#B58CFF', BRIGHT = '#E3D2FF', DARK = '#5D3DA8', OUTLINE = '#1A1030';
+    var WAX = '#F2EEF8', WAX_SH = '#BDB4D6';
+    var FL_OUT = '#E8A53A', FL_MID = '#FFD45A', FL_CORE = '#FFF1A6', WICK = '#17121F';
+    var CLEAR = 6, EDGE = 4, PULSE = 1.05;
+    var u = getBeaconScale();
+    var lite = !!settings.performanceMode;
+
+    // Geometry: the inner ring circumscribes the protected rect.
+    var hw = rect.width / 2 + CLEAR, hh = rect.height / 2 + CLEAR;
+    var aIn = Math.max(Math.SQRT2 * hw, rect.width / 2 + 12) + 4;
+    var bIn = Math.max(Math.SQRT2 * hh, rect.height / 2 + 12) + 4;
+
+    // Viewport-fit decisions use the PRE-SCROLL viewport rect (contract rule 2).
+    var vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+    var vh = window.innerHeight;
+    var cxv = rect.left + rect.width / 2, cyv = rect.top + rect.height / 2;
+
+    var K_STEPS = [1, 0.85, 0.7, 0.6, 0.5];   // 0.5 -> band of 8px at scale 1: the floor
+    var k = 0, X = 0, Y = 0, band = 0, cs = 0, aOut = 0, bOut = 0, i0;
+    for (i0 = 0; i0 < K_STEPS.length; i0++) {
+      k = K_STEPS[i0];
+      band = 16 * u * k;
+      cs = 0.8 * u * k;                          // candle unit
+      aOut = aIn + band;
+      bOut = bIn + band;
+      X = (aOut + 4 * cs) * PULSE + 2;
+      Y = (bOut + 15.5 * cs) * PULSE + 2;
+      if (cxv - X >= EDGE && cxv + X <= vw - EDGE && cyv - Y >= EDGE && cyv + Y <= vh - EDGE) break;
+    }
+    if (i0 === K_STEPS.length) return;           // no legal size: suppress, never cover text
+
+    function el(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var key in attrs) n.setAttribute(key, attrs[key]);
+      if (parent) parent.appendChild(n);
+      return n;
+    }
+    function rnd(n) { return Math.round(n * 100) / 100; }
+
+    // Phases, each through getBeaconDuration(); boundaries are cumulative sums.
+    var dOuter = getBeaconDuration(650), dInner = getBeaconDuration(500), dRunes = getBeaconDuration(400);
+    var dLight = getBeaconDuration(250), dFlick = getBeaconDuration(600), dPulse = getBeaconDuration(450);
+    var dFade = getBeaconDuration(350);
+    var tOuter = dOuter, tInner = tOuter + dInner, tRunes = tInner + dRunes, tLight = tRunes + dLight;
+    var tFlick = tLight + dFlick, tPulse = tFlick + dPulse, total = tPulse + dFade;
+    var fr = function (t) { return Math.round(Math.min(1, Math.max(0, t / total)) * 1e6) / 1e6; };
+
+    var W = rnd(2 * X), H = rnd(2 * Y);
+    var host = document.createElement('div');
+    host.className = 'oc-beacon oc-beacon-transient oc-cursedrune';
+    host.setAttribute('data-cr-k', String(k));
+    host.setAttribute('data-cr-band', String(rnd(band)));
+    host.style.cssText = [
+      'position:absolute',
+      'left:' + rnd(cxv - X + window.scrollX) + 'px', 'top:' + rnd(cyv - Y + window.scrollY) + 'px',
+      'width:' + W + 'px', 'height:' + H + 'px',
+      'pointer-events:none', 'z-index:2147483642'
+    ].join(';');
+    var svg = el('svg', { width: String(W), height: String(H), viewBox: '0 0 ' + W + ' ' + H }, null);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    host.appendChild(svg);
+    var anims = [];
+
+    var fadeG = el('g', {}, svg);
+    var pulseG = el('g', {}, fadeG);
+    pulseG.style.transformOrigin = rnd(X) + 'px ' + rnd(Y) + 'px';
+
+    // Rings: pathLength 1, drawn clockwise from the top via stroke-dashoffset.
+    function ringD(a, b) {
+      return 'M' + rnd(X) + ' ' + rnd(Y - b) + ' A' + rnd(a) + ' ' + rnd(b) + ' 0 1 1 ' + rnd(X) + ' ' + rnd(Y + b) +
+        ' A' + rnd(a) + ' ' + rnd(b) + ' 0 1 1 ' + rnd(X) + ' ' + rnd(Y - b);
+    }
+    function ring(name, a, b, t0, t1) {
+      var g = el('g', { 'data-cr-ring': name }, pulseG);
+      var paths = [];
+      if (!lite) paths.push(el('path', { d: ringD(a, b), fill: 'none', stroke: OUTLINE, 'stroke-width': '3.4', pathLength: '1', 'data-cr-underlay': '1' }, g));
+      var line = el('path', { d: ringD(a, b), fill: 'none', stroke: SIG, 'stroke-width': '1.5', pathLength: '1', 'data-cr-line': name }, g);
+      paths.push(line);
+      paths.forEach(function (p) {
+        p.style.strokeDasharray = '1 2';
+        p.style.strokeDashoffset = '1';
+        anims.push(p.animate([
+          { offset: 0, strokeDashoffset: 1 },
+          { offset: fr(t0), strokeDashoffset: 1, easing: 'ease-in-out' },
+          { offset: fr(t1), strokeDashoffset: 0 },
+          { offset: 1, strokeDashoffset: 0 }
+        ], { duration: total, fill: 'both' }));
+      });
+      return line;
+    }
+    var outerLine = ring('outer', aOut, bOut, 0, tOuter);
+    ring('inner', aIn, bIn, tOuter, tInner);
+    // Pulse: the dark tone moves to the outer ring.
+    anims.push(outerLine.animate([
+      { offset: 0, stroke: SIG }, { offset: fr(tFlick), stroke: SIG, easing: 'ease-out' },
+      { offset: fr(tFlick + dPulse / 2), stroke: DARK }, { offset: 1, stroke: DARK }
+    ], { duration: total, fill: 'both' }));
+
+    // Four runes in the band between the rings (diagonal positions, mid-band), upright.
+    var RUNES = [
+      'M5 0 L5 10 M1 4 L5 0 L9 4',
+      'M1 0 L9 10 M9 0 L1 10',
+      'M2 0 L2 10 L8 10 M2 5 L7 5',
+      'M1 5 L5 0 L9 5 L5 10 Z M5 3 L5 7'
+    ];
+    var am = aIn + band / 2, bm = bIn + band / 2;
+    var rs = (band * 0.5) / 10;
+    RUNES.forEach(function (d, i) {
+      var th = (45 + 90 * i) * Math.PI / 180;
+      var px = X + am * Math.cos(th), py = Y + bm * Math.sin(th);
+      var g = el('g', { 'data-cr-rune': String(i), transform: 'translate(' + rnd(px - 5 * rs) + ' ' + rnd(py - 5 * rs) + ') scale(' + Math.round(rs * 1e3) / 1e3 + ')' }, pulseG);
+      var inner = el('g', { opacity: '0' }, g);
+      var glyph = el('path', { d: d, fill: 'none', stroke: SIG, 'stroke-width': String(rnd(1.5 / rs)), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, inner);
+      var t0 = tInner + i * (dRunes / 4);
+      anims.push(inner.animate([
+        { offset: 0, opacity: 0 }, { offset: fr(t0), opacity: 0 },
+        { offset: fr(t0 + dRunes / 6), opacity: 1 }, { offset: 1, opacity: 1 }
+      ], { duration: total, fill: 'both' }));
+      // Pulse: the bright tone moves to the runes.
+      anims.push(glyph.animate([
+        { offset: 0, stroke: SIG }, { offset: fr(tFlick), stroke: SIG, easing: 'ease-out' },
+        { offset: fr(tFlick + dPulse / 2), stroke: BRIGHT }, { offset: 1, stroke: BRIGHT }
+      ], { duration: total, fill: 'both' }));
+    });
+
+    // Four candles at the cardinal points of the outer ring. Local units: body y -5.5..5.5, wick
+    // above it, flame base at y -7.5. Three flame states: low, tall, flicker-left.
+    function flame(h, lean, w, base) {
+      return 'M0 ' + base + ' C ' + rnd(-w) + ' ' + rnd(base - h * 0.35) + ' ' + rnd(-w * 0.4 + lean * 0.5) + ' ' + rnd(base - h * 0.75) + ' ' + rnd(lean) + ' ' + rnd(base - h) +
+        ' C ' + rnd(w * 0.4 + lean * 0.5) + ' ' + rnd(base - h * 0.75) + ' ' + rnd(w) + ' ' + rnd(base - h * 0.35) + ' 0 ' + base + ' Z';
+    }
+    var STATES = [[4.5, 0], [8, 0], [7, -1.6]];     // [height, lean]
+    var SEQS = [[1, 2, 0, 1, 2, 1], [2, 1, 1, 0, 2, 1], [0, 2, 1, 2, 1, 2], [1, 0, 2, 1, 1, 2]];
+    var beat = getBeaconDuration(110);
+    var CANDLES = [['top', X, Y - bOut], ['right', X + aOut, Y], ['bottom', X, Y + bOut], ['left', X - aOut, Y]];
+    CANDLES.forEach(function (c, ci) {
+      var outer = el('g', { 'data-cr-candle': c[0], transform: 'translate(' + rnd(c[1]) + ' ' + rnd(c[2]) + ') scale(' + Math.round(cs * 1e3) / 1e3 + ')' }, pulseG);
+      var g = el('g', { opacity: '0' }, outer);
+      var lw = String(rnd(1 / cs));
+      if (lite) {
+        el('rect', { x: '-3', y: '-5.5', width: '6', height: '11', rx: '1', fill: 'none', stroke: SIG, 'stroke-width': lw }, g);
+        el('path', { d: flame(8, 0, 2.6, -7.5), fill: 'none', stroke: SIG, 'stroke-width': lw, 'data-cr-flame': '1' }, g);
+      } else {
+        el('rect', { x: '-3', y: '-5.5', width: '6', height: '11', rx: '1', fill: WAX, stroke: OUTLINE, 'stroke-width': '0.9' }, g);
+        el('rect', { x: '0.6', y: '-4.8', width: '2.1', height: '9.6', rx: '0.6', fill: WAX_SH }, g);
+        el('rect', { x: '-0.45', y: '-7.7', width: '0.9', height: '2.4', fill: WICK }, g);
+        STATES.forEach(function (s, si) {
+          var fg = el('g', { 'data-cr-flame': String(si), opacity: '0' }, g);
+          el('path', { d: flame(s[0], s[1], 2.6, -7.5), fill: FL_OUT, stroke: OUTLINE, 'stroke-width': '0.7' }, fg);
+          el('path', { d: flame(s[0] * 0.66, s[1] * 0.66, 1.6, -7.7), fill: FL_MID }, fg);
+          el('path', { d: flame(s[0] * 0.34, s[1] * 0.34, 0.9, -7.9), fill: FL_CORE }, fg);
+          // Fixed beat, deterministic state sequence staggered per candle; rests on 'tall'.
+          var kf = [], cur = 0, tt;
+          var seg = function (a, b, st) {
+            kf.push({ offset: fr(a), opacity: st === si ? 1 : 0 });
+            kf.push({ offset: fr(b), opacity: st === si ? 1 : 0 });
+          };
+          seg(0, tLight, 1);
+          for (tt = tLight; tt < tFlick; tt += beat) seg(tt, Math.min(tFlick, tt + beat), SEQS[ci][cur++ % SEQS[ci].length]);
+          seg(tFlick, total, 1);
+          anims.push(fg.animate(kf, { duration: total, fill: 'both' }));
+        });
+      }
+      g.style.transformOrigin = '0px 0px';
+      anims.push(g.animate([
+        { offset: 0, opacity: 0, transform: 'scale(0)' }, { offset: fr(tRunes), opacity: 0, transform: 'scale(0)', easing: 'ease-out' },
+        { offset: fr(tLight), opacity: 1, transform: 'scale(1)' }, { offset: 1, opacity: 1, transform: 'scale(1)' }
+      ], { duration: total, fill: 'both' }));
+    });
+
+    // Pulse: ~5% larger about the sigil centre (outward only), then everything fades together.
+    anims.push(pulseG.animate([
+      { offset: 0, transform: 'scale(1)' }, { offset: fr(tFlick), transform: 'scale(1)', easing: 'ease-out' },
+      { offset: fr(tFlick + dPulse / 2), transform: 'scale(' + PULSE + ')' }, { offset: 1, transform: 'scale(' + PULSE + ')' }
+    ], { duration: total, fill: 'both' }));
+    anims.push(fadeG.animate([
+      { offset: 0, opacity: 1 }, { offset: fr(tPulse), opacity: 1, easing: 'ease-in' }, { offset: 1, opacity: 0 }
+    ], { duration: total, fill: 'both' }));
+
+    // Animations on child nodes hang on the host, animateTrail's own precedent.
+    mountOverlay(host);
+    host.__waapiAnims = (host.__waapiAnims || []).concat(anims);
+    var latest = Math.max.apply(null, anims.map(function (a) { return a.effect.getComputedTiming().endTime; }));
+    anims.forEach(function (a) {
+      if (a.effect.getComputedTiming().endTime < latest) return;
+      a.finished.then(function () { host.remove(); }).catch(function () { host.remove(); });
+    });
   }
 
   function animate(rect) {
