@@ -864,6 +864,7 @@
     // Haunted Hollow pack effects (oculist-l0bs)
     effectGhostSweep: 'Ghost Sweep',
     effectSpiderDrop: 'Spider Drop',
+    effectBlackCatPounce: 'Black Cat Pounce',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -989,7 +990,8 @@
     vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' },
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
     spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
-    witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' }
+    witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -8146,6 +8148,308 @@
 
     done(witch, opacityAnim);
     witch.__waapiAnims.forEach(function (a) { if (a !== opacityAnim) a.finished.catch(function () { witch.remove(); }); });
+  }
+
+  // oculist-l0bs.6: Black Cat Pounce, Haunted Hollow pack (pack II). A black cat appears
+  // sitting on the page beside the match -- glowing eyes first, body a beat later --
+  // crouches, arches with a puffed tail (the startle beat), pounces, and holds a claw-swipe
+  // pose while three slash marks flash in BESIDE the match, then fades out. There is no
+  // prototype: this is built directly from the approved character sheet's four canonical
+  // poses (sit, crouch, arch, pounce-swipe), redrawn as flat inline SVG with fur built from a
+  // few large tufts. All poses face right; the cat is mirrored (a static transform on the
+  // inner <g>, never on the animated wrapper) when it sits on the match's right.
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the cat's whole box and the swipe-mark
+  // box never enter the match rect plus CLEAR (6px) in ANY frame. The wrapper only ever
+  // translates TOWARD its final resting x (monotonic, never past it), and that final box
+  // edge, the claw tip inside it, and the swipe marks all sit in the gap short of the
+  // protected rect, so the pounce arc cannot overshoot it. The page's text is never
+  // recoloured, hidden or covered.
+  //
+  // PLACEMENT: the side with more room in the PRE-SCROLL viewport is tried first (ties go to
+  // the left, where the cat naturally faces the match), then the opposite side; if neither
+  // fits, the effect is suppressed. The fit check is made in viewport space; only the final
+  // left/top are converted to document space (rule 2).
+  //
+  // No neighbouring character effect (Pumpkin Glow, Vampire Bat) uses the effective beacon
+  // colour as an accent on its figure, so the fixed identity palette from the sheet brief is
+  // used throughout.
+  //
+  // LITE MODE drops: the eye-glow fade-in (eyes and body appear together), the eye-glow
+  // halo, and the arch beat. It keeps the sit, crouch, pounce and claw swipe.
+  function animateBlackCatPounce(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var FUR = '#1C1826', FUR_HI = '#4A4366', FUR_SH = '#0C0A12', OUTLINE = '#05040A';
+    var EYE = '#F2E94E', EYE_SLIT = '#0C0A12', EYE_GLINT = '#FFFFFF';
+    var PINK = '#D98BA8', WHISKER = '#CFC9E0';
+    var SWIPE = '#F2EEF8', SWIPE_SH = '#A9A3BD';
+
+    var VB_W = 134, VB_H = 90;          // shared pose viewBox, same scale and ground line
+    var GROUND_Y = 86;                  // viewBox y of the shared ground line
+    var PAW_Y = 44;                     // viewBox y of the pounce pose's claw tip
+    var MARK_VB_W = 36, MARK_VB_H = 44;
+    var CLEAR = 6, EDGE = 4, MARK_GAP = 2;
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var beaconScale = getBeaconScale();
+    var f = getBeaconDuration(1);
+
+    // Sizing: roughly 80px tall at Beacon Size M for a normal body-text match.
+    var catH = Math.max(64, Math.min(90, rect.height * 3.4)) * beaconScale;
+    var u = catH / VB_H;
+    var catW = VB_W * u;
+    var markW = MARK_VB_W * u * 0.9, markH = MARK_VB_H * u * 0.9;
+    var hop = catW * 0.45;              // how far the cat travels in the pounce
+    var markOverlap = markW * 0.35;     // the claw tip reaches into the mark box by this much
+
+    // ---- Placement (viewport space, pre-scroll) ----
+    // Gap between the protected rect edge and the cat box's near edge: the mark box plus
+    // MARK_GAP, minus the overlap the claw tip reaches into.
+    var nearGap = CLEAR + MARK_GAP + markW - markOverlap;
+    var leftFits = rect.left - nearGap - catW - hop >= EDGE;
+    var rightFits = rect.right + nearGap + catW + hop <= vw - EDGE;
+    var roomLeft = rect.left, roomRight = vw - rect.right;
+    var side;                           // side of the MATCH the cat sits on
+    if (roomRight > roomLeft) side = rightFits ? 'right' : (leftFits ? 'left' : null);
+    else side = leftFits ? 'left' : (rightFits ? 'right' : null);
+    if (!side) return; // suppress: neither side fits
+    var dir = side === 'left' ? 1 : -1; // direction the cat faces and pounces (toward the match)
+
+    var boxLeft = side === 'left' ? rect.left - nearGap - catW : rect.right + nearGap;
+    var boxTop = rect.top + rect.height - GROUND_Y * u;   // feet on the match's line
+    var minTop = EDGE, maxTop = vh - EDGE - catH;
+    if (maxTop >= minTop) boxTop = Math.max(minTop, Math.min(maxTop, boxTop));
+    var arc = Math.max(0, Math.min(catH * 0.25, boxTop - EDGE));
+    var landY = -0.35 * arc;
+
+    var docLeft = boxLeft + window.scrollX, docTop = boxTop + window.scrollY;
+
+    // Swipe-mark box: in the gap between the claw tip and the protected rect, never in it.
+    var markLeft = side === 'left' ? rect.left - CLEAR - MARK_GAP - markW : rect.right + CLEAR + MARK_GAP;
+    var markTop = boxTop + PAW_Y * u + landY - markH / 2;
+
+    // ---- Timeline (base ms, scaled through getBeaconDuration) ----
+    var T = lite
+      ? { crouch: 800, arch: 1500, pounce: 1500, land: 2000, markStart: 2000, markDur: 600, holdEnd: 2800, dur: 3200 }
+      : { crouch: 800, arch: 1500, pounce: 2000, land: 2500, markStart: 2500, markDur: 600, holdEnd: 3300, dur: 3700 };
+    var DUR = T.dur;
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function fur(d, parent, fill) {
+      return addShape('path', { d: d, fill: fill || FUR, stroke: OUTLINE, 'stroke-width': '1.6', 'stroke-linejoin': 'round' }, parent);
+    }
+    function flat(d, fill, parent) {
+      return addShape('path', { d: d, fill: fill }, parent);
+    }
+    function whiskers(parent, x, y) {
+      [[0, -3], [0, 2]].forEach(function (o) {
+        addShape('path', { d: 'M ' + x + ' ' + (y + o[1]) + ' L ' + (x + 12) + ' ' + (y + o[1] * 2.2 - 2), stroke: WHISKER, 'stroke-width': '0.9', 'stroke-linecap': 'round', fill: 'none' }, parent);
+      });
+    }
+    function eyePair(parent, x1, x2, y, ry, rx) {
+      [x1, x2].forEach(function (x) {
+        addShape('ellipse', { cx: x, cy: y, rx: rx, ry: ry, fill: EYE }, parent);
+        addShape('ellipse', { cx: x + 0.3, cy: y, rx: 0.9, ry: ry * 0.85, fill: EYE_SLIT }, parent);
+        addShape('circle', { cx: x - 0.9, cy: y - ry * 0.45, r: '0.8', fill: EYE_GLINT }, parent);
+      });
+    }
+
+    // ---- DOM ----
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient oc-blackcat';
+    wrap.setAttribute('data-blackcat', 'cat');
+    wrap.setAttribute('data-bc-side', side);
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + catW + 'px', 'height:' + catH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:' + (lite ? 0 : 1),
+      'transform:translate(' + (-dir * hop) + 'px,0px)'
+    ].join(';');
+    mountOverlay(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(catW));
+    svg.setAttribute('height', String(catH));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    wrap.appendChild(svg);
+
+    // Mirroring lives on this static inner group so the wrapper's own WAAPI transform is
+    // never fighting it.
+    var root = addShape('g', side === 'left' ? {} : { 'data-bc-mirrored': '1', transform: 'translate(' + VB_W + ' 0) scale(-1 1)' }, svg);
+
+    // POSE 1: sit -- upright, tail curled around the feet. Eyes are their own group so they
+    // can fade in a beat before the body.
+    var sit = addShape('g', { 'data-bc-pose': 'sit' }, root);
+    var sitBody = addShape('g', { 'data-bc-part': 'body' }, sit);
+    fur('M 28 84 C 28 79 36 80 42 81 L 72 81 C 82 81 84 88 74 88 L 34 88 C 29 88 28 86 28 84 Z', sitBody, FUR_SH);
+    fur('M 32 84 C 24 68 28 50 40 38 L 46 30 L 64 30 C 72 40 74 54 72 66 C 72 76 68 82 64 84 Z', sitBody);
+    flat('M 56 44 C 60 54 61 68 59 82 L 65 82 C 67 68 67 54 63 44 Z', FUR_HI, sitBody);
+    flat('M 32 84 C 26 70 30 56 38 52 C 42 62 44 74 46 84 Z', FUR_SH, sitBody);
+    fur('M 44 17 L 45 2 L 54 10 Z', sitBody);
+    fur('M 60 10 L 69 2 L 70 17 Z', sitBody);
+    flat('M 46 14 L 46.5 6 L 51 11 Z', PINK, sitBody);
+    flat('M 64 11 L 68 6 L 68.5 14 Z', PINK, sitBody);
+    fur('M 43 22 C 43 12 52 9 58 9 C 66 9 72 14 72 22 C 72 30 64 34 57 34 C 49 34 43 30 43 22 Z', sitBody);
+    flat('M 46 14 C 50 10 58 9 64 10 C 58 12 52 14 46 14 Z', FUR_HI, sitBody);
+    flat('M 70 25 L 73 25 L 71.5 27 Z', PINK, sitBody);
+    whiskers(sitBody, 70, 27);
+    var sitEyes = addShape('g', { 'data-bc-part': 'eyes' }, sit);
+    if (!lite) {
+      // Eye-glow halo: two flat translucent discs (no filter, no box-shadow). Full mode only.
+      addShape('circle', { cx: 55, cy: 21, r: '6.5', fill: EYE, 'fill-opacity': '0.22', 'data-bc-part': 'glow' }, sitEyes);
+      addShape('circle', { cx: 65, cy: 21, r: '6.5', fill: EYE, 'fill-opacity': '0.22', 'data-bc-part': 'glow' }, sitEyes);
+    }
+    eyePair(sitEyes, 55, 65, 21, 3.6, 3);
+
+    // POSE 2: crouch -- chest low, rear up, tail low and flicking, eyes narrowed.
+    var crouch = addShape('g', { 'data-bc-pose': 'crouch', opacity: '0' }, root);
+    fur('M 16 58 C 6 56 2 68 6 76 C 8 80 14 78 11 74 C 9 68 14 64 20 66 Z', crouch, FUR_SH);
+    fur('M 14 60 C 14 48 26 44 38 48 C 54 52 70 62 86 68 L 92 74 L 92 84 L 30 84 C 18 84 12 72 14 60 Z', crouch);
+    flat('M 22 52 C 30 46 40 48 46 52 C 38 52 28 54 22 58 Z', FUR_HI, crouch);
+    fur('M 88 80 L 118 82 C 122 82 122 88 118 88 L 86 88 Z', crouch, FUR_SH);
+    fur('M 92 59 L 94 47 L 102 56 Z', crouch);
+    fur('M 106 56 L 114 47 L 113 62 Z', crouch);
+    flat('M 95 56 L 95.5 51 L 99 55 Z', PINK, crouch);
+    fur('M 88 68 C 88 59 96 56 102 56 C 110 56 116 61 116 69 C 116 77 108 80 101 80 C 94 80 88 76 88 68 Z', crouch);
+    flat('M 112 70 L 115 70 L 113.5 72 Z', PINK, crouch);
+    whiskers(crouch, 114, 72);
+    eyePair(crouch, 98, 107, 67, 1.7, 3);
+
+    // POSE 3: arch -- back arched, big puffed tail straight up, three large spine tufts.
+    var arch = addShape('g', { 'data-bc-pose': 'arch', opacity: '0' }, root);
+    fur('M 22 62 C 8 52 8 22 16 3 C 21 10 26 6 30 12 C 35 22 33 44 30 60 Z', arch, FUR_SH);
+    flat('M 17 12 C 22 18 26 20 28 26 C 24 24 20 22 17 12 Z', FUR_HI, arch);
+    fur('M 24 58 L 36 58 L 36 86 L 20 86 L 24 78 Z', arch, FUR_SH);
+    fur('M 78 56 L 90 56 L 92 86 L 78 86 Z', arch, FUR_SH);
+    fur('M 22 62 C 22 38 50 22 72 30 C 88 36 92 50 90 62 C 82 58 70 54 52 54 C 40 54 30 58 22 62 Z', arch);
+    fur('M 40 33 L 44 21 L 51 30 Z', arch);
+    fur('M 54 28 L 59 17 L 65 28 Z', arch);
+    fur('M 68 29 L 74 19 L 78 32 Z', arch);
+    flat('M 36 40 C 46 30 60 28 70 32 C 58 33 46 36 36 40 Z', FUR_HI, arch);
+    fur('M 92 38 L 93 25 L 101 34 Z', arch);
+    fur('M 106 35 L 114 26 L 112 41 Z', arch);
+    flat('M 95 35 L 95.5 30 L 99 34 Z', PINK, arch);
+    fur('M 88 46 C 88 37 96 34 102 34 C 110 34 116 39 116 47 C 116 55 108 58 101 58 C 94 58 88 54 88 46 Z', arch);
+    flat('M 112 48 L 115 48 L 113.5 50 Z', PINK, arch);
+    whiskers(arch, 114, 50);
+    eyePair(arch, 98, 107, 45, 2.2, 3);
+
+    // POSE 4: pounce swipe -- airborne, front paw extended with three claws, rear legs trailing.
+    var pounce = addShape('g', { 'data-bc-pose': 'pounce', opacity: '0' }, root);
+    fur('M 22 38 C 10 30 6 22 12 20 C 20 18 28 28 36 32 Z', pounce, FUR_SH);
+    fur('M 24 44 L 6 58 L 10 64 L 30 54 Z', pounce, FUR_SH);
+    fur('M 32 52 L 18 68 L 24 71 L 40 56 Z', pounce, FUR_SH);
+    fur('M 20 40 C 30 30 56 28 78 32 C 92 34 98 40 102 46 L 98 56 C 82 56 60 58 40 58 C 28 58 18 52 20 40 Z', pounce);
+    flat('M 30 36 C 44 31 62 31 78 35 C 62 36 44 38 30 42 Z', FUR_HI, pounce);
+    fur('M 96 48 L 118 40 L 124 44 L 120 51 L 98 58 Z', pounce);
+    flat('M 124 38 L 131 36 L 127 42 Z', SWIPE, pounce);
+    flat('M 126 43 L 133 43 L 128 48 Z', SWIPE, pounce);
+    flat('M 123 49 L 130 51 L 124 54 Z', SWIPE, pounce);
+    fur('M 96 34 L 98 22 L 106 31 Z', pounce);
+    fur('M 109 31 L 116 24 L 116 38 Z', pounce);
+    flat('M 99 31 L 99.5 26 L 103 30 Z', PINK, pounce);
+    fur('M 92 42 C 92 34 99 31 105 31 C 113 31 118 36 118 43 C 118 50 111 53 104 53 C 97 53 92 49 92 42 Z', pounce);
+    flat('M 114 44 L 117 44 L 115.5 46 Z', PINK, pounce);
+    whiskers(pounce, 116, 46);
+    eyePair(pounce, 101, 110, 40, 1.8, 3);
+
+    // ---- Swipe marks: three curved tapered slashes, in the gap beside the match ----
+    var marks = document.createElement('div');
+    marks.className = 'oc-beacon oc-beacon-transient oc-blackcat-swipe';
+    marks.setAttribute('data-blackcat', 'swipe');
+    marks.style.cssText = [
+      'position:absolute',
+      'left:' + (markLeft + window.scrollX) + 'px', 'top:' + (markTop + window.scrollY) + 'px',
+      'width:' + markW + 'px', 'height:' + markH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    mountOverlay(marks);
+    var mSvg = document.createElementNS(NS, 'svg');
+    mSvg.setAttribute('width', String(markW));
+    mSvg.setAttribute('height', String(markH));
+    mSvg.setAttribute('viewBox', '0 0 ' + MARK_VB_W + ' ' + MARK_VB_H);
+    mSvg.style.cssText = 'display:block;overflow:hidden;';
+    marks.appendChild(mSvg);
+    var mRoot = addShape('g', side === 'left' ? {} : { transform: 'translate(' + MARK_VB_W + ' 0) scale(-1 1)' }, mSvg);
+    [0, 8, 16].forEach(function (s) {
+      var d = 'M ' + (1 + s) + ' 41 Q ' + (1 + s) + ' 14 ' + (16 + s) + ' 2 Q ' + (11 + s) + ' 24 ' + (1 + s) + ' 41 Z';
+      addShape('path', { d: d, fill: SWIPE_SH, transform: 'translate(1.5 1.5)' }, mRoot);
+      addShape('path', { d: d, fill: SWIPE }, mRoot);
+    });
+
+    // ---- Animations ----
+    function track(el, list, a) {
+      list.push(a);
+      a.finished.then(function () { el.remove(); }).catch(function () { el.remove(); });
+      return a;
+    }
+    var catAnims = [];
+    function visible(node, a, b) {
+      // Hard-cut visibility window [a,b] (ms of the base timeline) -- duplicate offsets give
+      // a discrete swap, not a cross-fade.
+      var kf = [];
+      if (a <= 0) kf.push({ opacity: 1, offset: 0 });
+      else { kf.push({ opacity: 0, offset: 0 }, { opacity: 0, offset: a / DUR }, { opacity: 1, offset: a / DUR }); }
+      if (b >= DUR) kf.push({ opacity: 1, offset: 1 });
+      else { kf.push({ opacity: 1, offset: b / DUR }, { opacity: 0, offset: b / DUR }, { opacity: 0, offset: 1 }); }
+      return track(wrap, catAnims, node.animate(kf, { duration: DUR * f, fill: 'both' }));
+    }
+
+    visible(sit, 0, T.crouch);
+    if (!lite) {
+      // Eyes first: glow fades in over 0-300ms, the body follows over 300-500ms.
+      track(wrap, catAnims, sitEyes.animate([
+        { opacity: 0, offset: 0 }, { opacity: 1, offset: 300 / DUR }, { opacity: 1, offset: 1 }
+      ], { duration: DUR * f, fill: 'both' }));
+      track(wrap, catAnims, sitBody.animate([
+        { opacity: 0, offset: 0 }, { opacity: 0, offset: 300 / DUR }, { opacity: 1, offset: 500 / DUR }, { opacity: 1, offset: 1 }
+      ], { duration: DUR * f, fill: 'both' }));
+    }
+    visible(crouch, T.crouch, T.arch);
+    if (!lite) visible(arch, T.arch, T.pounce);
+    visible(pounce, T.pounce, DUR);
+
+    // Wrapper: hop toward the match (monotonic in x, never past the resting spot), hold the
+    // swipe pose, then fade out. In Lite Mode it also supplies the single fade-in.
+    var startT = 'translate(' + (-dir * hop) + 'px,0px)';
+    var midT = 'translate(' + (-dir * hop * 0.4) + 'px,' + (-arc) + 'px)';
+    var endT = 'translate(0px,' + landY + 'px)';
+    var wf = [];
+    if (lite) wf.push({ transform: startT, opacity: 0, offset: 0 }, { transform: startT, opacity: 1, offset: 250 / DUR });
+    else wf.push({ transform: startT, opacity: 1, offset: 0 });
+    wf.push(
+      { transform: startT, opacity: 1, offset: T.pounce / DUR },
+      { transform: midT, opacity: 1, offset: (T.pounce + (T.land - T.pounce) / 2) / DUR, easing: 'ease-in' },
+      { transform: endT, opacity: 1, offset: T.land / DUR },
+      { transform: endT, opacity: 1, offset: T.holdEnd / DUR },
+      { transform: endT, opacity: 0, offset: 1 }
+    );
+    track(wrap, catAnims, wrap.animate(wf, { duration: DUR * f, easing: 'ease-out', fill: 'both' }));
+    wrap.__waapiAnims = catAnims;
+
+    var markAnim = marks.animate([
+      { opacity: 0, transform: 'scale(0.8)', offset: 0 },
+      { opacity: 1, transform: 'scale(1)', offset: 0.18 },
+      { opacity: 1, transform: 'scale(1)', offset: 0.7 },
+      { opacity: 0, transform: 'scale(1)', offset: 1 }
+    ], { duration: T.markDur * f, delay: T.markStart * f, easing: 'ease-out', fill: 'both' });
+    marks.__waapiAnims = [markAnim];
+    markAnim.finished.then(function () { marks.remove(); }).catch(function () { marks.remove(); });
   }
 
   function animateLightning(rect) {
