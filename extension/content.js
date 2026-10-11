@@ -871,6 +871,7 @@
     effectTrickOrTreat: 'Trick-or-Treat',
     effectPossessedText: 'Possessed Text',
     effectCursedRune: 'Cursed Rune',
+    effectMummyUnwrap: 'Mummy Unwrap',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -1003,7 +1004,8 @@
     moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'hollow' },
     trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' },
     possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'hollow' },
-    cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'hollow' }
+    cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'hollow' },
+    mummyunwrap: { label: i18n.effectMummyUnwrap, run: animateMummyUnwrap, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -11597,6 +11599,327 @@
         ], { duration: ms(360), delay: ms(st), fill: 'both' }));
       });
     }
+  }
+
+  // oculist-l0bs.13: Mummy Unwrap, Haunted Hollow pack (pack II). A short, friendly mummy
+  // (wrapped -> unwinding -> collapse) stands beside the match and pulls a bandage strip off
+  // its shoulder in a loose spiral. The strip then travels a path that FRAMES the match at
+  // 7px clearance -- underline first, then up the far side, then across the top -- as if
+  // wrapping the word like a present, ending in a frayed leading edge. It then unspools
+  // (tail first, back along the same path), the mummy collapses into a pile of strips with
+  // its eyes still showing, and everything fades. There is no prototype: the beat spec on
+  // the bead stands in for one. Built as flat inline SVG from the approved character sheet's
+  // fixed palette (at most three tones per material); the sheet PNG is never shipped.
+  //
+  // The sheet's idea of strips crossing the match would cover glyphs, which rule 10
+  // forbids, so the framing run is the conservative reinterpretation.
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the effect is four separate overlay
+  // boxes -- the mummy beside the match (8px off its glyph box) and three strip segments
+  // (bottom, far side, top) each sitting 7px off the glyph box -- and every svg clips to its
+  // own box, so no paint can enter the glyph box plus 6px in ANY frame. The strip body is
+  // a tileable band that slides through its segment box (the box clips it), never scaled.
+  // The page's text is never recoloured, hidden or covered.
+  //
+  // PLACEMENT: the side with more room is tried first, then the other; both need the mummy
+  // box beside the match, the frame lane on the far side, and the top/bottom lanes inside
+  // the PRE-SCROLL viewport. If neither side fits, the effect is suppressed. Fit is decided
+  // in viewport space; only the final left/top are converted to document space (rule 2).
+  //
+  // No neighbouring character effect uses the effective beacon colour as an accent on its
+  // figure, so the fixed identity palette from the sheet brief is used throughout.
+  //
+  // LITE MODE drops: the loose-spiral and S-curve strip phases (the strip is the straight
+  // band only), the pile pose (the mummy simply fades), the tight-roll curl and the sway.
+  // It keeps the mummy silhouette, the framing run, the unspooling and the frayed edge.
+  function animateMummyUnwrap(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var OUT = '#3A2E1C', BAND = '#E8DCB8', HI = '#F8F0D6', SH = '#BFAE84';
+    var EYE = '#FFD45A', VOID = '#17121F';
+
+    var VB_W = 64, GROUND_Y = 84, FIG_H = 78;
+    var CLEAR = 7, GAP = 8, EDGE = 4;
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var f = getBeaconDuration(1);
+    var figH = Math.max(56, Math.min(80, rect.height * 3.2)) * getBeaconScale();
+    var u = figH / FIG_H;
+    var bt = Math.max(5, Math.round(figH * 0.09));          // strip thickness in px
+    var boxW = VB_W * u;
+    var laneY = GROUND_Y + (CLEAR + bt / 2) / u;            // strip lane centre, viewBox units
+    var vbH = GROUND_Y + (CLEAR + bt + 1) / u;
+    var boxH = vbH * u;
+
+    // ---- Placement (viewport space, pre-scroll): roomier side first, then the other ----
+    var boxTopVp = rect.bottom - GROUND_Y * u;
+    if (boxTopVp < EDGE || rect.bottom + CLEAR + bt + 1 > vh - EDGE) return;
+    if (rect.top - CLEAR - bt < EDGE) return;
+    function fits(s) {
+      if (s === 'right') return rect.right + GAP + boxW <= vw - EDGE && rect.left - CLEAR - bt >= EDGE;
+      return rect.left - GAP - boxW >= EDGE && rect.right + CLEAR + bt <= vw - EDGE;
+    }
+    var first = (vw - rect.right) >= rect.left ? 'right' : 'left';
+    var second = first === 'right' ? 'left' : 'right';
+    var side = fits(first) ? first : (fits(second) ? second : null);
+    if (!side) return;
+    var R = side === 'right';      // mummy on the right: the strip runs leftward first
+
+    var sx = window.scrollX, sy = window.scrollY;
+
+    // ---- Timeline (base ms, every duration scaled through getBeaconDuration) ----
+    var FADE_IN = 250, FADE_OUT = 400;
+    var U = 350;                         // wrapped -> unwinding
+    var FS = U + 150, FR = 1300;         // framing run
+    var HOLD = 250;
+    var UNS = FS + FR + HOLD, UR = 1100; // unspool
+    var C = UNS + UR;                    // collapse / mummy fade
+    var DUR = lite ? C + FADE_OUT : C + 900 + FADE_OUT;
+    function ms(t) { return t * f; }
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function solid(d, fill, parent, w) {
+      return addShape('path', { d: d, fill: fill, stroke: OUT, 'stroke-width': w || '1.3', 'stroke-linejoin': 'round' }, parent);
+    }
+    function flat(d, fill, parent) { return addShape('path', { d: d, fill: fill }, parent); }
+    function bar(d, w, parent) {     // outlined rounded bar, two strokes
+      addShape('path', { d: d, fill: 'none', stroke: OUT, 'stroke-width': String(w + 1.8), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, parent);
+      addShape('path', { d: d, fill: 'none', stroke: BAND, 'stroke-width': String(w), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, parent);
+    }
+
+    // ---- Overlay elements (each tracked on its own, each selected by cancelBeacons) ----
+    function overlay(kind, z, left, top, w, h, fadeIn) {
+      var el = document.createElement('div');
+      el.className = 'oc-beacon oc-beacon-transient oc-mummyunwrap';
+      el.setAttribute('data-mummyunwrap', kind);
+      el.style.cssText = [
+        'position:absolute',
+        'left:' + (left + sx) + 'px', 'top:' + (top + sy) + 'px',
+        'width:' + w + 'px', 'height:' + h + 'px',
+        'pointer-events:none', 'z-index:' + z, 'opacity:' + (fadeIn ? 0 : 1)
+      ].join(';');
+      mountOverlay(el);
+      var svgEl = document.createElementNS(NS, 'svg');
+      svgEl.setAttribute('width', String(w));
+      svgEl.setAttribute('height', String(h));
+      svgEl.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+      svgEl.style.cssText = 'display:block;overflow:hidden;';
+      el.appendChild(svgEl);
+      var anims = [];
+      el.__waapiAnims = anims;
+      function track(a) {
+        anims.push(a);
+        a.finished.then(function () { el.remove(); }).catch(function () { el.remove(); });
+        return a;
+      }
+      // Each overlay shares the effect's clock: (fade in,) hold, then fade at the very end.
+      track(el.animate([
+        { opacity: fadeIn ? 0 : 1, offset: 0 },
+        { opacity: 1, offset: fadeIn ? FADE_IN / DUR : 0 },
+        { opacity: 1, offset: (DUR - FADE_OUT) / DUR },
+        { opacity: 0, offset: 1 }
+      ], { duration: ms(DUR), fill: 'both' }));
+      return { el: el, svg: svgEl, track: track };
+    }
+
+    // ================= Mummy =================
+    var mLeft = R ? rect.right + GAP : rect.left - GAP - boxW;
+    var m = overlay('mummy', 2147483642, mLeft, boxTopVp, boxW, boxH, true);
+    m.el.setAttribute('data-mw-side', side);
+    var svg = m.svg;
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + vbH);
+    var root = addShape('g', R ? {} : { 'data-mw-mirrored': '1', transform: 'translate(' + VB_W + ' 0) scale(-1 1)' }, svg);
+    var sw = bt / u;                                         // strip width in viewBox units
+
+    function ribbon(d, parent, name) {
+      var g = addShape('g', { 'data-mw-ribbon': name }, parent);
+      addShape('path', { d: d, fill: 'none', stroke: OUT, 'stroke-width': String(sw + 1.6), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+      addShape('path', { d: d, fill: 'none', stroke: BAND, 'stroke-width': String(sw), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+      addShape('path', { d: d, fill: 'none', stroke: SH, 'stroke-width': String(sw * 0.42), 'stroke-dasharray': '1.3 2.7', 'stroke-linejoin': 'round' }, g);
+      return g;
+    }
+    function pose(name) { return addShape('g', { 'data-mw-pose': name }, root); }
+    function eyes(g, y, dx) {
+      [32 - dx, 32 + dx].forEach(function (x) {
+        addShape('circle', { cx: x, cy: y, r: 3.1, fill: EYE }, g);
+        addShape('circle', { cx: x - 0.5, cy: y + 0.2, r: 1.4, fill: VOID }, g);
+      });
+    }
+    // Head ellipse (cx 32 cy 22 rx 14 ry 13), torso 17..47 x 34..70, legs to the ground.
+    var HX = 32, HY = 22, HRX = 14, HRY = 13;
+    function ex(y) { var t = 1 - Math.pow((y - HY) / HRY, 2); return HRX * Math.sqrt(Math.max(0, t)); }
+    function clampY(y) { return Math.max(HY - HRY + 0.5, Math.min(HY + HRY - 0.5, y)); }
+    function headBand(g, yl, yr, h, fill) {
+      var a = clampY(yl), b = clampY(yr), a2 = clampY(yl + h), b2 = clampY(yr + h);
+      flat('M ' + (HX - ex(a)) + ' ' + a + ' L ' + (HX + ex(b)) + ' ' + b + ' L ' + (HX + ex(b2)) + ' ' + b2 + ' L ' + (HX - ex(a2)) + ' ' + a2 + ' Z', fill, g);
+    }
+    function body(g, fullHead) {
+      solid('M 20 68 L 30 68 L 30 82 Q 30 84 28 84 L 22 84 Q 20 84 20 82 Z', BAND, g);
+      solid('M 34 68 L 44 68 L 44 82 Q 44 84 42 84 L 36 84 Q 34 84 34 82 Z', BAND, g);
+      solid('M 17 38 Q 17 33 22 33 L 42 33 Q 47 33 47 38 L 47 70 L 17 70 Z', BAND, g);
+      flat('M 17 46 L 47 39 L 47 43 L 17 50 Z', SH, g);
+      flat('M 17 58 L 47 52 L 47 56 L 17 62 Z', SH, g);
+      flat('M 17 40 L 22 40 L 22 68 L 17 68 Z', HI, g);
+      addShape('path', { d: 'M 17 38 Q 17 33 22 33 L 42 33 Q 47 33 47 38 L 47 70 L 17 70 Z', fill: 'none', stroke: OUT, 'stroke-width': '1.3', 'stroke-linejoin': 'round' }, g);
+      addShape('ellipse', { cx: HX, cy: HY, rx: HRX, ry: HRY, fill: BAND, stroke: OUT, 'stroke-width': '1.3' }, g);
+      headBand(g, 11, 9, 3.6, SH);
+      if (fullHead) { headBand(g, 28, 31, 3.6, SH); headBand(g, 33, 30, 2.6, SH); } else { headBand(g, 28, 28, 3, SH); }
+      flat('M 20 12 C 22 9 25 8 28 8 L 28 10 C 25 10.4 23 12 22 14 Z', HI, g);
+      solid('M 20 18 L 44 18 L 44 26 L 20 26 Z', VOID, g, '1');   // eye slit (void between wraps)
+      eyes(g, 22, 5.6);
+    }
+
+    // POSE 1: wrapped -- criss-cross bands, two eye gaps, arms folded forward.
+    var pWrapped = pose('wrapped');
+    body(pWrapped, true);
+    bar('M 18 47 L 42 54', 6.2, pWrapped);
+    bar('M 46 47 L 22 54', 6.2, pWrapped);
+
+    // POSE 2: unwinding -- head half unwrapped, one arm raised pulling the strip.
+    var pUnwind = pose('unwinding');
+    var pSway = addShape('g', { 'data-mw-part': 'sway' }, pUnwind);
+    body(pSway, false);
+    bar('M 19 50 L 38 56', 6.2, pSway);
+    bar('M 44 41 L 54 33', 6.2, pSway);
+    solid('M 40 11 C 50 4 56 14 49 25 C 47 21 44 17 40 14 Z', BAND, pSway, '1.1');
+    var rSpiral = null, rS = null, rStraight = null;
+    if (lite) {
+      rStraight = ribbon('M 46 38 L 58 ' + laneY + ' L 0 ' + laneY, pUnwind, 'straight');
+    } else {
+      rSpiral = ribbon('M 46 38 C 62 26 63 50 52 51 C 43 52 47 63 57 63 C 62 63 61 ' + laneY + ' 54 ' + laneY + ' L 0 ' + laneY, pUnwind, 'spiral');
+      rS = ribbon('M 46 38 C 58 42 40 54 52 60 C 61 64 59 ' + laneY + ' 52 ' + laneY + ' L 0 ' + laneY, pUnwind, 'scurve');
+    }
+
+    // POSE 3: collapse -- a loose pile of crumpled strips, eyes still visible (full only).
+    var pPile = null, pPileSettle = null;
+    if (!lite) {
+      pPile = pose('collapse');
+      pPileSettle = addShape('g', { 'data-mw-part': 'settle' }, pPile);
+      solid('M 5 84 C 6 72 16 66 26 68 C 32 63 44 65 49 71 C 58 72 60 80 59 84 Z', BAND, pPileSettle);
+      flat('M 8 78 C 10 72 16 69 22 70 L 24 73 C 18 73 13 76 11 80 Z', HI, pPileSettle);
+      flat('M 34 70 L 48 72 L 56 78 L 54 82 L 42 76 Z', SH, pPileSettle);
+      solid('M 17 76 L 47 76 L 47 82 L 17 82 Z', VOID, pPileSettle, '1');
+      eyes(pPileSettle, 79, 6.4);
+      bar('M 10 84 C 14 80 20 82 24 84', 3.4, pPileSettle);
+      bar('M 36 66 C 42 60 50 64 46 69', 3.4, pPileSettle);
+      // tight roll (the sheet's last strip phase) resting on the pile
+      addShape('circle', { cx: 52, cy: 76, r: 6.4, fill: BAND, stroke: OUT, 'stroke-width': '1.3' }, pPileSettle);
+      addShape('path', { d: 'M 48.6 76 a 3.4 3.4 0 1 1 3.4 3.4 M 50.6 76 a 1.4 1.4 0 1 1 1.4 1.4', fill: 'none', stroke: SH, 'stroke-width': '1.1' }, pPileSettle);
+    }
+
+    // Mummy animations. Opacity hard cuts use duplicate offsets.
+    function visible(node, a, b) {
+      var kf = [];
+      if (a <= 0) kf.push({ opacity: 1, offset: 0 });
+      else kf.push({ opacity: 0, offset: 0 }, { opacity: 0, offset: a / DUR }, { opacity: 1, offset: a / DUR });
+      if (b >= DUR) kf.push({ opacity: 1, offset: 1 });
+      else kf.push({ opacity: 1, offset: b / DUR }, { opacity: 0, offset: b / DUR }, { opacity: 0, offset: 1 });
+      return m.track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
+    }
+    visible(pWrapped, 0, U);
+    visible(pUnwind, U, lite ? DUR : C);
+    if (!lite) {
+      visible(pPile, C, DUR);
+      visible(rSpiral, U, UNS);
+      // The S-curve strip appears as the unspool starts, then falls away at the collapse.
+      m.track(rS.animate([
+        { opacity: 0, transform: 'translateY(0px)', offset: 0 },
+        { opacity: 0, transform: 'translateY(0px)', offset: UNS / DUR },
+        { opacity: 1, transform: 'translateY(0px)', offset: UNS / DUR },
+        { opacity: 1, transform: 'translateY(0px)', offset: C / DUR, easing: 'ease-in' },
+        { opacity: 0, transform: 'translateY(16px)', offset: (C + 350) / DUR },
+        { opacity: 0, transform: 'translateY(16px)', offset: 1 }
+      ], { duration: ms(DUR), fill: 'both' }));
+      // Gentle sway while the strip is pulled, about the feet.
+      pSway.style.transformBox = 'view-box';
+      pSway.style.transformOrigin = (VB_W / 2) + 'px ' + GROUND_Y + 'px';
+      var sk = [{ transform: 'rotate(0deg)', offset: 0 }, { transform: 'rotate(0deg)', offset: U / DUR, easing: 'ease-in-out' }];
+      for (var s = 0; s < 4; s++) {
+        sk.push({ transform: 'rotate(' + (s % 2 ? 2.2 : -2.2) + 'deg)', offset: (FS + (s + 0.5) * FR / 4) / DUR, easing: 'ease-in-out' });
+      }
+      sk.push({ transform: 'rotate(0deg)', offset: UNS / DUR }, { transform: 'rotate(0deg)', offset: 1 });
+      m.track(pSway.animate(sk, { duration: ms(DUR), fill: 'both' }));
+      // The pile settles with a small squash.
+      pPileSettle.style.transformBox = 'view-box';
+      pPileSettle.style.transformOrigin = (VB_W / 2) + 'px ' + GROUND_Y + 'px';
+      m.track(pPileSettle.animate([
+        { transform: 'translateY(-10px) scale(0.9,1.25)', offset: 0 },
+        { transform: 'translateY(-10px) scale(0.9,1.25)', offset: C / DUR, easing: 'ease-out' },
+        { transform: 'translateY(0px) scale(1.08,0.88)', offset: (C + 220) / DUR, easing: 'ease-out' },
+        { transform: 'translateY(0px) scale(1,1)', offset: (C + 400) / DUR },
+        { transform: 'translateY(0px) scale(1,1)', offset: 1 }
+      ], { duration: ms(DUR), fill: 'both' }));
+    } else {
+      visible(rStraight, U, DUR);
+    }
+
+    // ================= Strip segments =================
+    // Content in local coordinates: x along the run, y across; the band occupies
+    // y in [-bt/2, bt/2] and x in [-(L+TIP), 0], leading end at x = 0 (frayed on the last).
+    var TIP = Math.round(bt * 2.4);
+    var patSeq = 0;
+    function segment(name, left, top, w, h, dx, dy, frayed, headA, headB, tailA, tailB) {
+      var L = dy === 0 ? w : h;
+      var seg = overlay('strip', 2147483641, left, top, w, h, false);
+      seg.el.setAttribute('data-mw-seg', name);
+      var angle = Math.atan2(dy, dx) * 180 / Math.PI;
+      var outer = addShape('g', { transform: 'translate(' + (w / 2) + ' ' + (h / 2) + ') rotate(' + angle + ')' }, seg.svg);
+      var inner = addShape('g', { 'data-mw-band': name }, outer);
+      var pitch = Math.max(6, bt * 1.5);
+      var pid = 'oc-mw-pat-' + (++patSeq) + '-' + name;
+      var defs = addShape('defs', {}, inner);
+      var pat = addShape('pattern', { id: pid, patternUnits: 'userSpaceOnUse', x: 0, y: -bt / 2, width: pitch, height: bt }, defs);
+      addShape('rect', { x: 0, y: 0, width: pitch, height: bt, fill: BAND }, pat);
+      addShape('path', { d: 'M ' + (pitch * 0.15) + ' ' + bt + ' L ' + (pitch * 0.55) + ' 0 L ' + (pitch * 0.8) + ' 0 L ' + (pitch * 0.4) + ' ' + bt + ' Z', fill: SH }, pat);
+      var bodyEnd = frayed ? -TIP : 0;
+      var bodyW = L + TIP + bodyEnd;
+      addShape('rect', { x: -(L + TIP), y: -bt / 2, width: bodyW, height: bt, fill: 'url(#' + pid + ')' }, inner);
+      addShape('rect', { x: -(L + TIP), y: -bt / 2 + 0.45, width: bodyW, height: 0.9, fill: HI }, inner);
+      addShape('path', { d: 'M ' + -(L + TIP) + ' ' + (-bt / 2) + ' L ' + bodyEnd + ' ' + (-bt / 2) + ' M ' + -(L + TIP) + ' ' + (bt / 2) + ' L ' + bodyEnd + ' ' + (bt / 2), fill: 'none', stroke: OUT, 'stroke-width': '1' }, inner);
+      if (frayed) {
+        // ragged leading edge with two loose threads
+        var b = bt / 2;
+        var d = 'M ' + -TIP + ' ' + -b + ' L ' + (-TIP * 0.55) + ' ' + (-b * 0.9) + ' L ' + (-TIP * 0.62) + ' ' + (-b * 0.35) + ' L ' + (-TIP * 0.2) + ' ' + (-b * 0.5) +
+          ' L ' + (-TIP * 0.3) + ' ' + (b * 0.15) + ' L ' + (-TIP * 0.04) + ' ' + (b * 0.2) + ' L ' + (-TIP * 0.34) + ' ' + (b * 0.65) + ' L ' + (-TIP * 0.5) + ' ' + b + ' L ' + -TIP + ' ' + b + ' Z';
+        addShape('path', { d: d, fill: BAND, stroke: OUT, 'stroke-width': '1', 'stroke-linejoin': 'round' }, inner);
+      }
+      // slide: leading edge s from 0 (segment start) to L (segment end); the tail leaves after
+      function tr(sv) { return 'translateX(' + (-L / 2 + sv) + 'px)'; }
+      seg.track(inner.animate([
+        { transform: tr(0), offset: 0 },
+        { transform: tr(0), offset: headA / DUR },
+        { transform: tr(L), offset: headB / DUR },
+        { transform: tr(L), offset: tailA / DUR },
+        { transform: tr(2 * L + TIP), offset: tailB / DUR },
+        { transform: tr(2 * L + TIP), offset: 1 }
+      ], { duration: ms(DUR), fill: 'both', easing: 'linear' }));
+    }
+
+    // Lane geometry (viewport space). Right-hand mummy: the strip runs left under the
+    // match, up the left side, then right across the top; mirrored for the left-hand mummy.
+    var xNear = R ? rect.right + GAP : rect.left - GAP;     // the mummy box's near edge
+    var xFar = R ? rect.left - CLEAR - bt : rect.right + CLEAR + bt;
+    var bx0 = Math.min(xNear, xFar), bx1 = Math.max(xNear, xFar);
+    var topInner = R ? rect.left - CLEAR : rect.right + CLEAR;
+    var tx0 = Math.min(xNear, topInner), tx1 = Math.max(xNear, topInner);
+    var dirB = R ? -1 : 1;
+    var lenB = bx1 - bx0, lenS = rect.bottom + CLEAR - (rect.top - CLEAR - bt), lenT = tx1 - tx0;
+    var lens = lenB + lenS + lenT;
+    var cutB = FS + FR * lenB / lens, cutS = cutB + FR * lenS / lens, cutT = FS + FR;
+    var tl = UR / (lens + TIP);
+    var tB1 = UNS + lenB * tl, tS1 = tB1 + lenS * tl, tT1 = UNS + UR;
+
+    segment('bottom', bx0, rect.bottom + CLEAR, lenB, bt, dirB, 0, false, FS, cutB, UNS, tB1);
+    segment('side', R ? xFar : rect.right + CLEAR, rect.top - CLEAR - bt, bt, lenS, 0, -1, false, cutB, cutS, tB1, tS1);
+    segment('top', tx0, rect.top - CLEAR - bt, lenT, bt, -dirB, 0, true, cutS, cutT, tS1, tT1);
   }
 
   // Companion overlay to drawActiveMatchLabel (oculist-l6m.39), not an effectsRegistry
