@@ -243,7 +243,7 @@ test('an already-seeded blocklist is not rewritten (user re-enabling github.com 
   // oculist-nq1x.2: onInstalled now also chains seedHalloweenPack (background.js) after
   // this one — seededHalloweenPack: true here keeps that second seed a no-op too, so this
   // test still isolates the single invariant it was written for.
-  const backing = { 'oc-settings': { disabledSites: [], seededDefaultBlocklist: true, seededHalloweenPack: true } };
+  const backing = { 'oc-settings': { disabledSites: [], seededDefaultBlocklist: true, seededHalloweenPack: true, seededHollowPack: true } };
 
   const { fire, calls } = loadBackground({ backing, hardwareConcurrency: 8 });
 
@@ -417,7 +417,7 @@ test('(a) a mutate() that throws synchronously still calls done exactly once, an
   // this one, regardless of whether it errored — a plain (non-throwing) flag here keeps
   // that second seed a no-op, so this test's "no set() at all" assertion still isolates
   // the single invariant it was written for (a throwing mutate() issues no set()).
-  hostile.seededHalloweenPack = true;
+  hostile.seededHalloweenPack = true; hostile.seededHollowPack = true;
   const backing = { 'oc-settings': hostile };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
@@ -456,7 +456,7 @@ test('(b) a get() reporting chrome.runtime.lastError calls done exactly once, is
   // (background.js's onInstalled now runs it after seedDefaultBlocklist) a no-op, so its
   // own (unaffected) get() never turns into a set() either — this test still isolates the
   // single get()-failure invariant it was written for.
-  const original = { untouchedMarker: 'do-not-clobber-me', seededHalloweenPack: true };
+  const original = { untouchedMarker: 'do-not-clobber-me', seededHalloweenPack: true, seededHollowPack: true };
   const backing = { 'oc-settings': Object.assign({}, original) };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
@@ -500,7 +500,7 @@ test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, an
   // that first write failed) a no-op, so the "only set() this run makes" comment below
   // still holds and this test isolates the single set()-failure invariant it was written
   // for.
-  const backing = { 'oc-settings': { seededHalloweenPack: true } };
+  const backing = { 'oc-settings': { seededHalloweenPack: true, seededHollowPack: true } };
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
 
@@ -547,7 +547,7 @@ test('(c) a set() reporting chrome.runtime.lastError calls done exactly once, an
 // seedDefaultBlocklist itself the no-op — so the only set() this run makes is
 // seedHalloweenPack's, isolating the same single invariant (c) isolates for the other seed.
 test('(nq1x.14) seedHalloweenPack\'s own set() failing still completes onboarding without falsely setting the flag', async () => {
-  const backing = { 'oc-settings': { seededDefaultBlocklist: true } };
+  const backing = { 'oc-settings': { seededDefaultBlocklist: true, seededHollowPack: true } }; // l0bs.2: hollow seed a no-op too
   const errSpy = spyConsoleError();
   let tabsCreateCalls = 0;
 
@@ -589,7 +589,7 @@ test('(e) the plain success path still calls done exactly once (no double-call f
   // oculist-nq1x.2: seededHalloweenPack: true keeps the chained seedHalloweenPack call
   // (background.js's onInstalled runs it right after this one) a no-op, so the call
   // counts below still isolate seedDefaultBlocklist's own plain-success cycle.
-  const backing = { 'oc-settings': { seededHalloweenPack: true } };
+  const backing = { 'oc-settings': { seededHalloweenPack: true, seededHollowPack: true } };
   let tabsCreateCalls = 0;
 
   const { fire, calls } = loadBackground({
@@ -606,7 +606,9 @@ test('(e) the plain success path still calls done exactly once (no double-call f
   // re-read (2), plus the chained seedHalloweenPack's own initial get() (1), which finds
   // seededHalloweenPack already true and returns before its own confirming re-read or any
   // set().
-  assert.strictEqual(calls.get, 3, 'expected seedDefaultBlocklist\'s get()+confirming re-read, plus seedHalloweenPack\'s single no-op get(): ' + JSON.stringify(calls));
+  // oculist-l0bs.2: 4, not 3 — the chained seedHollowPack adds one more single no-op get()
+  // (seededHollowPack is pre-set in this fixture), no confirming re-read, no set().
+  assert.strictEqual(calls.get, 4, 'expected seedDefaultBlocklist\'s get()+confirming re-read, plus the single no-op get() of each of seedHalloweenPack and seedHollowPack: ' + JSON.stringify(calls));
   assert.strictEqual(calls.set, 1, 'expected exactly one set() on the plain success path (seedHalloweenPack is a no-op here): ' + JSON.stringify(calls));
   assert.ok(
     Array.isArray(backing['oc-settings'].disabledSites) && backing['oc-settings'].disabledSites.includes('github.com'),
@@ -675,6 +677,7 @@ test(`(oculist-xpaz, onChanged ${changeOrder} the set callback) a foreign save l
   assert.strictEqual(settings.seededDefaultBlocklist, true, 'seed flag must be set: ' + JSON.stringify(settings));
   assert.ok(settings.disabledSites.includes('github.com'), 'seed must land: ' + JSON.stringify(settings));
   assert.strictEqual(settings.seededHalloweenPack, true, 'second seed must land: ' + JSON.stringify(settings));
+  assert.strictEqual(settings.seededHollowPack, true, 'third seed (oculist-l0bs.2) must land: ' + JSON.stringify(settings));
 });
 }
 

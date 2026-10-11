@@ -91,11 +91,11 @@ describe('displayPreset + colorPalette migration (oculist-rnr.12)', () => {
             )
         ),
       ({ s }) =>
-        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack),
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && s.seededHollowPack),
       {
         timeout: POLL_TIMEOUT,
         interval: 100,
-        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, the launch helper handles performanceMode) never all landed',
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, seededHollowPack, the launch helper handles performanceMode) never all landed',
       }
     );
   });
