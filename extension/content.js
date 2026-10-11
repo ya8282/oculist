@@ -865,6 +865,7 @@
     effectGhostSweep: 'Ghost Sweep',
     effectSpiderDrop: 'Spider Drop',
     effectBlackCatPounce: 'Black Cat Pounce',
+    effectTrickOrTreat: 'Trick-or-Treat',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -991,7 +992,8 @@
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
     spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
     witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
-    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' }
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' },
+    trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -10315,6 +10317,282 @@
         ], { duration: total, fill: 'forwards' }));
         finishWith(webEl, webAnims);
       }
+    }
+  }
+
+  // oculist-l0bs.14: Trick-or-Treat, Haunted Hollow pack (pack II). A glossy plastic candy
+  // bucket (visible rim lip, arched handle, simple jack-o'-lantern face; NOT Pumpkin Glow's
+  // carved shell) appears at the end of the match's line. Five candies drop one at a time in
+  // a vertical column ABOVE THE BUCKET only -- wrapped square, wrapped round, striped swirl,
+  // lollipop, candy corn, a fixed order -- each landing with a small squash and a rim bounce.
+  // The bucket tilts 5 degrees while it is catching and ends 'full' with the candies heaped
+  // above the rim and the stretched smile. There is no prototype: this is built from the
+  // approved character sheet (poses empty / catching / full, five candies, bucket parts) as
+  // flat inline SVG, at most three tones per material.
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the whole overlay box (bucket, tilt,
+  // handle, candy column) sits beside the match, at least CLEAR (6px) off its glyph box, and
+  // the svg clips to that box, so no paint can enter the protected rectangle in ANY frame.
+  // The page's text is never recoloured, hidden or covered.
+  //
+  // PLACEMENT: the right side is tried first, then the left; if neither fits the PRE-SCROLL
+  // viewport, the effect is suppressed. The fit check is in viewport space; only the final
+  // left/top are converted to document space (rule 2).
+  //
+  // No neighbouring character effect uses the effective beacon colour as an accent on its
+  // figure, so the fixed identity palette from the sheet brief is used throughout.
+  //
+  // LITE MODE drops: two of the five candies (three fall instead), the landing squash, the
+  // rim bounce. It keeps the bucket silhouette, the candy drops, the 5-degree tilt and the
+  // empty -> catching -> full face states.
+  function animateTrickOrTreat(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var OUT = '#2A160C', ORANGE = '#E86F1C', ORANGE_HI = '#FFA23A', ORANGE_SH = '#A83D14';
+    var FACE = '#2B1108', HANDLE = '#3A2E1C', HANDLE_HI = '#6B5636';
+    var RED = '#D83A3A', BLUE = '#3A7BD8', GREEN = '#4DB36A', YELLOW = '#F2C23A';
+    var SHINE = '#FFFFFF', STICK = '#F2EEF8';
+
+    var VB_W = 84, VB_H = 150;           // viewBox: candy column above, bucket at the bottom
+    var GROUND_Y = 146;                  // viewBox y of the bucket's base (the match's line)
+    var FIG_H = 72;                      // bucket + handle height inside the viewBox
+    var CX = 42;                         // bucket centre x
+    var CLEAR = 6, EDGE = 4, GAP = CLEAR + 2;
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var f = getBeaconDuration(1);
+    var figH = Math.max(56, Math.min(80, rect.height * 3.2)) * getBeaconScale();
+    var u = figH / FIG_H;
+    var boxW = VB_W * u, boxH = VB_H * u;
+
+    // ---- Placement (viewport space, pre-scroll): right first, then left, else suppress ----
+    var side = null;
+    if (rect.right + GAP + boxW <= vw - EDGE) side = 'right';
+    else if (rect.left - GAP - boxW >= EDGE) side = 'left';
+    if (!side) return;
+
+    var boxLeft = side === 'right' ? rect.right + GAP : rect.left - GAP - boxW;
+    var boxTop = rect.top + rect.height - GROUND_Y * u;   // bucket base on the match's line
+    var maxTop = vh - EDGE - boxH;
+    if (maxTop >= EDGE) boxTop = Math.max(EDGE, Math.min(maxTop, boxTop));
+    var docLeft = boxLeft + window.scrollX, docTop = boxTop + window.scrollY;
+
+    // ---- Timeline (base ms, every duration scaled through getBeaconDuration) ----
+    var N = lite ? 3 : 5, INTERVAL = 400, FALL = 480, FIRST = 300;
+    var landAt = [];
+    for (var i = 0; i < N; i++) landAt.push(FIRST + i * INTERVAL + FALL);
+    var lastLand = landAt[N - 1];
+    var DUR = lastLand + 1200, FADE_IN = 200, FADE_OUT = 300, TILT = 5;
+
+    function addShape(tag, attrs, parent) {
+      var el = document.createElementNS(NS, tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      parent.appendChild(el);
+      return el;
+    }
+    function solid(d, fill, parent, w) {
+      return addShape('path', { d: d, fill: fill, stroke: OUT, 'stroke-width': w || '1.4', 'stroke-linejoin': 'round' }, parent);
+    }
+    function flat(d, fill, parent) { return addShape('path', { d: d, fill: fill }, parent); }
+
+    // ---- DOM ----
+    var wrap = document.createElement('div');
+    wrap.className = 'oc-beacon oc-beacon-transient oc-trickortreat';
+    wrap.setAttribute('data-trickortreat', 'bucket');
+    wrap.setAttribute('data-ot-side', side);
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + docLeft + 'px', 'top:' + docTop + 'px',
+      'width:' + boxW + 'px', 'height:' + boxH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0'
+    ].join(';');
+    mountOverlay(wrap);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(boxW));
+    svg.setAttribute('height', String(boxH));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    wrap.appendChild(svg);
+
+    // Drawn with the light from the left; mirrored (a static transform on the inner group,
+    // never on a WAAPI target) when the bucket sits on the match's left.
+    var root = addShape('g', side === 'right' ? {} : { 'data-ot-mirrored': '1', transform: 'translate(' + VB_W + ' 0) scale(-1 1)' }, svg);
+
+    // BACK layer (tilts): the dark mouth interior and the arched handle.
+    var back = addShape('g', { 'data-ot-part': 'back' }, root);
+    addShape('path', { d: 'M 17 98 C 14 62 70 62 67 98', fill: 'none', stroke: OUT, 'stroke-width': '5.4', 'stroke-linecap': 'round' }, back);
+    addShape('path', { d: 'M 17 98 C 14 62 70 62 67 98', fill: 'none', stroke: HANDLE, 'stroke-width': '3', 'stroke-linecap': 'round' }, back);
+    addShape('path', { d: 'M 20 90 C 20 70 40 66 46 67', fill: 'none', stroke: HANDLE_HI, 'stroke-width': '0.9', 'stroke-linecap': 'round' }, back);
+    addShape('ellipse', { cx: CX, cy: 98, rx: 28, ry: 5.5, fill: ORANGE_SH, stroke: OUT, 'stroke-width': '1.4' }, back);
+
+    // CANDY layer (never tilts): each candy is a 1:1 box centred on its resting point.
+    var candyLayer = addShape('g', { 'data-ot-part': 'candies' }, root);
+    function candyShape(kind, g) {
+      if (kind === 0) {            // wrapped square
+        solid('M -9 -3 L -5 0 L -9 3 Z', RED, g, '1');
+        solid('M 9 -3 L 5 0 L 9 3 Z', RED, g, '1');
+        solid('M -5 -5 L 5 -5 L 5 5 L -5 5 Z', RED, g);
+        flat('M -3.4 -3.4 L 0.5 -3.4 L -3.4 0.5 Z', SHINE, g);
+      } else if (kind === 1) {     // wrapped round
+        solid('M -9 -3.5 L -5 0 L -9 3.5 Z', BLUE, g, '1');
+        solid('M 9 -3.5 L 5 0 L 9 3.5 Z', BLUE, g, '1');
+        addShape('circle', { cx: 0, cy: 0, r: 5.6, fill: BLUE, stroke: OUT, 'stroke-width': '1.4' }, g);
+        flat('M -3.6 -1.2 C -3 -3.4 -1.4 -4 0.4 -3.8 C -1.6 -3.2 -2.8 -2.2 -3.6 -1.2 Z', SHINE, g);
+      } else if (kind === 2) {     // striped swirl
+        addShape('circle', { cx: 0, cy: 0, r: 7, fill: GREEN, stroke: OUT, 'stroke-width': '1.4' }, g);
+        flat('M -6.4 -2.6 C -3 -5 3 -5 6.4 -2.6 L 6.8 0.6 C 3 -2 -3 -2 -6.8 0.6 Z', SHINE, g);
+        flat('M -5.4 3.6 C -2 1.8 2 1.8 5.4 3.6 C 3.6 6 -3.6 6 -5.4 3.6 Z', SHINE, g);
+      } else if (kind === 3) {     // lollipop
+        addShape('path', { d: 'M 0 1 L 0 9', stroke: OUT, 'stroke-width': '3.4', 'stroke-linecap': 'round', fill: 'none' }, g);
+        addShape('path', { d: 'M 0 1 L 0 9', stroke: STICK, 'stroke-width': '1.6', 'stroke-linecap': 'round', fill: 'none' }, g);
+        addShape('circle', { cx: 0, cy: -2.5, r: 6, fill: YELLOW, stroke: OUT, 'stroke-width': '1.4' }, g);
+        addShape('path', { d: 'M -3.6 -2.5 C -3.6 -5.6 2.6 -5.6 2.6 -2.5 C 2.6 0.2 -1.2 0.4 -1.2 -2', stroke: RED, 'stroke-width': '1.3', fill: 'none', 'stroke-linecap': 'round' }, g);
+      } else {                     // candy corn
+        solid('M 0 -8 L 7.4 7 L -7.4 7 Z', YELLOW, g);
+        flat('M 0 -8 L 2.6 -2.8 L -2.6 -2.8 Z', SHINE, g);
+        flat('M 4.4 2 L 7.4 7 L -7.4 7 L -4.4 2 Z', ORANGE, g);
+        addShape('path', { d: 'M 0 -8 L 7.4 7 L -7.4 7 Z', fill: 'none', stroke: OUT, 'stroke-width': '1.4', 'stroke-linejoin': 'round' }, g);
+      }
+    }
+    // Heap, in fixed order (square, round, swirl, lollipop, candy corn), as [x, y, rot].
+    var REST = [[33, 91, -14], [51, 91, 12], [42, 82, 6], [57, 79, 58], [41, 71, 14]];
+    var candyOuter = [], candySquash = [];
+    for (var c = 0; c < N; c++) {
+      var outer = addShape('g', { 'data-ot-candy': String(c) }, candyLayer);
+      var place = addShape('g', { transform: 'translate(' + REST[c][0] + ' ' + REST[c][1] + ') rotate(' + REST[c][2] + ')' }, outer);
+      var sq = addShape('g', {}, place);
+      candyShape(c, sq);
+      outer.style.opacity = '0';
+      candyOuter.push(outer);
+      candySquash.push(sq);
+    }
+
+    // FRONT layer (tilts): the shell, the rim lip and the face. The inner group takes the
+    // rim bounce so it never fights the tilt transform.
+    var front = addShape('g', { 'data-ot-part': 'front' }, root);
+    var shell = addShape('g', { 'data-ot-part': 'shell' }, front);
+    solid('M 12 100 L 72 100 L 66 138 C 65 144 62 146 56 146 L 28 146 C 22 146 19 144 18 138 Z', ORANGE, shell);
+    flat('M 15 104 L 26 104 L 24 140 C 21 140 20 139 19.6 136 Z', ORANGE_HI, shell);
+    flat('M 58 104 L 70 104 L 65.6 136 C 65 139 63 140 60 141 Z', ORANGE_SH, shell);
+    flat('M 30 106 L 33 106 L 32 140 L 29.4 140 Z', ORANGE_HI, shell);
+    // rim lip: a rounded band wider than the body, front half of the mouth
+    solid('M 9 96 C 9 94 12 93 14 94 L 70 94 C 73 93 75 94 75 96 L 75 101 C 75 104 72 105 70 105 L 14 105 C 11 105 9 104 9 101 Z', ORANGE_HI, shell);
+    flat('M 10 100 L 74 100 L 74 101.6 C 74 103.6 72 104 70 104 L 14 104 C 11 104 10 103.4 10 101.6 Z', ORANGE_SH, shell);
+    flat('M 13 96 L 40 96 L 40 97.4 L 13 97.4 Z', SHINE, shell);
+
+    function face(pose, build) {
+      var g = addShape('g', { 'data-ot-pose': pose }, shell);
+      build(g);
+      return g;
+    }
+    function eyes(g) {
+      solid('M 26 112 L 35 112 L 30.5 120 Z', FACE, g, '0.8');
+      solid('M 49 112 L 58 112 L 53.5 120 Z', FACE, g, '0.8');
+    }
+    var faceEmpty = face('empty', function (g) {
+      eyes(g);
+      solid('M 25 126 C 30 138 54 138 59 126 C 52 130 32 130 25 126 Z', FACE, g, '0.8');
+    });
+    var faceCatching = face('catching', function (g) {
+      eyes(g);
+      solid('M 31 126 C 31 120 53 120 53 126 C 53 138 31 138 31 126 Z', FACE, g, '0.8');
+      flat('M 35 127 C 38 130 46 130 49 127 C 48 133 36 133 35 127 Z', ORANGE_SH, g);
+    });
+    var faceFull = face('full', function (g) {
+      addShape('path', { d: 'M 25 118 C 28 111 33 111 36 118', fill: 'none', stroke: FACE, 'stroke-width': '2.4', 'stroke-linecap': 'round' }, g);
+      addShape('path', { d: 'M 48 118 C 51 111 56 111 59 118', fill: 'none', stroke: FACE, 'stroke-width': '2.4', 'stroke-linecap': 'round' }, g);
+      solid('M 19 124 C 28 142 56 142 65 124 C 55 130 29 130 19 124 Z', FACE, g, '0.8');
+      flat('M 28 131 C 34 137 50 137 56 131 C 50 134 34 134 28 131 Z', ORANGE_SH, g);
+    });
+    [faceCatching, faceFull].forEach(function (g) { g.style.opacity = '0'; });
+
+    // ---- Animations (all hung off the wrapper, which cancelBeacons() selects) ----
+    var anims = [];
+    wrap.__waapiAnims = anims;
+    function track(a) {
+      anims.push(a);
+      a.finished.then(function () { wrap.remove(); }).catch(function () { wrap.remove(); });
+      return a;
+    }
+    function ms(t) { return t * f; }
+
+    // Wrapper fade in / hold / fade out is the effect's own clock.
+    track(wrap.animate([
+      { opacity: 0, offset: 0 },
+      { opacity: 1, offset: FADE_IN / DUR },
+      { opacity: 1, offset: (DUR - FADE_OUT) / DUR },
+      { opacity: 0, offset: 1 }
+    ], { duration: ms(DUR), fill: 'both' }));
+
+    // Face states: hard cuts (duplicate offsets), empty -> catching -> full.
+    function visible(node, a, b) {
+      var kf = [];
+      if (a <= 0) kf.push({ opacity: 1, offset: 0 });
+      else kf.push({ opacity: 0, offset: 0 }, { opacity: 0, offset: a / DUR }, { opacity: 1, offset: a / DUR });
+      if (b >= DUR) kf.push({ opacity: 1, offset: 1 });
+      else kf.push({ opacity: 1, offset: b / DUR }, { opacity: 0, offset: b / DUR }, { opacity: 0, offset: 1 });
+      return track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
+    }
+    visible(faceEmpty, 0, landAt[0]);
+    visible(faceCatching, landAt[0], lastLand);
+    visible(faceFull, lastLand, DUR);
+
+    // 5-degree tilt while catching, upright again once full. Both layers pivot on the
+    // bucket's base centre in viewBox units so the shell and its interior stay registered.
+    [back, front].forEach(function (g) {
+      g.style.transformBox = 'view-box';
+      g.style.transformOrigin = CX + 'px ' + GROUND_Y + 'px';
+      track(g.animate([
+        { transform: 'rotate(0deg)', offset: 0 },
+        { transform: 'rotate(0deg)', offset: (landAt[0] - 100) / DUR },
+        { transform: 'rotate(' + TILT + 'deg)', offset: (landAt[0] + 150) / DUR },
+        { transform: 'rotate(' + TILT + 'deg)', offset: lastLand / DUR },
+        { transform: 'rotate(0deg)', offset: (lastLand + 250) / DUR },
+        { transform: 'rotate(0deg)', offset: 1 }
+      ], { duration: ms(DUR), fill: 'both', easing: 'ease-in-out' }));
+    });
+
+    // Candies: one every INTERVAL ms, straight down its own x column (inside the bucket's
+    // span, never above the match), accelerating into the mouth.
+    for (var k = 0; k < N; k++) {
+      var startAt = FIRST + k * INTERVAL;
+      var drop = REST[k][1] - 10;
+      track(candyOuter[k].animate([
+        { transform: 'translate(0px,' + (-drop) + 'px)', opacity: 0, offset: 0 },
+        { transform: 'translate(0px,' + (-drop * 0.92) + 'px)', opacity: 1, offset: 0.08 },
+        { transform: 'translate(0px,0px)', opacity: 1, offset: 1 }
+      ], { duration: ms(FALL), delay: ms(startAt), easing: 'cubic-bezier(0.5,0,1,0.6)', fill: 'both' }));
+      if (!lite) {
+        candySquash[k].style.transformBox = 'fill-box';
+        candySquash[k].style.transformOrigin = '50% 100%';
+        track(candySquash[k].animate([
+          { transform: 'scale(1,1)' },
+          { transform: 'scale(1.25,0.7)', offset: 0.35 },
+          { transform: 'scale(0.96,1.08)', offset: 0.7 },
+          { transform: 'scale(1,1)' }
+        ], { duration: ms(220), delay: ms(landAt[k]), easing: 'ease-out' }));
+      }
+    }
+
+    // Rim bounce (full mode): the shell dips as each candy lands, then settles.
+    if (!lite) {
+      var bk = [{ transform: 'translateY(0px)', offset: 0 }];
+      landAt.forEach(function (t) {
+        bk.push(
+          { transform: 'translateY(0px)', offset: t / DUR },
+          { transform: 'translateY(1.8px)', offset: (t + 70) / DUR },
+          { transform: 'translateY(-1.2px)', offset: (t + 170) / DUR },
+          { transform: 'translateY(0px)', offset: (t + 260) / DUR }
+        );
+      });
+      bk.push({ transform: 'translateY(0px)', offset: 1 });
+      track(shell.animate(bk, { duration: ms(DUR), fill: 'both', easing: 'ease-out' }));
     }
   }
 
