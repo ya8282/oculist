@@ -11102,6 +11102,9 @@
         { offset: 0, opacity: 0 }, { offset: f(tPop), opacity: 0 }, { offset: f(tHowl), opacity: 0.9 },
         { offset: f(tHold), opacity: 0.9 }, { offset: f(tDrop), opacity: 0 }, { offset: 1, opacity: 0 }
       ], { duration: total, fill: 'both' })]);
+    }
+  }
+
   // oculist-l0bs.14: Trick-or-Treat, Haunted Hollow pack (pack II). A glossy plastic candy
   // bucket (visible rim lip, arched handle, simple jack-o'-lantern face; NOT Pumpkin Glow's
   // carved shell) appears at the end of the match's line. Five candies drop one at a time in
