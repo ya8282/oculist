@@ -865,6 +865,7 @@
     effectGhostSweep: 'Ghost Sweep',
     effectSpiderDrop: 'Spider Drop',
     effectBlackCatPounce: 'Black Cat Pounce',
+    effectOuijaPlanchette: 'Ouija Planchette',
 
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
@@ -991,7 +992,8 @@
     ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
     spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
     witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
-    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' }
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' },
+    ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -8450,6 +8452,261 @@
     ], { duration: T.markDur * f, delay: T.markStart * f, easing: 'ease-out', fill: 'both' });
     marks.__waapiAnims = [markAnim];
     markAnim.finished.then(function () { marks.remove(); }).catch(function () { marks.remove(); });
+  }
+
+  // oculist-l0bs.10: Ouija Planchette, Haunted Hollow pack (pack II). A wooden spirit-board
+  // planchette slides in horizontally along the line just BELOW the match (tilted ~10 degrees,
+  // two motion ticks trailing it), settles with its narrow tip pointing UP at the match and
+  // its round lens centred under the match's centre x (four attention ticks around the lens,
+  // the engraved glyph glints once), holds, then slides out the far side. There is no
+  // prototype: this is built directly from the approved character sheet's three canonical
+  // poses (rest, slide, settle), redrawn as flat inline SVG. Wood grain is deliberately not
+  // reproduced; the wood is flat tones only.
+  //
+  // PROTECTED RECT (contract rule 10, no exceptions): the wrapper box only ever translates
+  // HORIZONTALLY, and its top edge sits CLEAR (6px) below the match rect (or its bottom edge
+  // CLEAR above it in the fallback), so no frame can enter the match rect plus clearance. The
+  // tilt and the settle pose's larger scale happen INSIDE the wrapper's own padded viewBox
+  // (overflow hidden), never outside the box. The lens is a ring with a glass fill, but it only
+  // ever sits fully outside the glyph box, so it never overlays the match; the page's text is
+  // never recoloured, hidden or covered.
+  //
+  // PLACEMENT: below, else above (the figure is rotated 180 degrees so the tip still points at
+  // the match), else suppressed. The fit check is made on the PRE-SCROLL viewport rect; only the
+  // final left/top are converted to document space (rule 2). The slide-in side is the start
+  // cascade verbatim (mouse, else the find bar, else viewport centre).
+  //
+  // The fixed identity palette from the sheet brief is used; the effective beacon colour is
+  // not used, as no neighbouring character effect uses it as an accent either.
+  //
+  // LITE MODE drops: the two motion ticks, the four attention ticks and the glyph glint. It
+  // keeps the planchette silhouette, the tilted slide, the settle and the slide out.
+  var ouijaGlyphCursor = 0;
+  function animateOuijaPlanchette(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var lite = !!settings.performanceMode;
+
+    var WOOD = '#A9743C', WOOD_HI = '#D49A5A', WOOD_SH = '#6B4423', OUTLINE = '#2A170A';
+    var GLASS = '#CFE8E4', RIM = '#E8C766', GLASS_SH = '#8FB5B0', BRASS = '#C9A24A';
+    var ENGRAVE = '#3C2410', GLOW = '#FFD45A';
+
+    var VB_W = 120, VB_H = 132;       // padded pose viewBox: tilt and settle scale stay inside it
+    var CX = 60, CY = 66;             // pivot of the tilt and of the settle scale
+    var LENS_Y = 42;
+    var CLEAR = 6, EDGE = 4;
+    var GLYPHS = ['crescent', 'sun', 'star'];
+
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var beaconScale = getBeaconScale();
+    var f = getBeaconDuration(1);
+
+    // Roughly 80px of visible planchette at Beacon Size M for a body-text match.
+    var boxH = Math.max(76, Math.min(104, rect.height * 3.6)) * beaconScale;
+    var u = boxH / VB_H;
+    var boxW = VB_W * u;
+
+    // ---- Placement (viewport space, pre-scroll) ----
+    var place = null, boxTop;
+    if (rect.bottom + CLEAR + boxH <= vh - EDGE) { place = 'below'; boxTop = rect.bottom + CLEAR; }
+    else if (rect.top - CLEAR - boxH >= EDGE) { place = 'above'; boxTop = rect.top - CLEAR - boxH; }
+    if (!place) return; // suppress: neither fits
+    if (vw - EDGE - boxW < EDGE) return; // viewport narrower than the figure: suppress
+
+    var centreX = rect.left + rect.width / 2;
+    var boxLeft = Math.max(EDGE, Math.min(vw - EDGE - boxW, centreX - boxW / 2));
+
+    // Start cascade, verbatim from animateTrail (viewport coordinates here): mouse, else the
+    // find bar centre, else viewport centre. It only picks the slide-in side.
+    var startX;
+    if (lastMouseX !== null && lastMouseY !== null) {
+      startX = lastMouseX;
+    } else if (wrap) {
+      var wrapRect = wrap.getBoundingClientRect();
+      startX = wrapRect.left + wrapRect.width / 2;
+    } else {
+      startX = vw / 2;
+    }
+    var dir = startX <= centreX ? 1 : -1; // +1: slides in from the left, out to the right
+
+    var travel = boxW * 3;
+    // Entry and exit distances, kept inside the viewport on the right so the document never
+    // gains a horizontal scrollbar from the off-screen box.
+    var maxRight = Math.max(0, vw - EDGE - boxW - boxLeft);
+    var inDX = dir > 0 ? travel : Math.min(travel, maxRight);
+    var outDX = dir > 0 ? Math.min(travel, maxRight) : travel;
+    var startTx = -dir * inDX, endTx = dir * outDX;
+
+    var glyph = GLYPHS[ouijaGlyphCursor % GLYPHS.length];
+    ouijaGlyphCursor++;
+
+    // ---- Timeline (base ms, scaled through getBeaconDuration) ----
+    var T = lite
+      ? { arrive: 600, settleEnd: 1000, exitStart: 1700, dur: 2300 }
+      : { arrive: 700, settleEnd: 1200, exitStart: 2200, dur: 2900 };
+    var DUR = T.dur;
+
+    function addShape(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      parent.appendChild(n);
+      return n;
+    }
+
+    // ---- DOM ----
+    var el = document.createElement('div');
+    el.className = 'oc-beacon oc-beacon-transient oc-ouija';
+    el.setAttribute('data-ouija', 'planchette');
+    el.setAttribute('data-op-place', place);
+    el.setAttribute('data-op-dir', dir > 0 ? 'ltr' : 'rtl');
+    el.setAttribute('data-op-glyph', glyph);
+    el.style.cssText = [
+      'position:absolute',
+      'left:' + (boxLeft + window.scrollX) + 'px', 'top:' + (boxTop + window.scrollY) + 'px',
+      'width:' + boxW + 'px', 'height:' + boxH + 'px',
+      'pointer-events:none',
+      'z-index:2147483642',
+      'opacity:0',
+      'transform:translate(' + startTx + 'px,0px)'
+    ].join(';');
+    mountOverlay(el);
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', String(boxW));
+    svg.setAttribute('height', String(boxH));
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    svg.style.cssText = 'display:block;overflow:hidden;';
+    el.appendChild(svg);
+
+    // Static inversion for the above-the-match fallback: the tip still points at the match.
+    var root = addShape('g', place === 'above' ? { 'data-op-inverted': '1', transform: 'rotate(180 ' + CX + ' ' + CY + ')' } : {}, svg);
+
+    function drawGlyph(parent, kind, colour) {
+      var g = addShape('g', { transform: 'translate(' + CX + ' 88)', fill: colour, stroke: colour, 'stroke-width': '1', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, parent);
+      if (kind === 'crescent') {
+        addShape('path', { d: 'M 5 -7.5 A 9.01 9.01 0 1 0 5 7.5 A 10 10 0 0 1 5 -7.5 Z' }, g);
+      } else if (kind === 'sun') {
+        addShape('circle', { cx: 0, cy: 0, r: '4.5' }, g);
+        for (var i = 0; i < 8; i++) {
+          var a = i * Math.PI / 4;
+          addShape('path', { d: 'M ' + (6.8 * Math.cos(a)).toFixed(2) + ' ' + (6.8 * Math.sin(a)).toFixed(2) + ' L ' + (10.5 * Math.cos(a)).toFixed(2) + ' ' + (10.5 * Math.sin(a)).toFixed(2), 'stroke-width': '2', fill: 'none' }, g);
+        }
+      } else {
+        var pts = [];
+        for (var j = 0; j < 10; j++) {
+          var ang = -Math.PI / 2 + j * Math.PI / 5, rr = j % 2 === 0 ? 10.5 : 4.4;
+          pts.push((rr * Math.cos(ang)).toFixed(2) + ',' + (rr * Math.sin(ang)).toFixed(2));
+        }
+        addShape('polygon', { points: pts.join(' ') }, g);
+      }
+      return g;
+    }
+
+    // The planchette itself: flat teardrop, narrow tip up, three tones of wood.
+    function drawBody(parent) {
+      var g = addShape('g', { 'data-op-part': 'body' }, parent);
+      var d = 'M 60 8 C 66 8 72 24 82 42 C 96 66 104 80 100 100 C 97 118 80 124 60 124 C 40 124 23 118 20 100 C 16 80 24 66 38 42 C 48 24 54 8 60 8 Z';
+      addShape('path', { d: d, fill: WOOD, stroke: OUTLINE, 'stroke-width': '2.2', 'stroke-linejoin': 'round' }, g);
+      addShape('path', { d: 'M 60 12 C 52 14 48 26 40 44 C 28 68 22 80 24 98 C 30 80 40 62 50 44 C 54 30 58 20 60 12 Z', fill: WOOD_HI }, g);
+      addShape('path', { d: 'M 82 46 C 94 68 100 82 97 100 C 94 116 80 120 60 120 C 78 118 88 108 90 94 C 90 78 86 62 80 46 Z', fill: WOOD_SH }, g);
+      // Three round feet at the rim.
+      [[31, 100], [89, 100], [60, 117]].forEach(function (p) {
+        addShape('circle', { cx: p[0], cy: p[1], r: '4', fill: OUTLINE, 'data-op-part': 'foot' }, g);
+        addShape('circle', { cx: p[0] - 1, cy: p[1] - 1, r: '1.3', fill: BRASS }, g);
+      });
+      // Lens: a ring with a glass fill (it only ever sits fully outside the glyph box).
+      var lens = addShape('g', { 'data-op-part': 'lens', 'data-op-lens': 'glass' }, g);
+      addShape('circle', { cx: CX, cy: LENS_Y, r: '15.5', fill: OUTLINE }, lens);
+      addShape('circle', { cx: CX, cy: LENS_Y, r: '13.6', fill: RIM }, lens);
+      addShape('circle', { cx: CX, cy: LENS_Y, r: '10.6', fill: GLASS }, lens);
+      addShape('path', { d: 'M 52 49 A 10.6 10.6 0 0 0 69 46 A 12 12 0 0 1 52 49 Z', fill: GLASS_SH }, lens);
+      // The engraved glyph on the broad face.
+      var gl = drawGlyph(g, glyph, ENGRAVE);
+      gl.setAttribute('data-op-part', 'glyph');
+      return g;
+    }
+
+    function tick(parent, x1, y1, x2, y2, part) {
+      var dd = 'M ' + x1 + ' ' + y1 + ' L ' + x2 + ' ' + y2;
+      var t = addShape('g', { 'data-op-part': part }, parent);
+      addShape('path', { d: dd, stroke: OUTLINE, 'stroke-width': '5', 'stroke-linecap': 'round', fill: 'none' }, t);
+      addShape('path', { d: dd, stroke: GLOW, 'stroke-width': '2.6', 'stroke-linecap': 'round', fill: 'none' }, t);
+      return t;
+    }
+
+    // POSE: rest -- straight on, no ticks (the hold).
+    var rest = addShape('g', { 'data-op-pose': 'rest', opacity: '0' }, root);
+    drawBody(rest);
+
+    // POSE: slide -- tilted ~10 degrees into the direction of travel, two motion ticks behind.
+    var slide = addShape('g', { 'data-op-pose': 'slide', opacity: '1' }, root);
+    var slideTilt = addShape('g', { transform: 'rotate(' + (dir * 10) + ' ' + CX + ' ' + CY + ')' }, slide);
+    drawBody(slideTilt);
+    if (!lite) {
+      var bx = dir > 0 ? [5, 17] : [115, 103];
+      tick(slideTilt, bx[0], 58, bx[1], 58, 'motion-tick');
+      tick(slideTilt, bx[0] + dir * 3, 76, bx[1] - dir * 1, 76, 'motion-tick');
+    }
+
+    // POSE: settle -- like rest but very slightly bigger, four attention ticks round the lens.
+    var settle = addShape('g', { 'data-op-pose': 'settle', opacity: '0' }, root);
+    var settleScale = addShape('g', { transform: 'translate(' + CX + ' ' + CY + ') scale(1.06) translate(' + (-CX) + ' ' + (-CY) + ')' }, settle);
+    drawBody(settleScale);
+    var glint = null;
+    if (!lite) {
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (s) {
+        var k = Math.SQRT1_2;
+        tick(settleScale, CX + s[0] * 19 * k, LENS_Y + s[1] * 19 * k, CX + s[0] * 26 * k, LENS_Y + s[1] * 26 * k, 'attention-tick');
+      });
+      glint = drawGlyph(settleScale, glyph, GLOW);
+      glint.setAttribute('data-op-part', 'glint');
+      glint.setAttribute('opacity', '0');
+    }
+
+    // ---- Animations ----
+    var anims = [];
+    function track(a) {
+      anims.push(a);
+      a.finished.then(function () { el.remove(); }).catch(function () { el.remove(); });
+      return a;
+    }
+    // Hard-cut visibility over a list of [a,b] windows (ms of the base timeline).
+    function visibleIn(node, windows) {
+      var kf = [{ opacity: windows.some(function (w) { return w[0] <= 0; }) ? 1 : 0, offset: 0 }];
+      windows.forEach(function (w) {
+        if (w[0] > 0) kf.push({ opacity: 0, offset: w[0] / DUR }, { opacity: 1, offset: w[0] / DUR });
+        if (w[1] < DUR) kf.push({ opacity: 1, offset: w[1] / DUR }, { opacity: 0, offset: w[1] / DUR });
+      });
+      kf.push({ opacity: windows[windows.length - 1][1] >= DUR ? 1 : 0, offset: 1 });
+      return track(node.animate(kf, { duration: DUR * f, fill: 'both' }));
+    }
+    visibleIn(slide, [[0, T.arrive], [T.exitStart, DUR]]);
+    visibleIn(settle, [[T.arrive, T.settleEnd]]);
+    visibleIn(rest, [[T.settleEnd, T.exitStart]]);
+    if (glint) {
+      // One glint: the lit copy of the glyph flashes up and back down once inside the settle.
+      var g0 = (T.arrive + 100) / DUR, g1 = (T.arrive + 250) / DUR, g2 = (T.arrive + 420) / DUR;
+      track(glint.animate([
+        { opacity: 0, offset: 0 }, { opacity: 0, offset: g0 },
+        { opacity: 1, offset: g1 }, { opacity: 0, offset: g2 }, { opacity: 0, offset: 1 }
+      ], { duration: DUR * f, fill: 'both' }));
+    }
+
+    // Wrapper: slide in (ease-out), hold, slide out the far side (ease-in), fading at the ends.
+    var tA = T.arrive / DUR, tX = T.exitStart / DUR;
+    var inFade = Math.min(T.arrive * 0.35, 220) / DUR;
+    var outFade = (DUR - Math.min((DUR - T.exitStart) * 0.5, 350)) / DUR;
+    track(el.animate([
+      { transform: 'translate(' + startTx + 'px,0px)', opacity: 0, offset: 0, easing: 'ease-out' },
+      { transform: 'translate(' + (startTx * (1 - inFade / tA)) + 'px,0px)', opacity: 1, offset: inFade, easing: 'ease-out' },
+      { transform: 'translate(0px,0px)', opacity: 1, offset: tA },
+      { transform: 'translate(0px,0px)', opacity: 1, offset: tX, easing: 'ease-in' },
+      { transform: 'translate(' + (endTx * ((outFade - tX) / (1 - tX))) + 'px,0px)', opacity: 1, offset: outFade },
+      { transform: 'translate(' + endTx + 'px,0px)', opacity: 0, offset: 1 }
+    ], { duration: DUR * f, fill: 'both' }));
+
+    el.__waapiAnims = anims;
   }
 
   function animateLightning(rect) {
