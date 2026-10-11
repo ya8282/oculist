@@ -39,7 +39,7 @@ const READ_SEEDED_FLAG_EXPR =
 // oculist-l0bs.2: pack II's seed. Keyed on the seeded flag alone until the first pack II
 // effect lands in effectsRegistry; once one does, add its key to HOLLOW_PROBE_EFFECTS so the
 // wait also proves content.js applied the write.
-const HOLLOW_PROBE_EFFECTS = ['blackcatpounce'];
+const HOLLOW_PROBE_EFFECTS = ['blackcatpounce', 'gravehands'];
 const READ_HOLLOW_FLAG_EXPR = READ_SEEDED_FLAG_EXPR.replace('seededHalloweenPack', 'seededHollowPack');
 
 async function waitForHalloweenSeedSettled(evalInContentScript, opts = {}) {
