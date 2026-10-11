@@ -860,6 +860,9 @@
     effectArrowShot: 'Arrow Shot',
     effectVineSwing: 'Vine Swing',
 
+    // Haunted Hollow pack effects (oculist-l0bs)
+    effectGhostSweep: 'Ghost Sweep',
+
     // Saved-list popover (oculist-l6m.9)
     listsBtnTitle: 'Saved Lists',
     saveListPlaceholder: 'Save current as…',
@@ -981,7 +984,8 @@
     batflight: { label: i18n.effectBatFlight, run: animateBatFlight, pack: 'halloween' },
     wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'adventure' },
     arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'adventure' },
-    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' }
+    vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' },
+    ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -9682,6 +9686,235 @@
     if (!rect || rect.width === 0 || rect.height === 0) return;
     cancelBeacons();
     drawActiveOverlays(rect, true);
+  }
+
+  // oculist-l0bs.3: Ghost Sweep (Haunted Hollow pack). A bedsheet ghost drifts across the
+  // page on a gentle S-curve along a lane ABOVE the match (BELOW if there is no room above
+  // in the pre-scroll viewport; suppressed if neither fits), trailing a wavy ribbon. As it
+  // passes over the match's centre x it switches to the wail pose and breathes once (~8%),
+  // then returns to the lean pose and exits the far side. The sheet's "fade-through" pose is
+  // used ONLY for the entry/exit fade at the viewport edges, never over the match: the lane
+  // is outside the match's glyph box plus CLEAR px in every frame (contract rule 10).
+  // Fixed identity palette from scripts/character-sheets/sheets/ghost-sweep.md; no
+  // accessibility accent from the beacon colour, same reasoning as animateJackOLantern
+  // (no separate flash element to carry it). Deterministic: no Math.random.
+  function animateGhostSweep(rect) {
+    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var SHEET = '#F2EEF8', SHADE = '#BDB4D6', OUTLINE = '#2B2440', FACE = '#17121F', BLUSH = '#F2A6C8';
+    var VB_W = 60, VB_H = 90;
+    var CLEAR = 6, GAP = 6, EDGE = 4;
+    var FADE = 0.12, WAIL_HALF = 0.07;
+
+    var u = getBeaconScale();
+    var boxW = VB_W * u, boxH = VB_H * u;
+    var swing = 8 * u;           // S-curve amplitude
+    var half = 56 * u;           // conservative vertical half-extent: rotation + wail stretch + 8% breathe
+    var lite = !!settings.performanceMode;
+
+    // Viewport-fit decisions use the PRE-SCROLL viewport rect (contract rule 2).
+    var vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+    var vh = window.innerHeight;
+    var cx = rect.left + rect.width / 2;
+
+    var laneY, lane;
+    var aboveY = rect.top - CLEAR - GAP - swing - half;
+    var belowY = rect.bottom + CLEAR + GAP + swing + half;
+    if (aboveY - swing - half >= EDGE) { laneY = aboveY; lane = 'above'; }
+    else if (belowY + swing + half <= vh - EDGE) { laneY = belowY; lane = 'below'; }
+    else return; // neither lane fits: suppress rather than cover text
+
+    // Start-point cascade (animateTrail's, verbatim in viewport space): cursor, else find bar
+    // centre, else viewport centre. It only picks the entry side.
+    var sx;
+    if (lastMouseX !== null && lastMouseY !== null) {
+      sx = lastMouseX;
+    } else if (wrap) {
+      var wr = wrap.getBoundingClientRect();
+      sx = wr.left + wr.width / 2;
+    } else {
+      sx = window.innerWidth / 2;
+    }
+    var dir = sx <= cx ? 1 : -1; // +1 enters from the left, -1 from the right (mirrored)
+    var startLeft = dir > 0 ? EDGE : vw - EDGE - boxW;
+    var endLeft = dir > 0 ? vw - EDGE - boxW : EDGE;
+    var travel = endLeft - startLeft;
+    if (Math.abs(travel) < boxW * 2) return;
+    var p = Math.max(0.2, Math.min(0.8, ((cx - boxW / 2) - startLeft) / travel));
+
+    var D = getBeaconDuration(2000);
+    var beat = getBeaconDuration(160);
+
+    function el(tag, attrs, parent) {
+      var n = document.createElementNS(NS, tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(n);
+      return n;
+    }
+    var SW = 'stroke-linejoin:round;';
+
+    var root = document.createElement('div');
+    root.className = 'oc-beacon oc-beacon-transient oc-ghostsweep';
+    root.setAttribute('data-ghostsweep', 'ghost');
+    root.setAttribute('data-ghost-lane', lane);
+    root.setAttribute('data-ghost-dir', dir > 0 ? 'ltr' : 'rtl');
+    root.style.cssText = [
+      'position:absolute',
+      'left:' + (startLeft + window.scrollX) + 'px',
+      'top:' + (laneY - boxH / 2 + window.scrollY) + 'px',
+      'width:' + boxW + 'px', 'height:' + boxH + 'px',
+      'pointer-events:none', 'z-index:2147483642', 'opacity:0'
+    ].join(';');
+    mountOverlay(root);
+
+    var pulse = document.createElement('div');
+    pulse.setAttribute('data-part', 'pulse');
+    pulse.style.cssText = 'width:100%;height:100%;transform-origin:50% 50%;';
+    root.appendChild(pulse);
+
+    var svg = el('svg', { width: String(boxW), height: String(boxH), viewBox: '0 0 ' + VB_W + ' ' + VB_H }, pulse);
+    svg.style.cssText = 'display:block;overflow:visible;' + (dir < 0 ? 'transform:scaleX(-1);' : '');
+
+    // Trail ribbon: 2.5x ghost width, tapering to a point, flat shade tone. Behind (-x) the
+    // ghost in its own frame; the svg mirror flips it for right-to-left travel.
+    var trail = null;
+    if (!lite) {
+      trail = el('path', {
+        d: 'M10 66 C-10 58 -30 74 -60 66 S-110 62 -142 68 C-110 70 -90 76 -60 72 S-20 80 10 74 Z',
+        fill: SHADE, 'data-part': 'trail'
+      }, svg);
+      trail.style.cssText = 'transform-box:fill-box;transform-origin:100% 50%;transform:scaleX(0);';
+    }
+
+    var BODY_TOP = 'M8 40 C8 16 17 6 30 6 C43 6 52 16 52 40 L52 72 ';
+    var HEMS = [
+      'a7.35 7.35 0 0 1 -14.7 0 a7.35 7.35 0 0 1 -14.7 0 a7.35 7.35 0 0 1 -14.7 0 Z',
+      'a7.35 9 0 0 1 -14.7 2 a7.35 6 0 0 1 -14.7 -2 a7.35 9 0 0 1 -14.7 2 Z',
+      'a7.35 5 0 0 1 -14.7 -2 a7.35 9 0 0 1 -14.7 2 a7.35 5 0 0 1 -14.7 -2 Z'
+    ];
+    function bodyAttrs(d, fill) {
+      return { d: d, fill: fill, stroke: OUTLINE, 'stroke-width': '2', style: SW };
+    }
+
+    function face(g, wailFace) {
+      if (wailFace) {
+        el('ellipse', { cx: 21, cy: 30, rx: 4, ry: 7, fill: FACE }, g);
+        el('ellipse', { cx: 39, cy: 30, rx: 4, ry: 7, fill: FACE }, g);
+        el('ellipse', { cx: 30, cy: 52, rx: 5, ry: 9, fill: FACE }, g);
+      } else {
+        el('ellipse', { cx: 22, cy: 34, rx: 3, ry: 5.5, fill: FACE }, g);
+        el('ellipse', { cx: 38, cy: 34, rx: 3, ry: 5.5, fill: FACE }, g);
+        el('ellipse', { cx: 30, cy: 50, rx: 3.2, ry: 3.5, fill: FACE }, g);
+      }
+    }
+
+    // Pose: drift left-lean (the resting pose), with the three-variant hem wobble.
+    var lean = el('g', { 'data-pose': 'lean', transform: 'rotate(-12 30 45)' }, svg);
+    lean.style.opacity = '1';
+    var hemGroups = [];
+    for (var h = 0; h < (lite ? 1 : 3); h++) {
+      var hg = el('g', { 'data-hem': String(h) }, lean);
+      hg.style.opacity = (lite ? '1' : '0');
+      el('path', bodyAttrs(BODY_TOP + HEMS[h], SHEET), hg);
+      el('path', { d: 'M52 40 C52 16 43 6 30 6 C46 12 47 28 46 40 L46 72 L52 72 Z', fill: SHADE }, hg);
+      hemGroups.push(hg);
+    }
+    face(lean, false);
+    el('ellipse', { cx: 15, cy: 43, rx: 3, ry: 1.8, fill: BLUSH }, lean);
+    el('ellipse', { cx: 45, cy: 43, rx: 3, ry: 1.8, fill: BLUSH }, lean);
+
+    // Pose: wail (taller, flared hem, big tall mouth).
+    var wail = el('g', { 'data-pose': 'wail' }, svg);
+    wail.style.opacity = '0';
+    el('path', bodyAttrs(
+      'M7 42 C7 12 17 2 30 2 C43 2 53 12 53 42 C53 58 57 68 58 80 Q51 90 44 80 Q37 90 30 80 Q23 90 16 80 Q9 90 2 80 C3 68 7 58 7 42 Z',
+      SHEET
+    ), wail);
+    el('path', { d: 'M53 42 C53 12 43 2 30 2 C48 8 49 28 48 42 C48 58 52 68 53 80 L58 80 C57 68 53 58 53 42 Z', fill: SHADE }, wail);
+    face(wail, true);
+
+    // Pose: fade-through (outline-only silhouette), entry/exit only.
+    var fade = null;
+    if (!lite) {
+      fade = el('g', { 'data-pose': 'fade' }, svg);
+      fade.style.opacity = '0';
+      el('path', bodyAttrs(BODY_TOP + HEMS[0], SHADE), fade);
+      face(fade, false);
+    }
+
+    var anims = [];
+    function track(a) {
+      anims.push(a);
+      a.finished.then(function () { root.remove(); }).catch(function () { root.remove(); });
+      return a;
+    }
+    // Discrete show/hide over [0,1] of the run: each interval is [from, to].
+    function stepFrames(ivs) {
+      var pts = [[0, ivs[0][0] === 0 ? 1 : 0]];
+      for (var i = 0; i < ivs.length; i++) {
+        if (ivs[i][0] > 0) { pts.push([ivs[i][0], 0]); pts.push([ivs[i][0], 1]); }
+        if (ivs[i][1] < 1) { pts.push([ivs[i][1], 1]); pts.push([ivs[i][1], 0]); }
+      }
+      pts.push([1, ivs[ivs.length - 1][1] === 1 ? 1 : 0]);
+      return pts.map(function (q) { return { opacity: q[1], offset: q[0] }; });
+    }
+
+    // Travel: x linear in time, y one full S, opacity ramps at the entry/exit fade.
+    var offs = [FADE, 1 - FADE];
+    for (var i = 0; i <= 12; i++) offs.push(i / 12);
+    offs.sort(function (a, b) { return a - b; });
+    var travelFrames = [];
+    for (var j = 0; j < offs.length; j++) {
+      var o = offs[j];
+      if (j > 0 && o === offs[j - 1]) continue;
+      var op = o < FADE ? o / FADE : (o > 1 - FADE ? (1 - o) / FADE : 1);
+      travelFrames.push({
+        transform: 'translate(' + (travel * o) + 'px,' + (-swing * Math.sin(2 * Math.PI * o)) + 'px)',
+        opacity: op, offset: o
+      });
+    }
+    // Every animation, including those on child nodes, hangs off root (the element
+    // cancelBeacons() selects), so a cancel reaches all of them.
+    root.__waapiAnims = anims;
+    track(root.animate(travelFrames, { duration: D, easing: 'linear', fill: 'both' }));
+
+    var w1 = p - WAIL_HALF, w2 = p + WAIL_HALF;
+    track(pulse.animate([
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(1)', offset: w1 },
+      { transform: 'scale(1.08)', offset: p },
+      { transform: 'scale(1)', offset: w2 },
+      { transform: 'scale(1)', offset: 1 }
+    ], { duration: D, easing: 'ease-in-out', fill: 'both' }));
+
+    var opts = { duration: D, easing: 'linear', fill: 'both' };
+    if (lite) {
+      track(lean.animate(stepFrames([[0, w1], [w2, 1]]), opts));
+    } else {
+      track(lean.animate(stepFrames([[FADE, w1], [w2, 1 - FADE]]), opts));
+      track(fade.animate(stepFrames([[0, FADE], [1 - FADE, 1]]), opts));
+    }
+    track(wail.animate(stepFrames([[w1, w2]]), opts));
+
+    if (!lite) {
+      // Hem wobble: cycle the three scallop variants on a fixed beat.
+      var cycle = beat * 3;
+      for (var k = 0; k < 3; k++) {
+        track(hemGroups[k].animate(stepFrames([[k / 3, (k + 1) / 3]]), {
+          duration: cycle, iterations: Math.ceil(D / cycle) + 1, easing: 'linear', fill: 'both'
+        }));
+      }
+      // Trail grows only as fast as the ghost has moved, so it never pokes past the
+      // viewport edge the ghost entered from.
+      var grown = Math.min(1, Math.abs(travel) / (2.5 * boxW));
+      var t1 = Math.min(1, (2.5 * boxW) / Math.abs(travel));
+      track(trail.animate([
+        { transform: 'scaleX(0)', offset: 0 },
+        { transform: 'scaleX(' + grown + ')', offset: t1 },
+        { transform: 'scaleX(' + grown + ')', offset: 1 }
+      ], { duration: D, easing: 'linear', fill: 'both' }));
+    }
   }
 
   function animate(rect) {
