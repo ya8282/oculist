@@ -178,7 +178,37 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
       window.addEventListener('scrollend', finish, { once: true });
       setTimeout(finish, 750);
     }));
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+    await waitNoTransientBeacons('settleNavigation: .oc-beacon-transient did not self-remove');
+  }
+
+  // oculist-wq9h: flaked once under load and never reproduced. On timeout waitForCondition
+  // prints the last snapshot (survivors, their animations, timeline) so the next hit explains itself.
+  async function waitNoTransientBeacons(message) {
+    const startedAt = Date.now();
+    await waitForCondition(
+      () =>
+        page.evaluate((sinceWaitStartMs) => {
+          const els = [...document.querySelectorAll('.oc-beacon-transient')];
+          return {
+            count: els.length,
+            sinceWaitStartMs,
+            timelineMs: document.timeline.currentTime,
+            visibility: document.visibilityState,
+            beacons: els.slice(0, 5).map((el) => ({
+              html: el.outerHTML.slice(0, 200),
+              className: el.getAttribute('class'),
+              connected: el.isConnected,
+              parent: el.parentElement && (el.parentElement.id || el.parentElement.tagName + '.' + (el.parentElement.getAttribute('class') || '')),
+              animations: el.getAnimations().map((a) => {
+                const t = a.effect && a.effect.getComputedTiming();
+                return { playState: a.playState, currentTime: a.currentTime, duration: t && String(t.duration), endTime: t && String(t.endTime) };
+              })
+            }))
+          };
+        }, Date.now() - startedAt),
+      (snap) => snap.count === 0,
+      { timeout: POLL_TIMEOUT, message }
+    );
   }
 
   function evalInContentScript(expression, target) {
@@ -247,7 +277,7 @@ describe('Arrow Shot: an archer draws and looses an arrow that arcs to the match
 
   async function clearBeacons() {
     await evalInContentScript('window.__ocTest.cancelBeacons()');
-    await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
+    await waitNoTransientBeacons('clearBeacons: .oc-beacon-transient survived cancelBeacons');
   }
 
   // Content scripts run in an isolated JS world -- a listener content.js adds via
