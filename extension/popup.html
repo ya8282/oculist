@@ -319,7 +319,7 @@
     }
 
     summary.configure-summary::after {
-      content: "▼";
+      content: "▼" / "";
       font-size: 10px;
       color: var(--text-muted);
       transition: transform 0.2s;
@@ -544,7 +544,7 @@
 
   <!-- Custom Vision Settings Drawer (Accordion) -->
   <details class="configure-drawer" id="configure-drawer">
-    <summary class="configure-summary" aria-controls="drawer-content" aria-expanded="false" aria-label="Toggle custom vision settings panel">
+    <summary class="configure-summary" aria-controls="drawer-content" aria-expanded="false">
       Custom Vision Settings
     </summary>
     <div class="drawer-content" id="drawer-content">

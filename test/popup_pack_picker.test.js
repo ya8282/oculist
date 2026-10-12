@@ -89,6 +89,21 @@ describe('popup pack picker', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  test('configure-summary accessible name is its visible text, without the chevron glyph', async () => {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('summary.configure-summary');
+    const cdp = await ctx.newCDPSession(popup);
+    const { root } = await cdp.send('DOM.getDocument');
+    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'summary.configure-summary' });
+    const { node } = await cdp.send('DOM.describeNode', { nodeId });
+    const { nodes } = await cdp.send('Accessibility.getPartialAXTree', { backendNodeId: node.backendNodeId, fetchRelatives: false });
+    assert.strictEqual(nodes[0].name.value, 'Custom Vision Settings');
+    const glyph = await popup.evaluate(() => getComputedStyle(document.querySelector('summary.configure-summary'), '::after').content);
+    assert.ok(glyph.includes('\u25BC'), `chevron missing: ${glyph}`);
+    await popup.close();
+  });
+
   test('closed picker leaves the popup within its max-height and the chevron tracks open state', async () => {
     const popup = await ctx.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
