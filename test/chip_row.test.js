@@ -200,6 +200,8 @@ describe('Chip row and working-list state', () => {
   // Every test starts from a closed overlay and an empty working list, so chips never
   // leak from one test into the next.
   beforeEach(async () => {
+    // Twice: the first Escape only dismisses an open settings panel.
+    await page.keyboard.press('Escape').catch(() => {});
     await page.keyboard.press('Escape').catch(() => {});
     await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
@@ -1229,5 +1231,36 @@ describe('Chip row and working-list state', () => {
     assert.ok(m.row > 0);
     assert.ok(Math.abs(capAt0 - m.cap - m.row) < 1, `cap ${capAt0} -> ${m.cap} should drop by chip row ${m.row}`);
     assert.ok(m.host <= 800 + 1, `host ${m.host}px must fit the 800px viewport`);
+  });
+
+  // oculist-aqrh: a beacon-size change rescales the chips (--oc-chip-scale) without re-rendering
+  // them, so --oc-chip-chrome must be re-measured or the panel cap under-counts the row.
+  test('settings panel cap tracks the chip row height when beacon size changes (oculist-aqrh)', async () => {
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.locator('#oc-wrap >> button[title="Options"]').click();
+    const SETTINGS = '#oc-wrap >> #oc-settings-panel';
+    await page.waitForSelector(SETTINGS);
+    for (const t of ['zenithquokka', 'brindlefalcon', 'quarklet']) await addTerm(t);
+    const measure = () => page.locator(SETTINGS).evaluate((el) => ({
+      cap: parseFloat(getComputedStyle(el).maxHeight),
+      chrome: parseFloat(getComputedStyle(el).getPropertyValue('--oc-chip-chrome')),
+      row: el.getRootNode().querySelector('.oc-chip-row').getBoundingClientRect().height,
+    }));
+    const before = await measure();
+    try {
+      await setVisionSettings({ beaconSize: 'xl' });
+      await waitForCondition(async () => (await measure()).row, (row) => row > before.row + 1, {
+        timeout: POLL_TIMEOUT,
+        message: 'chip row never grew after beaconSize xl',
+      });
+      const after = await measure();
+      assert.ok(Math.abs(after.chrome - after.row) < 1, `--oc-chip-chrome ${after.chrome} should equal row ${after.row}`);
+      assert.ok(
+        Math.abs(before.cap - after.cap - (after.row - before.row)) < 1,
+        `cap ${before.cap} -> ${after.cap} should drop by row growth ${before.row} -> ${after.row}`
+      );
+    } finally {
+      await setVisionSettings({ beaconSize: 'm' });
+    }
   });
 });

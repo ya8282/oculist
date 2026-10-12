@@ -14100,9 +14100,16 @@
       chip.appendChild(removeBtn);
       chipRow.appendChild(chip);
     });
-    // The panels' max-height caps (hostChromePx) are baked at style-injection time; the chip
-    // row's wrapped height is live, so it reaches them through this inherited variable.
-    if (wrap) wrap.style.setProperty('--oc-chip-chrome', chipRow.getBoundingClientRect().height + 'px');
+    syncChipChrome();
+  }
+
+  // The panels' max-height caps (hostChromePx) are baked at style-injection time; the chip
+  // row's wrapped height is live, so it reaches them through this inherited variable.
+  // Re-run whenever chip size can change without a re-render (beacon size).
+  function syncChipChrome() {
+    if (!wrap || !chipRow) return;
+    if (chipRow.hidden || workListTerms.length === 0) wrap.style.removeProperty('--oc-chip-chrome');
+    else wrap.style.setProperty('--oc-chip-chrome', chipRow.getBoundingClientRect().height + 'px');
   }
 
   // Display the active match with the high-visibility visual animation
@@ -15933,6 +15940,8 @@
     wrap.classList.toggle('is-bottom', p.isBottom);
     wrap.classList.remove('pos-tr', 'pos-tl', 'pos-br', 'pos-bl');
     wrap.classList.add('pos-' + settings.position);
+    // The cssText reset above wipes --oc-chip-chrome; re-measure after styles are in place.
+    syncChipChrome();
   }
 
   // ── UI build ──────────────────────────────────────────────────────────────────
