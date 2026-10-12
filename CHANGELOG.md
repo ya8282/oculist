@@ -5,6 +5,13 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
+## [Unreleased]
+
+### Changed
+
+* The Haunted Hollow pack is now called Another Halloween Pack. Its effects and your saved
+  on/off setting are unchanged.
+
 ## [1.9.0] — 2026-10-11
 
 ### Added
