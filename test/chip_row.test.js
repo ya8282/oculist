@@ -200,6 +200,8 @@ describe('Chip row and working-list state', () => {
   // Every test starts from a closed overlay and an empty working list, so chips never
   // leak from one test into the next.
   beforeEach(async () => {
+    // Twice: the first Escape only dismisses an open settings panel.
+    await page.keyboard.press('Escape').catch(() => {});
     await page.keyboard.press('Escape').catch(() => {});
     await page.waitForFunction(CLOSED, null, { timeout: POLL_TIMEOUT });
     await evalInContentScript("new Promise((resolve) => chrome.storage.session.remove('oc-worklist', resolve))");
@@ -1229,5 +1231,84 @@ describe('Chip row and working-list state', () => {
     assert.ok(m.row > 0);
     assert.ok(Math.abs(capAt0 - m.cap - m.row) < 1, `cap ${capAt0} -> ${m.cap} should drop by chip row ${m.row}`);
     assert.ok(m.host <= 800 + 1, `host ${m.host}px must fit the 800px viewport`);
+  });
+
+  // oculist-aqrh: a beacon-size change rescales the chips (--oc-chip-scale) without re-rendering
+  // them, so --oc-chip-chrome must be re-measured or the panel cap under-counts the row.
+  test('settings panel cap tracks the chip row height when beacon size changes (oculist-aqrh)', async () => {
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.locator('#oc-wrap >> button[title="Options"]').click();
+    const SETTINGS = '#oc-wrap >> #oc-settings-panel';
+    await page.waitForSelector(SETTINGS);
+    for (const t of ['zenithquokka', 'brindlefalcon', 'quarklet']) await addTerm(t);
+    const measure = () => page.locator(SETTINGS).evaluate((el) => ({
+      cap: parseFloat(getComputedStyle(el).maxHeight),
+      chrome: parseFloat(getComputedStyle(el).getPropertyValue('--oc-chip-chrome')),
+      row: el.getRootNode().querySelector('.oc-chip-row').getBoundingClientRect().height,
+    }));
+    const before = await measure();
+    try {
+      await setVisionSettings({ beaconSize: 'xl' });
+      await waitForCondition(async () => (await measure()).row, (row) => row > before.row + 1, {
+        timeout: POLL_TIMEOUT,
+        message: 'chip row never grew after beaconSize xl',
+      });
+      const after = await measure();
+      assert.ok(Math.abs(after.chrome - after.row) < 1, `--oc-chip-chrome ${after.chrome} should equal row ${after.row}`);
+      assert.ok(
+        Math.abs(before.cap - after.cap - (after.row - before.row)) < 1,
+        `cap ${before.cap} -> ${after.cap} should drop by row growth ${before.row} -> ${after.row}`
+      );
+    } finally {
+      await setVisionSettings({ beaconSize: 'm' });
+    }
+  });
+
+  // No clear-all control exists: a user empties the row by removing each chip's x.
+  // Returning to zero chips must drop --oc-chip-chrome so the cap returns to its zero-chip value.
+  test('panel cap returns to its zero-chip value after every chip is removed (oculist-a8jp)', async () => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    try {
+      await page.locator('#oc-wrap >> button[title="Options"]').click();
+      const SETTINGS = '#oc-wrap >> #oc-settings-panel';
+      await page.waitForSelector(SETTINGS);
+      const measure = () => page.locator(SETTINGS).evaluate((el) => ({
+        cap: parseFloat(getComputedStyle(el).maxHeight),
+        chrome: getComputedStyle(el).getPropertyValue('--oc-chip-chrome').trim(),
+      }));
+      const capAt0 = (await measure()).cap;
+      for (const t of ['zenithquokka', 'brindlefalcon', 'quarklet']) await addTerm(t);
+      assert.ok((await measure()).cap < capAt0 - 1, 'cap must drop while chips are showing');
+      for (let n = 2; n >= 0; n--) {
+        await page.locator('#oc-wrap >> .oc-chip-remove').first().click();
+        await waitForChipCount(n);
+      }
+      await waitForCondition(measure, (m) => Math.abs(m.cap - capAt0) < 1 && m.chrome === '', {
+        timeout: POLL_TIMEOUT,
+        message: 'cap never returned to the zero-chip value with --oc-chip-chrome cleared',
+      });
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+  });
+
+  test('lists panel cap drops by the chip row height when chips are active (oculist-a8jp)', async () => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    try {
+      await page.locator('#oc-wrap >> button[title="Saved Lists"]').click();
+      const LISTS = '#oc-wrap >> #oc-lists-panel';
+      await page.waitForSelector(LISTS);
+      const capAt0 = await page.locator(LISTS).evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
+      for (const t of ['zenithquokka', 'brindlefalcon', 'quarklet']) await addTerm(t);
+      await page.waitForSelector(LISTS);
+      const m = await page.locator(LISTS).evaluate((el) => ({
+        cap: parseFloat(getComputedStyle(el).maxHeight),
+        row: el.getRootNode().querySelector('.oc-chip-row').getBoundingClientRect().height,
+      }));
+      assert.ok(m.row > 0, 'chip row must render with height for the cap check to mean anything');
+      assert.ok(Math.abs(capAt0 - m.cap - m.row) < 1, `lists cap ${capAt0} -> ${m.cap} should drop by chip row ${m.row}`);
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
   });
 });

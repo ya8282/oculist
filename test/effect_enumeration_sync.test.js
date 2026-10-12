@@ -194,7 +194,7 @@ function extractPackLabels(contentJsSource) {
 
 // oculist-wi8u: packed effects are listed per pack, "<Pack label> pack: A, B, and C."
 // Scans fileContent[searchFrom, searchTo) and asserts that, for every pack the registry
-// carries, a "<PACK_LABELS label> pack:" sentence exists and lists exactly that pack's
+// carries, a "<PACK_LABELS label> pack:" (or "<label>:" when the label ends in "Pack") sentence exists and lists exactly that pack's
 // labels (missing, extra, wrong-pack and out-of-order all fail), and that no pack heading
 // appears in the prose that the registry does not carry. With no packed entries at all,
 // the region must read "Optional effect packs: None in this release."
@@ -236,12 +236,13 @@ function assertPackedProseSite(fileContent, searchFrom, searchTo, packedEntries,
     assertNoOrphanLabels(extractDelimitedNames(slice), labels, `${siteDescription} ("${marker}" list)`);
   }
 
-  const headingPattern = /\b([A-Z][\w-]*(?: [A-Z][\w-]*)*) pack:/g;
+  // A heading is "<Caps> pack:" or a label ending in a capital "Pack:" (e.g. "Another Halloween Pack:").
+  const headingPattern = /\b((?:[A-Z][\w-]* )*[A-Z][\w-]*) pack:|\b((?:[A-Z][\w-]* )*Pack):/g;
   let h;
   while ((h = headingPattern.exec(region)) !== null) {
     assert.ok(
-      expectedHeadings.indexOf(h[1]) !== -1,
-      `${siteDescription}: prose has a "${h[1]} pack:" list but the registry carries no pack with that label`
+      expectedHeadings.indexOf(h[1] || h[2]) !== -1,
+      `${siteDescription}: prose has a "${h[0]}" list but the registry carries no pack with that label (headings use the PACK_LABELS label exactly, then lowercase " pack:")`
     );
   }
 }

@@ -230,6 +230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     packToggleBtn.setAttribute('aria-expanded', String(open));
     packPicker.hidden = !open;
   });
+  let packQueue = Promise.resolve();
   PACKS.forEach((pack) => {
     const row = document.createElement('label');
     row.className = 'pack-row';
@@ -245,27 +246,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     row.append(box, name, count);
     document.getElementById('pack-rows').appendChild(row);
 
+    // Rule: each toggle is applied to the stored enabledPacks (the page panel may have changed
+    // it since this popup loaded), and toggles run one at a time so a rapid second one
+    // starts from the first one's saved result.
     box.addEventListener('change', () => {
       const want = box.checked;
-      const prev = settings.enabledPacks;
-      const fail = (err) => {
-        console.error('Failed to save pack choice:', err);
-        settings.enabledPacks = prev;
-        box.checked = !want;
-        packError.textContent = 'Could not save pack choice. Try again.';
-      };
-      packError.textContent = '';
-      const next = (Array.isArray(prev) ? prev : []).filter((id) => id !== pack.id);
-      if (want) next.push(pack.id);
-      settings.enabledPacks = next;
-      try {
-        OculistSettingsMigration.writeOcSettings(settings, (saved) => {
-          if (saved) settings.enabledPacks = saved.enabledPacks;
-          else fail(new Error('writeOcSettings returned null'));
-        });
-      } catch (e) {
-        fail(e);
-      }
+      packQueue = packQueue.then(() => new Promise((resolve) => {
+        const prev = settings.enabledPacks;
+        const fail = (err) => {
+          console.error('Failed to save pack choice:', err);
+          settings.enabledPacks = prev;
+          box.checked = !want;
+          packError.textContent = 'Could not save pack choice. Try again.';
+          resolve();
+        };
+        const apply = (base) => {
+          const next = (Array.isArray(base) ? base : []).filter((id) => id !== pack.id);
+          if (want) next.push(pack.id);
+          settings.enabledPacks = next;
+          try {
+            OculistSettingsMigration.writeOcSettings(settings, (saved) => {
+              if (saved) { settings.enabledPacks = saved.enabledPacks; resolve(); }
+              else fail(new Error('writeOcSettings returned null'));
+            });
+          } catch (e) {
+            fail(e);
+          }
+        };
+        packError.textContent = '';
+        try {
+          chrome.storage.sync.get('oc-settings', (data) => {
+            // An unreadable or empty store falls back to the packs this popup already holds.
+            const stored = !chrome.runtime.lastError && data && data['oc-settings'];
+            apply(stored && Array.isArray(stored.enabledPacks) ? stored.enabledPacks : prev);
+          });
+        } catch (e) {
+          fail(e);
+        }
+      }));
     });
   });
 

@@ -28,7 +28,14 @@ test('docs/packs.html effect lists match the registry for each pack', () => {
   assert.ok(packIds.length > 0, 'registry has no packed entries; parser broken');
   const cards = [...page.matchAll(/<section class="pack" data-pack="(\w+)">([\s\S]*?)<\/section>/g)];
   assert.deepStrictEqual(cards.map((c) => c[1]), packIds, 'page pack cards differ from registry pack ids');
+  // Evaluated, not pattern-matched, so a quote style or comment change cannot silently drop a label.
+  const labels = Function('return ' + content.match(/var PACK_LABELS = (\{[\s\S]*?\n  \});/)[1])();
   for (const [, id, body] of cards) {
+    // Heading is the pack's display name: PACK_LABELS entry, else capitalised id (packLabel in content.js).
+    const expected = Object.prototype.hasOwnProperty.call(labels, id) ? labels[id] : id.charAt(0).toUpperCase() + id.slice(1);
+    const heading = body.match(/<h2>([^<]*)<\/h2>/);
+    assert.ok(heading, `docs/packs.html pack "${id}" has no h2`);
+    assert.strictEqual(heading[1].replace(/\s+/g, ' ').trim(), expected, `docs/packs.html pack "${id}" heading differs from packLabel`);
     assert.deepStrictEqual(
       names(body),
       entries.filter((e) => e.pack === id).map((e) => e.label),
