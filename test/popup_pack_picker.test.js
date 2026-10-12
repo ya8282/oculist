@@ -171,4 +171,34 @@ describe('popup pack picker', () => {
     await p2.close();
     await popup.close();
   });
+
+  test('a pack change made elsewhere while the popup is open survives a popup toggle', async () => {
+    const popup = await openPopup();
+    const original = (await stored(popup)).enabledPacks;
+    assert.ok(original.includes('adventure') && original.includes('hollow'), 'seed should enable adventure and hollow');
+    // Simulates the page settings panel dropping adventure after the popup loaded.
+    const other = await ctx.newPage();
+    await other.goto(`chrome-extension://${extId}/popup.html`);
+    await other.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
+      const s = d['oc-settings'];
+      s.enabledPacks = packs;
+      chrome.storage.sync.set({ 'oc-settings': s }, r);
+    })), original.filter((p) => p !== 'adventure'));
+    await other.close();
+
+    await popup.uncheck('input[data-pack="hollow"]');
+    await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
+      timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+    });
+    const after = (await stored(popup)).enabledPacks;
+    assert.deepStrictEqual(after, original.filter((p) => p !== 'adventure' && p !== 'hollow'));
+
+    // Restore the seed for later tests (the open popup still shows adventure checked).
+    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
+      const s = d['oc-settings'];
+      s.enabledPacks = packs;
+      chrome.storage.sync.set({ 'oc-settings': s }, r);
+    })), original);
+    await popup.close();
+  });
 });
