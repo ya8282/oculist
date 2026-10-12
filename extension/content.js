@@ -14030,6 +14030,7 @@
     if (workListTerms.length === 0) {
       chipRow.hidden = true;
       chipRow.style.display = 'none';
+      if (wrap) wrap.style.removeProperty('--oc-chip-chrome');
       return;
     }
 
@@ -14099,6 +14100,9 @@
       chip.appendChild(removeBtn);
       chipRow.appendChild(chip);
     });
+    // The panels' max-height caps (hostChromePx) are baked at style-injection time; the chip
+    // row's wrapped height is live, so it reaches them through this inherited variable.
+    if (wrap) wrap.style.setProperty('--oc-chip-chrome', chipRow.getBoundingClientRect().height + 'px');
   }
 
   // Display the active match with the high-visibility visual animation
@@ -16627,7 +16631,7 @@
         // panel + bar (+ notice) together within the viewport regardless of which of the four
         // positions is active — the same numeric cap applies to all four since neither
         // contribution to total host height depends on which edge it is anchored to.
-        '  max-height: calc(100vh - ' + hostChromePx + 'px);',
+        '  max-height: calc(100vh - ' + hostChromePx + 'px - var(--oc-chip-chrome, 0px));',
         '  overflow-y: auto;',
         '}',
         ':host(.is-bottom) #oc-settings-panel {',
@@ -17232,7 +17236,7 @@
         // the viewport once the host chrome above it (hostChromePx, above — bar + notice,
         // oculist-3rq) is accounted for, so bar + notice + panel together always fit
         // regardless of which of the four positions is active.
-        '  max-height: calc(100vh - ' + hostChromePx + 'px);',
+        '  max-height: calc(100vh - ' + hostChromePx + 'px - var(--oc-chip-chrome, 0px));',
         '  overflow-y: auto;',
         '  box-sizing: border-box;',
         '}',

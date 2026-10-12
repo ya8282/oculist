@@ -1213,4 +1213,21 @@ describe('Chip row and working-list state', () => {
       'the active chip (quarklet) must keep its own real 1-match highlight, not a stale or shifted one'
     );
   });
+
+  test('settings panel cap leaves room for the chip row when chips are active (oculist-lrwu)', async () => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    await page.locator('#oc-wrap >> button[title="Options"]').click();
+    const SETTINGS = '#oc-wrap >> #oc-settings-panel';
+    await page.waitForSelector(SETTINGS);
+    const capAt0 = await page.locator(SETTINGS).evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
+    for (const t of ['zenithquokka', 'brindlefalcon', 'quarklet']) await addTerm(t);
+    const m = await page.locator(SETTINGS).evaluate((el) => ({
+      cap: parseFloat(getComputedStyle(el).maxHeight),
+      host: document.getElementById('oc-wrap').getBoundingClientRect().height,
+      row: el.getRootNode().querySelector('.oc-chip-row').getBoundingClientRect().height,
+    }));
+    assert.ok(m.row > 0);
+    assert.ok(Math.abs(capAt0 - m.cap - m.row) < 1, `cap ${capAt0} -> ${m.cap} should drop by chip row ${m.row}`);
+    assert.ok(m.host <= 800 + 1, `host ${m.host}px must fit the 800px viewport`);
+  });
 });

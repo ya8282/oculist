@@ -129,12 +129,6 @@ async function waitForBeaconsToSettle(page, timeoutMs = 15000) {
   await page.locator(GEAR).click();
   await page.waitForSelector('#oc-wrap >> #oc-settings-panel', { timeout: 5000 });
   await page.waitForTimeout(600); // panel open animation
-  // The chip row adds ~34px that the panel's max-height cap does not count, so the pack
-  // toggles fall past the 800px frame. This shot is about the panel: hide the row.
-  await page.evaluate(() => {
-    const row = document.querySelector('#oc-wrap').shadowRoot.querySelector('.oc-chip-row');
-    if (row) row.style.display = 'none';
-  });
   // Chrono Tunnel (picked for 03) sits far up the list, out of frame; select Spotlight, a
   // core effect in frame beside the pack subheading, so a checked radio is visible.
   await page.locator('#oc-wrap >> .oc-radio-list >> text=Spotlight').first().click();
