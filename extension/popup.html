@@ -450,6 +450,54 @@
       color: var(--text-muted);
       line-height: 1.4;
     }
+
+    .pack-picker-btn {
+      width: 100%;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .pack-picker-btn:hover { border-color: var(--primary); }
+
+    .pack-picker-btn:focus-visible,
+    .pack-row input:focus-visible,
+    .pack-browse:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .pack-picker-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+    .pack-picker-list[hidden] { display: none; }
+
+    .pack-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .pack-row input { accent-color: var(--primary); }
+    .pack-count { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+
+    .pack-browse {
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .pack-error { font-size: 11px; color: var(--accent-red); }
   </style>
 </head>
 <body>
@@ -626,6 +674,18 @@
         <input type="checkbox" id="toggle-lite-mode" aria-label="Toggle Lite Mode">
         <span class="slider"></span>
       </label>
+    </div>
+  </div>
+
+  <!-- Effect Packs Panel -->
+  <div class="panel">
+    <button type="button" id="pack-picker-toggle" class="pack-picker-btn" aria-expanded="false" aria-controls="pack-picker">
+      <span>Load effect packs</span><span aria-hidden="true">+</span>
+    </button>
+    <div id="pack-picker" class="pack-picker-list" hidden>
+      <div id="pack-rows" class="pack-picker-list" style="margin-top: 0;" role="group" aria-label="Effect packs"></div>
+      <div id="pack-picker-error" class="pack-error" role="alert"></div>
+      <a class="pack-browse" href="https://ya8282.github.io/oculist/packs.html" target="_blank" rel="noopener noreferrer" aria-label="Browse packs (opens in a new tab)">Browse packs</a>
     </div>
   </div>
 
