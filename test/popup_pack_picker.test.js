@@ -83,6 +83,28 @@ describe('popup pack picker', () => {
     if (server) await new Promise((resolve) => server.close(resolve));
   });
 
+  test('closed picker leaves the popup within its max-height and the chevron tracks open state', async () => {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#pack-picker-toggle');
+    await waitForPopupReady(popup);
+    const fit = await popup.evaluate(() => ({
+      scroll: document.body.scrollHeight,
+      client: document.body.clientHeight,
+      footerBottom: document.querySelector('.footer').getBoundingClientRect().bottom,
+      bodyBottom: document.body.getBoundingClientRect().bottom,
+    }));
+    assert.ok(fit.scroll <= fit.client, `body scrolls: ${fit.scroll} > ${fit.client}`);
+    assert.ok(fit.footerBottom <= fit.bodyBottom, `footer overflows body: ${fit.footerBottom} > ${fit.bodyBottom}`);
+    const chevron = () => popup.evaluate(() => getComputedStyle(document.getElementById('pack-picker-toggle'), '::after').transform);
+    const closed = await chevron();
+    await popup.click('#pack-picker-toggle');
+    await waitForCondition(chevron, (t) => t !== closed, { timeout: POLL_TIMEOUT, message: 'chevron did not change on open' });
+    await popup.click('#pack-picker-toggle');
+    await waitForCondition(chevron, (t) => t === closed, { timeout: POLL_TIMEOUT, message: 'chevron did not revert on close' });
+    await popup.close();
+  });
+
   test('toggling a pack writes enabledPacks and leaves every other field unchanged', async () => {
     // Seed non-default fields first (the popup itself fills in an empty visionSettings on any write).
     const seeder = await ctx.newPage();

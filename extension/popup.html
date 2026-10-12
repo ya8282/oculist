@@ -451,13 +451,15 @@
       line-height: 1.4;
     }
 
+    /* Header-style disclosure, same look as summary.configure-summary. The panel is the card. */
+    .panel.pack-panel { padding: 0; margin-bottom: 14px; }
+
     .pack-picker-btn {
       width: 100%;
       background: transparent;
       color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
+      border: 0;
+      padding: 8px 14px;
       font-family: inherit;
       font-size: 12px;
       font-weight: 600;
@@ -467,7 +469,14 @@
       align-items: center;
     }
 
-    .pack-picker-btn:hover { border-color: var(--primary); }
+    .pack-picker-btn::after {
+      content: "▼" / "";
+      font-size: 10px;
+      color: var(--text-muted);
+      transition: transform 0.2s;
+    }
+
+    .pack-picker-btn[aria-expanded="true"]::after { transform: rotate(180deg); }
 
     .pack-picker-btn:focus-visible,
     .pack-row input:focus-visible,
@@ -478,6 +487,7 @@
 
     .pack-picker-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
     .pack-picker-list[hidden] { display: none; }
+    #pack-picker { margin-top: 0; padding: 0 14px 14px; }
 
     .pack-row {
       display: flex;
@@ -678,9 +688,9 @@
   </div>
 
   <!-- Effect Packs Panel -->
-  <div class="panel">
+  <div class="panel pack-panel">
     <button type="button" id="pack-picker-toggle" class="pack-picker-btn" aria-expanded="false" aria-controls="pack-picker">
-      <span>Load effect packs</span><span aria-hidden="true">+</span>
+      Load effect packs
     </button>
     <div id="pack-picker" class="pack-picker-list" hidden>
       <div id="pack-rows" class="pack-picker-list" style="margin-top: 0;" role="group" aria-label="Effect packs"></div>
