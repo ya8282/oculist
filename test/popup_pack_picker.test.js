@@ -48,7 +48,7 @@ describe('popup pack picker', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html`);
     await popup.waitForSelector('#pack-picker-toggle');
     await waitForPopupReady(popup);
-    // The picker wiring runs after popup.js's own storage read; aria-controls is its marker.
+    // Rule: the picker handlers are wired before status-text leaves 'Checking...', so ready means clickable.
     await popup.click('#pack-picker-toggle');
     return popup;
   };
@@ -155,7 +155,63 @@ describe('popup pack picker', () => {
     await popup.close();
   });
 
-  test('a failed save shows an inline error and reverts the checkbox', async () => {
+  // Makes chrome.storage.sync.set fail asynchronously with runtime.lastError until restoreStorage().
+  // With failNextGet, the next get() also reports lastError with no data.
+  const stubFailingSet = (popup, { failNextGet = false } = {}) => popup.evaluate((failNextGet) => {
+    const orig = { set: chrome.storage.sync.set, get: chrome.storage.sync.get };
+    window.__orig = orig;
+    const setLastError = (v) => Object.defineProperty(chrome.runtime, 'lastError', { configurable: true, get: () => v });
+    chrome.storage.sync.set = (items, cb) => setTimeout(() => { setLastError({ message: 'quota' }); cb && cb(); setLastError(undefined); }, 0);
+    if (failNextGet) {
+      let armed = true;
+      chrome.storage.sync.get = (k, cb) => {
+        if (!armed) return orig.get.call(chrome.storage.sync, k, cb);
+        armed = false;
+        setTimeout(() => { setLastError({ message: 'unreadable' }); cb(undefined); setLastError(undefined); }, 0);
+      };
+    }
+  }, failNextGet);
+  const restoreStorage = (popup) => popup.evaluate(() => {
+    chrome.storage.sync.set = window.__orig.set;
+    chrome.storage.sync.get = window.__orig.get;
+  });
+
+  test('a failed save (set reports lastError) reverts the checkbox, logs, shows the error and restores in-memory packs', async () => {
+    const popup = await openPopup();
+    const before = (await stored(popup)).enabledPacks;
+    assert.ok(before.includes('adventure') && before.includes('hollow'), 'seed should enable adventure and hollow');
+    const logged = [];
+    popup.on('console', (m) => { if (m.type() === 'error' && m.text().includes('Failed to save pack choice')) logged.push(m.text()); });
+    await stubFailingSet(popup);
+    await popup.click('input[data-pack="adventure"]');
+    await popup.waitForFunction(
+      () => document.getElementById('pack-picker-error').textContent === 'Could not save pack choice. Try again.',
+      null, { timeout: POLL_TIMEOUT }
+    );
+    assert.strictEqual(await popup.isChecked('input[data-pack="adventure"]'), true);
+    assert.strictEqual(logged.length, 1, 'fail() should console.error once');
+    await restoreStorage(popup);
+    assert.deepStrictEqual((await stored(popup)).enabledPacks, before);
+
+    // In-memory restore: with the next read unreadable, the toggle falls back to the popup's own
+    // packs. A stale failed change (adventure dropped) would leak into storage.
+    await stubFailingSet(popup, { failNextGet: true });
+    await popup.evaluate(() => { chrome.storage.sync.set = window.__orig.set; });
+    await popup.uncheck('input[data-pack="hollow"]');
+    await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
+      timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+    });
+    assert.deepStrictEqual((await stored(popup)).enabledPacks, before.filter((p) => p !== 'hollow'));
+
+    await restoreStorage(popup);
+    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
+      const s = d['oc-settings']; s.enabledPacks = packs; chrome.storage.sync.set({ 'oc-settings': s }, r);
+    })), before);
+    await popup.close();
+  });
+
+  test('a synchronous storage throw also shows the inline error and leaves storage unchanged', async () => {
+    // Distinct path: the popup's own read throws, so writeOcSettings is never reached.
     const popup = await openPopup();
     const before = await stored(popup);
     await popup.evaluate(() => { chrome.storage.sync.get = () => { throw new Error('boom'); }; });
@@ -169,6 +225,25 @@ describe('popup pack picker', () => {
     await p2.goto(`chrome-extension://${extId}/popup.html`);
     assert.deepStrictEqual((await stored(p2)).enabledPacks, before.enabledPacks);
     await p2.close();
+    await popup.close();
+  });
+
+  test('two rapid toggles both persist', async () => {
+    const popup = await openPopup();
+    const original = (await stored(popup)).enabledPacks;
+    await popup.evaluate(() => {
+      for (const id of ['hollow', 'adventure']) {
+        const b = document.querySelector(`input[data-pack="${id}"]`);
+        b.checked = !b.checked; b.dispatchEvent(new Event('change'));
+      }
+    });
+    const flipped = (id, s) => original.includes(id) !== s.enabledPacks.includes(id);
+    await waitForCondition(() => stored(popup), (s) => flipped('hollow', s) && flipped('adventure', s), {
+      timeout: POLL_TIMEOUT, message: 'one of two rapid toggles was lost',
+    });
+    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
+      const s = d['oc-settings']; s.enabledPacks = packs; chrome.storage.sync.set({ 'oc-settings': s }, r);
+    })), original);
     await popup.close();
   });
 
