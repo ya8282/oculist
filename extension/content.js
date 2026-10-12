@@ -14108,8 +14108,8 @@
   // Re-run whenever chip size can change without a re-render (beacon size).
   function syncChipChrome() {
     if (!wrap || !chipRow) return;
-    if (chipRow.hidden || workListTerms.length === 0) wrap.style.removeProperty('--oc-chip-chrome');
-    else wrap.style.setProperty('--oc-chip-chrome', chipRow.getBoundingClientRect().height + 'px');
+    if (chipRow.hidden || workListTerms.length === 0) return; // removal lives in renderChipRow's zero-chip branch
+    wrap.style.setProperty('--oc-chip-chrome', chipRow.getBoundingClientRect().height + 'px');
   }
 
   // Display the active match with the high-visibility visual animation

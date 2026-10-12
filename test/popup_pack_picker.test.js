@@ -53,6 +53,12 @@ describe('popup pack picker', () => {
     return popup;
   };
   const stored = (p) => readStoredSettings(p);
+  // Writes enabledPacks back so a failing test cannot leak its changes into later ones.
+  const writePacks = (popup, packs) => popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
+    const s = d['oc-settings'];
+    s.enabledPacks = packs;
+    chrome.storage.sync.set({ 'oc-settings': s }, r);
+  })), packs);
 
   before(async () => {
     server = http.createServer((req, res) => {
@@ -81,6 +87,21 @@ describe('popup pack picker', () => {
   after(async () => {
     if (ctx) await ctx.close();
     if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  test('configure-summary accessible name is its visible text, without the chevron glyph', async () => {
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('summary.configure-summary');
+    const cdp = await ctx.newCDPSession(popup);
+    const { root } = await cdp.send('DOM.getDocument');
+    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'summary.configure-summary' });
+    const { node } = await cdp.send('DOM.describeNode', { nodeId });
+    const { nodes } = await cdp.send('Accessibility.getPartialAXTree', { backendNodeId: node.backendNodeId, fetchRelatives: false });
+    assert.strictEqual(nodes[0].name.value, 'Custom Vision Settings');
+    const glyph = await popup.evaluate(() => getComputedStyle(document.querySelector('summary.configure-summary'), '::after').content);
+    assert.ok(glyph.includes('\u25BC'), `chevron missing: ${glyph}`);
+    await popup.close();
   });
 
   test('closed picker leaves the popup within its max-height and the chevron tracks open state', async () => {
@@ -119,23 +140,27 @@ describe('popup pack picker', () => {
     const popup = await openPopup();
     assert.strictEqual(await popup.getAttribute('#pack-picker-toggle', 'aria-expanded'), 'true');
     const before = await stored(popup);
-    assert.ok(before.enabledPacks.includes('hollow'), 'seed should have enabled hollow');
+    try {
+      assert.ok(before.enabledPacks.includes('hollow'), 'seed should have enabled hollow');
 
-    await popup.uncheck('input[data-pack="hollow"]');
-    await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-      timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
-    });
-    const after = await stored(popup);
-    const { enabledPacks: b, ...restBefore } = before;
-    const { enabledPacks: a, ...restAfter } = after;
-    assert.deepStrictEqual(a, b.filter((p) => p !== 'hollow'));
-    assert.deepStrictEqual(restAfter, restBefore);
+      await popup.uncheck('input[data-pack="hollow"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      });
+      const after = await stored(popup);
+      const { enabledPacks: b, ...restBefore } = before;
+      const { enabledPacks: a, ...restAfter } = after;
+      assert.deepStrictEqual(a, b.filter((p) => p !== 'hollow'));
+      assert.deepStrictEqual(restAfter, restBefore);
 
-    await popup.check('input[data-pack="hollow"]');
-    await waitForCondition(() => stored(popup), (s) => s.enabledPacks.includes('hollow'), {
-      timeout: POLL_TIMEOUT, message: 'enabledPacks never regained hollow',
-    });
-    await popup.close();
+      await popup.check('input[data-pack="hollow"]');
+      await waitForCondition(() => stored(popup), (s) => s.enabledPacks.includes('hollow'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never regained hollow',
+      });
+    } finally {
+      await writePacks(popup, before.enabledPacks);
+      await popup.close();
+    }
   });
 
   test('unchecking a pack in the popup removes its effects from an open page', async () => {
@@ -144,15 +169,20 @@ describe('popup pack picker', () => {
     await page.waitForSelector(BONE_ROW, { timeout: POLL_TIMEOUT });
 
     const popup = await openPopup();
-    await popup.uncheck('input[data-pack="halloween"]');
-    await page.bringToFront();
-    await page.waitForSelector(BONE_ROW, { state: 'detached', timeout: POLL_TIMEOUT });
+    const original = (await stored(popup)).enabledPacks;
+    try {
+      await popup.uncheck('input[data-pack="halloween"]');
+      await page.bringToFront();
+      await page.waitForSelector(BONE_ROW, { state: 'detached', timeout: POLL_TIMEOUT });
 
-    await popup.bringToFront();
-    await popup.check('input[data-pack="halloween"]');
-    await page.bringToFront();
-    await page.waitForSelector(BONE_ROW, { timeout: POLL_TIMEOUT });
-    await popup.close();
+      await popup.bringToFront();
+      await popup.check('input[data-pack="halloween"]');
+      await page.bringToFront();
+      await page.waitForSelector(BONE_ROW, { timeout: POLL_TIMEOUT });
+    } finally {
+      await writePacks(popup, original);
+      await popup.close();
+    }
   });
 
   // Makes chrome.storage.sync.set fail asynchronously with runtime.lastError until restoreStorage().
@@ -172,6 +202,7 @@ describe('popup pack picker', () => {
     }
   }, failNextGet);
   const restoreStorage = (popup) => popup.evaluate(() => {
+    if (!window.__orig) return; // test failed before the stub was installed
     chrome.storage.sync.set = window.__orig.set;
     chrome.storage.sync.get = window.__orig.get;
   });
@@ -182,32 +213,32 @@ describe('popup pack picker', () => {
     assert.ok(before.includes('adventure') && before.includes('hollow'), 'seed should enable adventure and hollow');
     const logged = [];
     popup.on('console', (m) => { if (m.type() === 'error' && m.text().includes('Failed to save pack choice')) logged.push(m.text()); });
-    await stubFailingSet(popup);
-    await popup.click('input[data-pack="adventure"]');
-    await popup.waitForFunction(
-      () => document.getElementById('pack-picker-error').textContent === 'Could not save pack choice. Try again.',
-      null, { timeout: POLL_TIMEOUT }
-    );
-    assert.strictEqual(await popup.isChecked('input[data-pack="adventure"]'), true);
-    assert.strictEqual(logged.length, 1, 'fail() should console.error once');
-    await restoreStorage(popup);
-    assert.deepStrictEqual((await stored(popup)).enabledPacks, before);
+    try {
+      await stubFailingSet(popup);
+      await popup.click('input[data-pack="adventure"]');
+      await popup.waitForFunction(
+        () => document.getElementById('pack-picker-error').textContent === 'Could not save pack choice. Try again.',
+        null, { timeout: POLL_TIMEOUT }
+      );
+      assert.strictEqual(await popup.isChecked('input[data-pack="adventure"]'), true);
+      assert.strictEqual(logged.length, 1, 'fail() should console.error once');
+      await restoreStorage(popup);
+      assert.deepStrictEqual((await stored(popup)).enabledPacks, before);
 
-    // In-memory restore: with the next read unreadable, the toggle falls back to the popup's own
-    // packs. A stale failed change (adventure dropped) would leak into storage.
-    await stubFailingSet(popup, { failNextGet: true });
-    await popup.evaluate(() => { chrome.storage.sync.set = window.__orig.set; });
-    await popup.uncheck('input[data-pack="hollow"]');
-    await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-      timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
-    });
-    assert.deepStrictEqual((await stored(popup)).enabledPacks, before.filter((p) => p !== 'hollow'));
-
-    await restoreStorage(popup);
-    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
-      const s = d['oc-settings']; s.enabledPacks = packs; chrome.storage.sync.set({ 'oc-settings': s }, r);
-    })), before);
-    await popup.close();
+      // In-memory restore: with the next read unreadable, the toggle falls back to the popup's own
+      // packs. A stale failed change (adventure dropped) would leak into storage.
+      await stubFailingSet(popup, { failNextGet: true });
+      await popup.evaluate(() => { chrome.storage.sync.set = window.__orig.set; });
+      await popup.uncheck('input[data-pack="hollow"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      });
+      assert.deepStrictEqual((await stored(popup)).enabledPacks, before.filter((p) => p !== 'hollow'));
+    } finally {
+      await restoreStorage(popup);
+      await writePacks(popup, before);
+      await popup.close();
+    }
   });
 
   test('a synchronous storage throw also shows the inline error and leaves storage unchanged', async () => {
@@ -231,49 +262,46 @@ describe('popup pack picker', () => {
   test('two rapid toggles both persist', async () => {
     const popup = await openPopup();
     const original = (await stored(popup)).enabledPacks;
-    await popup.evaluate(() => {
-      for (const id of ['hollow', 'adventure']) {
-        const b = document.querySelector(`input[data-pack="${id}"]`);
-        b.checked = !b.checked; b.dispatchEvent(new Event('change'));
-      }
-    });
     const flipped = (id, s) => original.includes(id) !== s.enabledPacks.includes(id);
-    await waitForCondition(() => stored(popup), (s) => flipped('hollow', s) && flipped('adventure', s), {
-      timeout: POLL_TIMEOUT, message: 'one of two rapid toggles was lost',
-    });
-    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
-      const s = d['oc-settings']; s.enabledPacks = packs; chrome.storage.sync.set({ 'oc-settings': s }, r);
-    })), original);
-    await popup.close();
+    const bothFlipped = (s) => flipped('hollow', s) && flipped('adventure', s);
+    try {
+      await popup.evaluate(() => {
+        for (const id of ['hollow', 'adventure']) {
+          const b = document.querySelector(`input[data-pack="${id}"]`);
+          b.checked = !b.checked; b.dispatchEvent(new Event('change'));
+        }
+      });
+      await waitForCondition(() => stored(popup), bothFlipped, {
+        timeout: POLL_TIMEOUT, message: 'one of two rapid toggles was lost',
+      });
+    } finally {
+      // Let in-flight toggle writes land first, or they overwrite the restore.
+      await waitForCondition(() => stored(popup), bothFlipped, { timeout: POLL_TIMEOUT }).catch(() => {});
+      await writePacks(popup, original);
+      await popup.close();
+    }
   });
 
   test('a pack change made elsewhere while the popup is open survives a popup toggle', async () => {
     const popup = await openPopup();
     const original = (await stored(popup)).enabledPacks;
     assert.ok(original.includes('adventure') && original.includes('hollow'), 'seed should enable adventure and hollow');
-    // Simulates the page settings panel dropping adventure after the popup loaded.
-    const other = await ctx.newPage();
-    await other.goto(`chrome-extension://${extId}/popup.html`);
-    await other.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
-      const s = d['oc-settings'];
-      s.enabledPacks = packs;
-      chrome.storage.sync.set({ 'oc-settings': s }, r);
-    })), original.filter((p) => p !== 'adventure'));
-    await other.close();
+    try {
+      // Simulates the page settings panel dropping adventure after the popup loaded.
+      const other = await ctx.newPage();
+      await other.goto(`chrome-extension://${extId}/popup.html`);
+      await writePacks(other, original.filter((p) => p !== 'adventure'));
+      await other.close();
 
-    await popup.uncheck('input[data-pack="hollow"]');
-    await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-      timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
-    });
-    const after = (await stored(popup)).enabledPacks;
-    assert.deepStrictEqual(after, original.filter((p) => p !== 'adventure' && p !== 'hollow'));
-
-    // Restore the seed for later tests (the open popup still shows adventure checked).
-    await popup.evaluate((packs) => new Promise((r) => chrome.storage.sync.get('oc-settings', (d) => {
-      const s = d['oc-settings'];
-      s.enabledPacks = packs;
-      chrome.storage.sync.set({ 'oc-settings': s }, r);
-    })), original);
-    await popup.close();
+      await popup.uncheck('input[data-pack="hollow"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      });
+      const after = (await stored(popup)).enabledPacks;
+      assert.deepStrictEqual(after, original.filter((p) => p !== 'adventure' && p !== 'hollow'));
+    } finally {
+      await writePacks(popup, original);
+      await popup.close();
+    }
   });
 });
