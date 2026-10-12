@@ -34,7 +34,7 @@ Oculist stores three kinds of data, and nothing else:
   highlight effect, beacon colors, Lite Mode, the display preset you've
   chosen and its individual rendering values (palette, beacon size,
   animation speed, motion sensitivity, border style, text labels, magnifier,
-  and any custom colors), which effect packs are on (Halloween, Adventure, and Haunted Hollow, each recorded as an entry in the enabled-packs list), one-time flags recording that a default was already applied (including that each pack was switched on by default once), the setup wizard was finished, or a notice was dismissed, and the hostnames you have switched Oculist off
+  and any custom colors), which effect packs are on (Halloween, Adventure, and Another Halloween Pack, each recorded as an entry in the enabled-packs list), one-time flags recording that a default was already applied (including that each pack was switched on by default once), the setup wizard was finished, or a notice was dismissed, and the hostnames you have switched Oculist off
   on.
 - **Saved search-term lists**, in `chrome.storage.sync`, one key per list
   (`oc-list-<id>`) holding that list's name and terms. A saved list is

@@ -215,6 +215,60 @@ document.addEventListener('DOMContentLoaded', async () => {
     await saveSettings();
   });
 
+  // Effect pack picker. Packs are bundled in content.js; this only flips settings.enabledPacks.
+  // Ids, labels and counts mirror content.js (test/popup_pack_picker.test.js guards drift).
+  const PACKS = [
+    { id: 'halloween', label: 'Halloween', count: 6 },
+    { id: 'adventure', label: 'Adventure', count: 5 },
+    { id: 'hollow', label: 'Another Halloween Pack', count: 11 }
+  ];
+  const packToggleBtn = document.getElementById('pack-picker-toggle');
+  const packPicker = document.getElementById('pack-picker');
+  const packError = document.getElementById('pack-picker-error');
+  packToggleBtn.addEventListener('click', () => {
+    const open = packToggleBtn.getAttribute('aria-expanded') !== 'true';
+    packToggleBtn.setAttribute('aria-expanded', String(open));
+    packPicker.hidden = !open;
+  });
+  PACKS.forEach((pack) => {
+    const row = document.createElement('label');
+    row.className = 'pack-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.pack = pack.id;
+    box.checked = Array.isArray(settings.enabledPacks) && settings.enabledPacks.indexOf(pack.id) !== -1;
+    const name = document.createElement('span');
+    name.textContent = pack.label;
+    const count = document.createElement('span');
+    count.className = 'pack-count';
+    count.textContent = `${pack.count} effects`;
+    row.append(box, name, count);
+    document.getElementById('pack-rows').appendChild(row);
+
+    box.addEventListener('change', () => {
+      const want = box.checked;
+      const prev = settings.enabledPacks;
+      const fail = (err) => {
+        console.error('Failed to save pack choice:', err);
+        settings.enabledPacks = prev;
+        box.checked = !want;
+        packError.textContent = 'Could not save pack choice. Try again.';
+      };
+      packError.textContent = '';
+      const next = (Array.isArray(prev) ? prev : []).filter((id) => id !== pack.id);
+      if (want) next.push(pack.id);
+      settings.enabledPacks = next;
+      try {
+        OculistSettingsMigration.writeOcSettings(settings, (saved) => {
+          if (saved) settings.enabledPacks = saved.enabledPacks;
+          else fail(new Error('writeOcSettings returned null'));
+        });
+      } catch (e) {
+        fail(e);
+      }
+    });
+  });
+
   // Populate Vision Profile
   // settings.displayPreset is the functional stored value; translate it back to this
   // file's legacy-shaped internal vocabulary (matching PRESETS keys and the

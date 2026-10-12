@@ -221,7 +221,7 @@ function assertPackedProseSite(fileContent, searchFrom, searchTo, packedEntries,
     const heading = packLabels[packId];
     assert.ok(heading, `${siteDescription}: pack "${packId}" has no entry in PACK_LABELS in extension/content.js`);
     expectedHeadings.push(heading);
-    const marker = heading + ' pack:';
+    const marker = / pack$/i.test(heading) ? heading + ':' : heading + ' pack:';
     const idx = region.indexOf(marker);
     assert.notStrictEqual(
       idx, -1,

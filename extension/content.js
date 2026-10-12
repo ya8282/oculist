@@ -1062,7 +1062,7 @@
   var PACK_LABELS = {
     halloween: 'Halloween',
     adventure: 'Adventure',
-    hollow: 'Haunted Hollow'
+    hollow: 'Another Halloween Pack'
   };
   function packLabel(packId) {
     if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
