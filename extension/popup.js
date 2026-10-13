@@ -218,9 +218,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Effect pack picker. Packs are bundled in content.js; this only flips settings.enabledPacks.
   // Ids, labels and counts mirror content.js (test/popup_pack_picker.test.js guards drift).
   const PACKS = [
-    { id: 'halloween', label: 'Halloween', count: 6 },
-    { id: 'adventure', label: 'Adventure', count: 5 },
-    { id: 'hollow', label: 'Another Halloween Pack', count: 11 }
+    { id: 'halloween', label: 'Halloween', count: 17 },
+    { id: 'adventure', label: 'Adventure', count: 5 }
   ];
   const packToggleBtn = document.getElementById('pack-picker-toggle');
   const packPicker = document.getElementById('pack-picker');

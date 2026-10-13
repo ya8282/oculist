@@ -69,7 +69,7 @@ describe('Moonrise: a full moon rises behind the match line, a wolf howls on the
 
     // enabledPacks is written explicitly: the pack II seed may or may not have landed yet,
     // and the test must not depend on it.
-    await setSettings({ effect: 'moonrise', enabledPacks: ['hollow'] });
+    await setSettings({ effect: 'moonrise', enabledPacks: ['halloween'] });
     await waitForCondition(
       () => evalInContentScript('window.__ocTest.getAvailableEffectKeys()'),
       (keys) => keys.indexOf('moonrise') !== -1,
@@ -547,7 +547,7 @@ describe('Moonrise: a full moon rises behind the match line, a wolf howls on the
     await waitForNoBeacons();
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a round trip, runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a round trip, runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -569,9 +569,9 @@ describe('Moonrise: a full moon rises behind the match line, a wolf howls on the
       assert.strictEqual(await page.locator(MR_EFFECT_ROW).count(), 0, 'absent from the picker while disabled');
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
-      assert.notStrictEqual(keys.indexOf('moonrise'), -1, 'present once hollow is enabled');
+      assert.notStrictEqual(keys.indexOf('moonrise'), -1, 'present once halloween is enabled');
       await openSettings();
       assert.strictEqual(await page.locator(MR_EFFECT_ROW).count(), 1, 'present in the picker once enabled');
       await closeSettings();
@@ -586,13 +586,13 @@ describe('Moonrise: a full moon rises behind the match line, a wolf howls on the
       assert.strictEqual(fallback.moon, false, 'while disabled the runtime falls back to another effect');
       await waitForNoBeacons();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       const restored = await replay(() => (document.querySelector('.oc-moonrise') ? { moon: true } : null));
       assert.strictEqual(restored.moon, true, 'selection restored on re-enable');
       await waitForNoBeacons();
     } finally {
       await setSettings({ enabledPacks: ['__oc_moonrise_test_reset__'] });
-      await setSettings({ effect: 'moonrise', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'moonrise', enabledPacks: ['halloween'] });
     }
   });
 });

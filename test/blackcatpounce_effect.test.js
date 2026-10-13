@@ -94,7 +94,7 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
     });
     await waitForHalloweenSeedSettled(evalInContentScript);
 
-    await setSettings({ effect: 'blackcatpounce', enabledPacks: ['hollow'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'blackcatpounce', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
 
     await openFinder(page);
     await page.locator(INPUT).type('vespertide', { delay: 30 });
@@ -662,7 +662,7 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
     assert.ok(!/Math\.random/.test(src.slice(start, end)));
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -686,7 +686,7 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
       assert.strictEqual(await page.locator(CAT_EFFECT_ROW).count(), 0, 'absent from the picker while its pack is disabled');
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('blackcatpounce'), -1);
 
@@ -707,13 +707,13 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
       assert.strictEqual(geom.mounted, false, 'while the pack is disabled, the runtime fallback must not render the cat');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       geom = await replay(() => (document.querySelector('.oc-beacon-transient[data-blackcat="cat"]') ? { mounted: true } : null));
       assert.strictEqual(geom.mounted, true, 'the stored selection must be restored on re-enable');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await setSettings({ enabledPacks: ['__oc_blackcat_test_reset__'] });
-      await setSettings({ effect: 'blackcatpounce', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'blackcatpounce', enabledPacks: ['halloween'] });
     }
   });
 });

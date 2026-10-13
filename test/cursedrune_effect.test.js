@@ -66,7 +66,7 @@ describe('Cursed Rune: a double-ring sigil with runes and four candles draws its
       message: 'never observed the content script isolated execution context',
     });
 
-    await setSettings({ effect: 'cursedrune', enabledPacks: ['hollow'] });
+    await setSettings({ effect: 'cursedrune', enabledPacks: ['halloween'] });
     await waitForCondition(
       () => evalInContentScript('window.__ocTest.getAvailableEffectKeys()'),
       (keys) => keys.indexOf('cursedrune') !== -1,
@@ -559,7 +559,7 @@ describe('Cursed Rune: a double-ring sigil with runes and four candles draws its
     await waitForNoBeacons();
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a round trip, runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a round trip, runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -581,9 +581,9 @@ describe('Cursed Rune: a double-ring sigil with runes and four candles draws its
       assert.strictEqual(await page.locator(CR_EFFECT_ROW).count(), 0, 'absent from the picker while disabled');
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
-      assert.notStrictEqual(keys.indexOf('cursedrune'), -1, 'present once hollow is enabled');
+      assert.notStrictEqual(keys.indexOf('cursedrune'), -1, 'present once halloween is enabled');
       await openSettings();
       assert.strictEqual(await page.locator(CR_EFFECT_ROW).count(), 1, 'present in the picker once enabled');
       await closeSettings();
@@ -597,13 +597,13 @@ describe('Cursed Rune: a double-ring sigil with runes and four candles draws its
       assert.strictEqual(fallback.sigil, false, 'while disabled the runtime falls back to another effect');
       await waitForNoBeacons();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       const restored = await replay(() => (document.querySelector('.oc-cursedrune') ? { sigil: true } : null));
       assert.strictEqual(restored.sigil, true, 'selection restored on re-enable');
       await waitForNoBeacons();
     } finally {
       await setSettings({ enabledPacks: ['__oc_cursedrune_test_reset__'] });
-      await setSettings({ effect: 'cursedrune', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'cursedrune', enabledPacks: ['halloween'] });
     }
   });
 });

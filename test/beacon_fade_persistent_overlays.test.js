@@ -88,11 +88,11 @@ describe('fadeActiveBeacons() fades the transient beacon but leaves the persiste
             '})'
         ),
       ({ s }) =>
-        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack && s.seededHollowPack),
+        !!(s && s.seededDefaultBlocklist && s.seededHalloweenPack),
       {
         timeout: POLL_TIMEOUT,
         interval: 100,
-        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, seededHollowPack, the launch helper handles performanceMode) never all landed',
+        message: 'onInstalled writes (seededDefaultBlocklist, seededHalloweenPack, the launch helper handles performanceMode) never all landed',
       }
     );
 

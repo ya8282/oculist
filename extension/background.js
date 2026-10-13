@@ -348,20 +348,6 @@ function seedHalloweenPack(done) {
   }, done);
 }
 
-// oculist-l0bs.2: seeds pack II ('hollow', "Haunted Hollow") ON exactly once, for fresh installs
-// and for every existing user (including those who already hold seededHalloweenPack, which is
-// why pack II needs its OWN flag: reusing pack I's would never fire for them). Same shape as
-// seedHalloweenPack above. A user who turns pack II off is never re-seeded; pack I's state is
-// never touched here.
-function seedHollowPack(done) {
-  updateSettings((settings) => {
-    if (settings.seededHollowPack) return false;
-    if (!Array.isArray(settings.enabledPacks)) settings.enabledPacks = [];
-    if (settings.enabledPacks.indexOf('hollow') === -1) settings.enabledPacks.push('hollow');
-    settings.seededHollowPack = true;
-  }, done);
-}
-
 // First-run onboarding.
 chrome.runtime.onInstalled.addListener((details) => {
   // Runs on update too, so existing installs pick the default up once. The flag inside
@@ -384,14 +370,7 @@ chrome.runtime.onInstalled.addListener((details) => {
       if (packErr) {
         console.error('Oculist: seedHalloweenPack failed; proceeding with onboarding anyway.', packErr);
       }
-      // oculist-l0bs.2: chained, never parallel (parallel get->mutate->set seeds reproduce
-      // oculist-9s9, see oculist-nq1x.2).
-      seedHollowPack((hollowErr) => {
-        if (hollowErr) {
-          console.error('Oculist: seedHollowPack failed; proceeding with onboarding anyway.', hollowErr);
-        }
-        onInstalledOnboarding(details);
-      });
+      onInstalledOnboarding(details);
     });
   });
 });
