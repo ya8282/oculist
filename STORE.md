@@ -112,12 +112,12 @@ done
 - **Description**: lead with the pain point, then grouped feature bullets, then close
   with the local-only privacy line. Pull the feature list from the newest `CHANGELOG.md`
   section so the listing and the release agree.
-  As of 1.8.0 (three packs as of 1.9.0), work the pack system into that description rather than the previously listed
+  As of 1.8.0, work the pack system into that description rather than the previously listed
   effects (the live listing still names six effects from v1.0.0 — stale, not false, and this
   is the release that corrects it):
 
   > On top of the twelve core effects, effects now also come in packs. Switch any pack on or
-  > off from the settings panel. Three packs, Halloween, Adventure, and Another Halloween Pack, ship with
+  > off from the settings panel. Two packs, Halloween and Adventure, ship with
   > Oculist, preloaded, free, and on by default. Nothing to buy or set up to see them.
 
   Do not name or describe individual pack effects in the listing; users discover them by
@@ -159,7 +159,7 @@ This is where submissions actually get rejected. The text below is written to ma
 > Used to persist the user's own preferences and search terms across sessions and, via
 > chrome.storage.sync, across their signed-in Chrome profiles: display and beacon
 > settings, which effect packs are on (the enabledPacks list and the one-time flags
-> recording that Halloween, Adventure, and Another Halloween Pack were each switched on by default),
+> recording that Halloween and Adventure were each switched on by default),
 > per-site enable/disable choices, and any search-term lists the user
 > explicitly chooses to save. The in-progress working list is held in
 > chrome.storage.session and is discarded when the browser closes. No personal data,

@@ -5,12 +5,31 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
-## [Unreleased]
+## [1.9.1] — 2026-10-13
+
+Version 1.9.0 was not published to the Chrome Web Store, so store users go from 1.8.0 to 1.9.1
+and get everything in both entries.
+
+### Added
+
+* **Load effect packs.** The popup has a new Load effect packs button that opens a pack picker,
+  so you can switch effect packs on and off without opening the settings panel. The picker
+  shows how many effects each pack has and links to a Browse packs page. It folds away like the Custom Vision Settings section and keeps
+  the popup at its usual height.
 
 ### Changed
 
-* The Haunted Hollow pack is now called Another Halloween Pack. Its effects and your saved
-  on/off setting are unchanged.
+* **One Halloween pack.** The Halloween pack now has seventeen effects, including the eleven
+  that 1.9.0 introduced as a separate pack. There are two packs again, Halloween and
+  Adventure. Anyone who turned Halloween off keeps it off. Your selected effect stays
+  selected.
+
+### Fixed
+
+* **Settings panel height.** The settings and lists panels now leave room for the chip row, and
+  keep doing so after you change the beacon size, theme, or position, or reset.
+* **Popup accessibility.** The Custom Vision Settings button is now announced by its visible
+  text, and screen readers no longer read out its arrow.
 
 ## [1.9.0] — 2026-10-11
 
