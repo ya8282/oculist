@@ -71,7 +71,7 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
       timeout: POLL_TIMEOUT,
       message: 'never observed the content script isolated execution context',
     });
-    await setSettings({ effect: 'ghostsweep', enabledPacks: ['hollow'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'ghostsweep', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
     await openFinder(page);
     await page.locator(INPUT).type('wraithling', { delay: 30 });
     await waitForMatchCount(page);
@@ -494,7 +494,7 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
     await settleBeacons();
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a disable/re-enable round trip, runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -512,7 +512,7 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
       assert.strictEqual(await page.locator(ROW).count(), 0);
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('ghostsweep'), -1);
       await openSettings();
@@ -529,13 +529,13 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
       assert.strictEqual(await page.locator('.oc-beacon-transient[data-ghostsweep]').count(), 0, 'pack off: the ghost must not render');
       await settleBeacons();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       await replayLive();
       assert.ok(await page.locator(MOUNTED).count() >= 1, 'selection restored on re-enable');
       await settleBeacons();
     } finally {
       await setSettings({ enabledPacks: ['__oc_ghostsweep_test_reset__'] });
-      await setSettings({ effect: 'ghostsweep', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'ghostsweep', enabledPacks: ['halloween'] });
     }
   });
 });

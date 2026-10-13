@@ -41,10 +41,6 @@
     // would be dropped from storage on the next whole-object write, and the Halloween
     // pack would re-seed itself back on for a user who deliberately turned it off.
     seededHalloweenPack: false,
-    // oculist-l0bs.2: pack II's own seeded flag, written by background.js, never read here.
-    // Same round-trip reasoning: missing from SETTINGS_KEYS it would be dropped on the next
-    // whole-object write and pack II would re-seed on every update.
-    seededHollowPack: false,
     // oculist-tdj: which optional effect packs are turned on, an array of pack ids. Empty
     // means core-only — today's twelve effects, unchanged for every existing user. Read
     // exclusively through availableEffects() (defined by the effectsRegistry below);
@@ -63,7 +59,7 @@
     'effect', 'position', 'theme', 'matchColor', 'activeColor', 'beaconColor',
     'scrollBehavior', 'disabledSites', 'performanceMode',
     'displayPreset', 'visionSettings', 'setupWizardCompleted',
-    'seededDefaultBlocklist', 'seededHalloweenPack', 'seededHollowPack', 'enabledPacks', 'packsNoticeDismissed'
+    'seededDefaultBlocklist', 'seededHalloweenPack', 'enabledPacks', 'packsNoticeDismissed'
   ];
 
   // oculist-rnr.12 (review fix): the visionProfile -> displayPreset rename and the
@@ -995,17 +991,17 @@
     wandcast: { label: i18n.effectWandCast, run: animateWandCast, pack: 'adventure' },
     arrowshot: { label: i18n.effectArrowShot, run: animateArrowShot, pack: 'adventure' },
     vineswing: { label: i18n.effectVineSwing, run: animateVineSwing, pack: 'adventure' },
-    ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'hollow' },
-    spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'hollow' },
-    witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'hollow' },
-    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'hollow' },
-    gravehands: { label: i18n.effectGraveHands, run: animateGraveHands, pack: 'hollow' },
-    ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'hollow' },
-    moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'hollow' },
-    trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'hollow' },
-    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'hollow' },
-    cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'hollow' },
-    mummyunwrap: { label: i18n.effectMummyUnwrap, run: animateMummyUnwrap, pack: 'hollow' }
+    ghostsweep: { label: i18n.effectGhostSweep, run: animateGhostSweep, pack: 'halloween' },
+    spiderdrop: { label: i18n.effectSpiderDrop, run: animateSpiderDrop, pack: 'halloween' },
+    witchflyby: { label: i18n.effectWitchFlyby, run: animateWitchFlyby, pack: 'halloween' },
+    blackcatpounce: { label: i18n.effectBlackCatPounce, run: animateBlackCatPounce, pack: 'halloween' },
+    gravehands: { label: i18n.effectGraveHands, run: animateGraveHands, pack: 'halloween' },
+    ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'halloween' },
+    moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'halloween' },
+    trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'halloween' },
+    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'halloween' },
+    cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'halloween' },
+    mummyunwrap: { label: i18n.effectMummyUnwrap, run: animateMummyUnwrap, pack: 'halloween' }
   };
 
   // oculist-tdj: the SINGLE place pack state (settings.enabledPacks) is read. Returns
@@ -1061,8 +1057,7 @@
   // pack that ships without an entry here still reads as a name, not a slug.
   var PACK_LABELS = {
     halloween: 'Halloween',
-    adventure: 'Adventure',
-    hollow: 'Another Halloween Pack'
+    adventure: 'Adventure'
   };
   function packLabel(packId) {
     if (PACK_LABELS.hasOwnProperty(packId)) return PACK_LABELS[packId];
@@ -10614,7 +10609,7 @@
   // test call it twice back-to-back to exercise that guard on its own terms.
   window.__ocTest.drawActiveMatchLabel = drawActiveMatchLabel;
 
-  // oculist-l0bs.4: Spider Drop, the Haunted Hollow pack's ('hollow') spider-on-a-thread
+  // oculist-l0bs.4: Spider Drop, the Haunted Hollow pack's spider-on-a-thread
   // effect. No playground prototype exists for it; the bead's beat spec stands in. A silk
   // thread draws itself downward from an anchor above the match with the spider riding its
   // tip ('descend' pose), the spider stops with its body bottom >= 8px above the match's
@@ -10869,7 +10864,7 @@
     }
   }
 
-  // oculist-l0bs.12: Moonrise, the Haunted Hollow pack's ('hollow') full-moon effect. No
+  // oculist-l0bs.12: Moonrise, the Haunted Hollow pack's full-moon effect. No
   // playground prototype exists; the bead's beat spec stands in. The matched line's TOP
   // EDGE is the horizon: a sprite whose bottom edge sits 9px above the glyph box (the 6px
   // protected clearance plus a 2px moonlit rim plus 1px) clips everything at that line, so

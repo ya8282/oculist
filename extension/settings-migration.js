@@ -97,6 +97,19 @@
       changed = true;
     }
 
+    // Legacy: the unreleased 'hollow' pack was merged into 'halloween' (oculist-xwq4).
+    // Hollow on implies Halloween on; a user who turned Halloween off and hollow off stays off.
+    if (Array.isArray(settings.enabledPacks) && settings.enabledPacks.indexOf('hollow') !== -1) {
+      var packs = settings.enabledPacks.filter(function (p) { return p !== 'hollow'; });
+      if (packs.indexOf('halloween') === -1) packs.push('halloween');
+      settings.enabledPacks = packs;
+      changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'seededHollowPack')) {
+      delete settings.seededHollowPack;
+      changed = true;
+    }
+
     return changed;
   }
 

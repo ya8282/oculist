@@ -80,11 +80,11 @@ describe('Witch Flyby: a witch crosses above the match, loops, dives with a wand
       message: 'never observed the content script isolated execution context',
     });
 
-    await setSettings({ effect: 'witchflyby', enabledPacks: ['hollow'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'witchflyby', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
     await waitForCondition(
       () => evalInContentScript('window.__ocTest.getAvailableEffectKeys()'),
       (keys) => keys.indexOf('witchflyby') !== -1,
-      { timeout: POLL_TIMEOUT, message: 'the hollow pack never became available' }
+      { timeout: POLL_TIMEOUT, message: 'the halloween pack never became available' }
     );
 
     await openFinder(page);
@@ -685,7 +685,7 @@ describe('Witch Flyby: a witch crosses above the match, loops, dives with a wand
     }
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a disable/re-enable round trip, runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -708,7 +708,7 @@ describe('Witch Flyby: a witch crosses above the match, loops, dives with a wand
       assert.strictEqual(await page.locator(WITCH_ROW).count(), 0, 'absent from the picker while disabled');
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('witchflyby'), -1);
       await openSettings();
@@ -726,13 +726,13 @@ describe('Witch Flyby: a witch crosses above the match, loops, dives with a wand
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
       // Re-enable: selection restored with no re-selection.
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       const again = await replay(() => (document.querySelector('[data-witchflyby="witch"]') ? { mounted: true } : null));
       assert.strictEqual(again.mounted, true);
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await setSettings({ enabledPacks: ['__oc_witchflyby_test_reset__'] });
-      await setSettings({ effect: 'witchflyby', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'witchflyby', enabledPacks: ['halloween'] });
       await scrollPageTo(page, 0);
     }
   });

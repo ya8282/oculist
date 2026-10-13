@@ -141,21 +141,21 @@ describe('popup pack picker', () => {
     assert.strictEqual(await popup.getAttribute('#pack-picker-toggle', 'aria-expanded'), 'true');
     const before = await stored(popup);
     try {
-      assert.ok(before.enabledPacks.includes('hollow'), 'seed should have enabled hollow');
+      assert.ok(before.enabledPacks.includes('halloween'), 'seed should have enabled halloween');
 
-      await popup.uncheck('input[data-pack="hollow"]');
-      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      await popup.uncheck('input[data-pack="halloween"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('halloween'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost halloween',
       });
       const after = await stored(popup);
       const { enabledPacks: b, ...restBefore } = before;
       const { enabledPacks: a, ...restAfter } = after;
-      assert.deepStrictEqual(a, b.filter((p) => p !== 'hollow'));
+      assert.deepStrictEqual(a, b.filter((p) => p !== 'halloween'));
       assert.deepStrictEqual(restAfter, restBefore);
 
-      await popup.check('input[data-pack="hollow"]');
-      await waitForCondition(() => stored(popup), (s) => s.enabledPacks.includes('hollow'), {
-        timeout: POLL_TIMEOUT, message: 'enabledPacks never regained hollow',
+      await popup.check('input[data-pack="halloween"]');
+      await waitForCondition(() => stored(popup), (s) => s.enabledPacks.includes('halloween'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never regained halloween',
       });
     } finally {
       await writePacks(popup, before.enabledPacks);
@@ -210,7 +210,7 @@ describe('popup pack picker', () => {
   test('a failed save (set reports lastError) reverts the checkbox, logs, shows the error and restores in-memory packs', async () => {
     const popup = await openPopup();
     const before = (await stored(popup)).enabledPacks;
-    assert.ok(before.includes('adventure') && before.includes('hollow'), 'seed should enable adventure and hollow');
+    assert.ok(before.includes('adventure') && before.includes('halloween'), 'seed should enable adventure and halloween');
     const logged = [];
     popup.on('console', (m) => { if (m.type() === 'error' && m.text().includes('Failed to save pack choice')) logged.push(m.text()); });
     try {
@@ -229,11 +229,11 @@ describe('popup pack picker', () => {
       // packs. A stale failed change (adventure dropped) would leak into storage.
       await stubFailingSet(popup, { failNextGet: true });
       await popup.evaluate(() => { chrome.storage.sync.set = window.__orig.set; });
-      await popup.uncheck('input[data-pack="hollow"]');
-      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      await popup.uncheck('input[data-pack="halloween"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('halloween'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost halloween',
       });
-      assert.deepStrictEqual((await stored(popup)).enabledPacks, before.filter((p) => p !== 'hollow'));
+      assert.deepStrictEqual((await stored(popup)).enabledPacks, before.filter((p) => p !== 'halloween'));
     } finally {
       await restoreStorage(popup);
       await writePacks(popup, before);
@@ -263,10 +263,10 @@ describe('popup pack picker', () => {
     const popup = await openPopup();
     const original = (await stored(popup)).enabledPacks;
     const flipped = (id, s) => original.includes(id) !== s.enabledPacks.includes(id);
-    const bothFlipped = (s) => flipped('hollow', s) && flipped('adventure', s);
+    const bothFlipped = (s) => flipped('halloween', s) && flipped('adventure', s);
     try {
       await popup.evaluate(() => {
-        for (const id of ['hollow', 'adventure']) {
+        for (const id of ['halloween', 'adventure']) {
           const b = document.querySelector(`input[data-pack="${id}"]`);
           b.checked = !b.checked; b.dispatchEvent(new Event('change'));
         }
@@ -285,7 +285,7 @@ describe('popup pack picker', () => {
   test('a pack change made elsewhere while the popup is open survives a popup toggle', async () => {
     const popup = await openPopup();
     const original = (await stored(popup)).enabledPacks;
-    assert.ok(original.includes('adventure') && original.includes('hollow'), 'seed should enable adventure and hollow');
+    assert.ok(original.includes('adventure') && original.includes('halloween'), 'seed should enable adventure and halloween');
     try {
       // Simulates the page settings panel dropping adventure after the popup loaded.
       const other = await ctx.newPage();
@@ -293,12 +293,12 @@ describe('popup pack picker', () => {
       await writePacks(other, original.filter((p) => p !== 'adventure'));
       await other.close();
 
-      await popup.uncheck('input[data-pack="hollow"]');
-      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('hollow'), {
-        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost hollow',
+      await popup.uncheck('input[data-pack="halloween"]');
+      await waitForCondition(() => stored(popup), (s) => !s.enabledPacks.includes('halloween'), {
+        timeout: POLL_TIMEOUT, message: 'enabledPacks never lost halloween',
       });
       const after = (await stored(popup)).enabledPacks;
-      assert.deepStrictEqual(after, original.filter((p) => p !== 'adventure' && p !== 'hollow'));
+      assert.deepStrictEqual(after, original.filter((p) => p !== 'adventure' && p !== 'halloween'));
     } finally {
       await writePacks(popup, original);
       await popup.close();

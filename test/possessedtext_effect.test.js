@@ -82,7 +82,7 @@ describe('Possessed Text: a glitching frame haunts the match without touching it
     });
     await waitForHalloweenSeedSettled(evalInContentScript);
 
-    await setSettings({ effect: 'possessedtext', enabledPacks: ['hollow'], scrollBehavior: 'instant' });
+    await setSettings({ effect: 'possessedtext', enabledPacks: ['halloween'], scrollBehavior: 'instant' });
 
     await openFinder(page);
     await page.locator(INPUT).type('vespertide', { delay: 30 });
@@ -588,7 +588,7 @@ describe('Possessed Text: a glitching frame haunts the match without touching it
     assert.ok(!/Math\.random/.test(src.slice(start, end)));
   });
 
-  test('pack enumeration: absent while hollow is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely', async () => {
+  test('pack enumeration: absent while halloween is disabled, present once enabled, selection survives a disable/re-enable round trip, and the runtime falls back safely', async () => {
     async function openSettings() {
       await page.locator(GEAR_BTN).click();
       await page.waitForSelector(SETTINGS_PANEL, { timeout: POLL_TIMEOUT });
@@ -612,7 +612,7 @@ describe('Possessed Text: a glitching frame haunts the match without touching it
       assert.strictEqual(await page.locator(PT_EFFECT_ROW).count(), 0, 'absent from the picker while its pack is disabled');
       await closeSettings();
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       keys = await evalInContentScript('window.__ocTest.getAvailableEffectKeys()');
       assert.notStrictEqual(keys.indexOf('possessedtext'), -1);
 
@@ -633,13 +633,13 @@ describe('Possessed Text: a glitching frame haunts the match without touching it
       assert.strictEqual(geom.mounted, false, 'while the pack is disabled, the runtime fallback must not render the frame');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
 
-      await setSettings({ enabledPacks: ['hollow'] });
+      await setSettings({ enabledPacks: ['halloween'] });
       geom = await replay(() => (document.querySelector('.oc-beacon-transient[data-possessedtext="frame"]') ? { mounted: true } : null));
       assert.strictEqual(geom.mounted, true, 'the stored selection must be restored on re-enable');
       await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
     } finally {
       await setSettings({ enabledPacks: ['__oc_possessedtext_test_reset__'] });
-      await setSettings({ effect: 'possessedtext', enabledPacks: ['hollow'] });
+      await setSettings({ effect: 'possessedtext', enabledPacks: ['halloween'] });
     }
   });
 });

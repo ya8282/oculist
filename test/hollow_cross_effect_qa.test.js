@@ -122,7 +122,7 @@ describe('Haunted Hollow cross-effect QA', () => {
   describe('lifecycle per effect', () => {
     for (const key of HOLLOW) {
       test(`${key}: rapid Enter/Shift+Enter spam, edges, one-char + full-line, scrolled, then drains clean`, async () => {
-        await setSettings({ effect: key, enabledPacks: ['hollow'], scrollBehavior: 'instant', performanceMode: false }, { motionSensitivity: 'full' });
+        await setSettings({ effect: key, enabledPacks: ['halloween'], scrollBehavior: 'instant', performanceMode: false }, { motionSensitivity: 'full' });
         errors.length = 0;
         await scrollPageTo(page, 0);
         await search('Z');
@@ -159,7 +159,7 @@ describe('Haunted Hollow cross-effect QA', () => {
       test(`${key}: Lite Mode and reduced motion run clean and drain`, async () => {
         errors.length = 0;
         await scrollPageTo(page, 0);
-        await setSettings({ effect: key, enabledPacks: ['hollow'], scrollBehavior: 'instant', performanceMode: true }, { motionSensitivity: 'full' });
+        await setSettings({ effect: key, enabledPacks: ['halloween'], scrollBehavior: 'instant', performanceMode: true }, { motionSensitivity: 'full' });
         await search('Z');
         for (let i = 0; i < 4; i++) await page.keyboard.press('Enter');
         await drain(key + ' lite');
@@ -173,8 +173,8 @@ describe('Haunted Hollow cross-effect QA', () => {
 
   test('pack toggle: stored effect selection survives pack off and restores when back on', async () => {
     errors.length = 0;
-    await setSettings({ effect: 'ghostsweep', enabledPacks: ['hollow', 'halloween'] }, { motionSensitivity: 'full' });
-    for (const packs of [[], ['hollow'], ['halloween'], ['hollow', 'halloween']]) {
+    await setSettings({ effect: 'ghostsweep', enabledPacks: ['halloween'] }, { motionSensitivity: 'full' });
+    for (const packs of [[], ['halloween'], ['adventure'], ['halloween', 'adventure']]) {
       await setSettings({ enabledPacks: packs });
       const s = await getSettings();
       assert.strictEqual(s.effect, 'ghostsweep', `selection rewritten with packs=${JSON.stringify(packs)}`);
