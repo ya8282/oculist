@@ -422,8 +422,8 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
       window.__gsAnims = Array.from(document.querySelectorAll('.oc-beacon-transient')).flatMap((e) => e.getAnimations({ subtree: true }));
       return window.__gsAnims.length;
     });
-    // travel, pulse, lean, fade, wail, 3 hems, trail
-    assert.strictEqual(count, 9);
+    // travel, pulse, lean, fade, wail, 3 hems, trail, lingering fog
+    assert.strictEqual(count, 10);
     await settleBeacons();
     const states = await page.evaluate(() => window.__gsAnims.map((a) => a.playState));
     assert.ok(states.every((s) => s === 'idle'), `all animations canceled, got ${states.join(',')}`);
@@ -538,4 +538,30 @@ describe('Ghost Sweep: a ghost drifts past the match on a lane above (or below) 
       await setSettings({ effect: 'ghostsweep', enabledPacks: ['halloween'] });
     }
   });
+  test('match cue: stationary fog lingers after the pass without touching the protected text', async () => {
+    await scrollTargetTo('target', 400);
+    await replayFrozen();
+    const info = await page.evaluate(() => {
+      const fog = document.querySelector('[data-ghost-fog]');
+      if (!fog) return null;
+      const a = fog.getAnimations()[0], t = a.effect.getTiming();
+      a.currentTime = t.delay + t.duration * 0.5;
+      const m = document.getElementById('target').getBoundingClientRect();
+      const clear = [...fog.children].every(el => {
+        const r = el.getBoundingClientRect();
+        return r.right <= m.left - 6 || r.left >= m.right + 6 || r.bottom <= m.top - 6 || r.top >= m.bottom + 6;
+      });
+      return { clear, bands: fog.children.length, opacity: Number(getComputedStyle(fog).opacity), duration: t.duration };
+    });
+    assert.ok(info, 'fog should mount with the ghost');
+    assert.equal(info.bands, 4);
+    assert.equal(info.clear, true);
+    assert.ok(info.opacity > 0.6 && info.duration >= 1500, 'fog must visibly linger, not just flash');
+    await seek(0.7);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (process.env.OCULIST_REVIEW_DIR) await page.screenshot({ path: path.join(process.env.OCULIST_REVIEW_DIR, 'ghost-fog.png') });
+    await settleBeacons();
+    assert.equal(await page.locator('[data-ghost-fog]').count(), 0);
+  });
+
 });

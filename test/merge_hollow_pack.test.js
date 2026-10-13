@@ -47,8 +47,8 @@ test('a non-array enabledPacks does not throw and is left alone', () => {
   }
 });
 
-test('content.js registers all 17 Halloween effects and no hollow pack remains', () => {
+test('content.js registers all 16 Halloween effects and no hollow pack remains', () => {
   const src = fs.readFileSync(path.join(__dirname, '../extension/content.js'), 'utf8');
-  assert.strictEqual((src.match(/pack: 'halloween'/g) || []).length, 17);
+  assert.strictEqual((src.match(/pack: 'halloween'/g) || []).length, 16);
   assert.ok(!/pack: 'hollow'/.test(src));
 });

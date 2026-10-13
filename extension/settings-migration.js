@@ -79,6 +79,12 @@
     if (!settings || typeof settings !== 'object') return false;
     var changed = false;
 
+    // Retired effect: use the core default even when Halloween is disabled.
+    if (settings.effect === 'possessedtext') {
+      settings.effect = 'hud';
+      changed = true;
+    }
+
     if (Object.prototype.hasOwnProperty.call(settings, 'visionProfile')) {
       // New field wins if both are present; legacy is discarded unused either way.
       if (!Object.prototype.hasOwnProperty.call(settings, 'displayPreset')) {

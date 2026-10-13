@@ -781,7 +781,7 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
     // elecWrap (appear, fade-out) = 2; arcCore (2 pulses) = 2; arcGlow (2 pulses, full mode)
     // = 2; figWrap (appear-to-dim, jerk-rotate, dim-to-full, fade-out) = 4; glintL/glintR
     // (1 each) = 2. Total = 12 in full (non-Lite) mode.
-    assert.strictEqual(animCount, 12, `expected 12 live WAAPI animations before cancellation, got ${animCount}`);
+    assert.strictEqual(animCount, 20, `expected 20 live WAAPI animations before cancellation, got ${animCount}`);
 
     await evalInContentScript('window.__ocTest.cancelBeacons()');
     await page.waitForFunction(() => document.querySelectorAll('.oc-beacon-transient').length === 0, null, { timeout: POLL_TIMEOUT });
@@ -823,13 +823,13 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
     await scrollTargetTo('target', 200);
     const full = await snapshot();
     assert.strictEqual(full.arcUnderPresent, true, 'sanity check: full mode must render the glow layer');
-    assert.strictEqual(full.totalAnimCount, 12, 'sanity check: full mode must have all 12 animations');
+    assert.strictEqual(full.totalAnimCount, 20, 'full mode includes four match paths with two pulses each');
     try {
       await setSettings({ performanceMode: true });
       const lite = await snapshot();
       assert.strictEqual(lite.arcUnderPresent, false, 'Lite Mode must drop the arc\'s own glow layer (arc-under)');
       assert.strictEqual(lite.arcCorePresent, true, 'Lite Mode must keep the arc\'s core flash (arc-core) -- the effect\'s defining beat');
-      assert.strictEqual(lite.totalAnimCount, 10, 'Lite Mode must drop exactly the glow layer\'s 2 pulse animations (12 -> 10)');
+      assert.strictEqual(lite.totalAnimCount, 14, 'Lite drops the electrode glow and both match glow paths: six pulse animations');
       assert.deepStrictEqual(lite.figBox, full.figBox, 'Lite Mode must render the figure at the exact same geometry');
       assert.deepStrictEqual(lite.elecBox, full.elecBox, 'Lite Mode must render the electrode posts at the exact same geometry');
     } finally {
@@ -1030,4 +1030,25 @@ describe('Reanimation Jolt: a jolted figure rises upright beside the match, flan
       await setSettings({ effect: 'reanimate', enabledPacks: ['halloween'] });
     }
   });
+  test('match cue: electricity frames the word and shares the existing two pulse onsets', async () => {
+    await scrollTargetTo('target', 300);
+    await replay();
+    const info = await page.evaluate(() => {
+      const root = document.querySelector('[data-reanimate]');
+      root.getAnimations({ subtree: true }).forEach(a => { a.pause(); a.currentTime = 470; });
+      const paths = [...root.querySelectorAll('[data-rj-match] path')];
+      const m = document.getElementById('target').getBoundingClientRect();
+      const reference = root.querySelector('[data-rj-part="arc-core"]').getAnimations().map(a => a.effect.getTiming().delay);
+      return { count: paths.length, reference, paths: paths.map(p => {
+        const r = p.getBoundingClientRect();
+        return { clear: r.bottom + 2 <= m.top - 6 || r.top - 2 >= m.bottom + 6, opacity: Number(getComputedStyle(p).opacity), delays: p.getAnimations().map(a => a.effect.getTiming().delay) };
+      }) };
+    });
+    assert.equal(info.count, 4);
+    info.paths.forEach(p => { assert.equal(p.clear, true); assert.ok(p.opacity > 0.9); assert.deepStrictEqual(p.delays, info.reference); });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (process.env.OCULIST_REVIEW_DIR) await page.screenshot({ path: path.join(process.env.OCULIST_REVIEW_DIR, 'reanimation-match.png') });
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+  });
+
 });

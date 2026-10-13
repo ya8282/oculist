@@ -281,8 +281,7 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
     const catH = Math.max(64, Math.min(90, m.height * 3.4)) * beaconScale;
     const u = catH / 90;
     const catW = 134 * u;
-    const markW = 36 * u * 0.9;
-    const nearGap = CLEAR + 2 + markW - markW * 0.35;
+    const nearGap = CLEAR + 2;
     return { catH, catW, u, nearGap, hop: catW * 0.45 };
   }
 
@@ -716,4 +715,21 @@ describe('Black Cat Pounce: a cat sits, crouches, arches, pounces and swipes bes
       await setSettings({ effect: 'blackcatpounce', enabledPacks: ['halloween'] });
     }
   });
+  test('landing cue: the final paw box hugs the match with an 8px gap', async () => {
+    await scrollTargetTo('target', 300);
+    await replayFrozen();
+    await seek(2800);
+    const landing = await page.evaluate(() => {
+      const cat = document.querySelector('[data-blackcat="cat"]');
+      const c = cat.getBoundingClientRect(), m = document.getElementById('target').getBoundingClientRect();
+      return { gap: cat.getAttribute('data-bc-side') === 'left' ? m.left - c.right : c.left - m.right,
+        pawY: c.top + c.height * 44 / 90, matchY: m.top + m.height / 2 };
+    });
+    assert.ok(landing.gap >= 7.5 && landing.gap <= 8.5, `final gap should be 8px, got ${landing.gap}`);
+    assert.ok(Math.abs(landing.pawY - landing.matchY) < 1, 'paw lands at the vertical centre of the match');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (process.env.OCULIST_REVIEW_DIR) await page.screenshot({ path: path.join(process.env.OCULIST_REVIEW_DIR, 'black-cat.png') });
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+  });
+
 });

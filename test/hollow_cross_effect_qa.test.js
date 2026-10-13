@@ -1,5 +1,5 @@
 // Cross-effect QA for Haunted Hollow, pack II (oculist-l0bs.16). Not a substitute for each
-// effect's own test; it runs ALL eleven effects through the lifecycle shapes that only show
+// effect's own test; it runs all ten remaining effects through the lifecycle shapes that only show
 // up when they share a page: rapid Enter / Shift+Enter spam, one-character and full-line
 // matches at all four viewport edges and on a scrolled page, Lite Mode, reduced motion, and
 // the pack toggle round-trip. Every run must leave zero .oc-beacon-transient nodes, no
@@ -14,7 +14,7 @@ const { scrollPageTo, POLL_TIMEOUT, waitForCondition } = require('./helpers/wait
 
 const EXTENSION = path.resolve(__dirname, '../extension');
 const HOLLOW = ['ghostsweep', 'spiderdrop', 'witchflyby', 'blackcatpounce', 'gravehands', 'ouijaplanchette',
-  'moonrise', 'trickortreat', 'possessedtext', 'cursedrune', 'mummyunwrap'];
+  'moonrise', 'trickortreat', 'cursedrune', 'mummyunwrap'];
 const VIEWPORT = { width: 1200, height: 800 };
 const INPUT = '#oc-wrap >> .oc-input';
 

@@ -5,6 +5,22 @@ All notable changes to Oculist. Format based on [Keep a Changelog](https://keepa
 The extension went straight from 1.0.0 to 1.5.0 with no intermediate releases, so everything
 below the 1.5.0 heading is what landed across that span.
 
+## [Unreleased]
+
+### Changed
+
+* **Black Cat Pounce.** The final paw position lands closer to the matching word.
+* **Ghost Sweep.** The ghost leaves lingering fog around the match as it passes.
+* **Cursed Rune.** Larger rune glyphs and candles float and fade into place; compact
+  fallbacks preserve clearance at viewport edges.
+* **Reanimation Jolt.** Electricity now frames the match itself, synchronized with the
+  existing two pulses. The text stays clear.
+
+### Removed
+
+* **Possessed Text.** Removed from the Halloween pack and effect catalogs. Existing
+  selections migrate to Anime Laser; other settings and pack preferences are preserved.
+
 ## [1.9.1] — 2026-10-13
 
 Version 1.9.0 was not published to the Chrome Web Store, so store users go from 1.8.0 to 1.9.1

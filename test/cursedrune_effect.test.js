@@ -606,4 +606,26 @@ describe('Cursed Rune: a double-ring sigil with runes and four candles draws its
       await setSettings({ effect: 'cursedrune', enabledPacks: ['halloween'] });
     }
   });
+  test('match cue: larger rune icons float and fade into place', async () => {
+    await scrollPageTo(page, 0);
+    await replay(() => !!document.querySelector('.oc-cursedrune'));
+    const info = await page.evaluate(() => {
+      const host = document.querySelector('.oc-cursedrune');
+      const animations = host.getAnimations({ subtree: true });
+      animations.forEach(a => { a.pause(); a.currentTime = 1150; });
+      const rune = host.querySelector('[data-cr-rune="0"] > g');
+      const before = { opacity: Number(getComputedStyle(rune).opacity), x: rune.getBoundingClientRect().x, y: rune.getBoundingClientRect().y };
+      animations.forEach(a => { a.currentTime = 1550; });
+      const after = rune.getBoundingClientRect();
+      return { before, after: { opacity: Number(getComputedStyle(rune).opacity), x: after.x, y: after.y, height: after.height } };
+    });
+    assert.ok(info.after.height >= 15, `rune should be about twice its old 8px size, got ${info.after.height}`);
+    assert.ok(info.before.opacity < 0.1 && info.after.opacity > 0.9, 'rune must fade in');
+    assert.ok(Math.hypot(info.after.x - info.before.x, info.after.y - info.before.y) > 4, 'rune must float into place');
+    await page.evaluate(() => document.querySelector('.oc-cursedrune').getAnimations({ subtree: true }).forEach(a => { a.currentTime = 2100; }));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (process.env.OCULIST_REVIEW_DIR) await page.screenshot({ path: path.join(process.env.OCULIST_REVIEW_DIR, 'cursed-rune.png') });
+    await evalInContentScript('window.__ocTest.cancelBeacons()');
+  });
+
 });

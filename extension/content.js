@@ -865,7 +865,6 @@
     effectOuijaPlanchette: 'Ouija Planchette',
     effectMoonrise: 'Moonrise',
     effectTrickOrTreat: 'Trick-or-Treat',
-    effectPossessedText: 'Possessed Text',
     effectCursedRune: 'Cursed Rune',
     effectMummyUnwrap: 'Mummy Unwrap',
 
@@ -999,7 +998,6 @@
     ouijaplanchette: { label: i18n.effectOuijaPlanchette, run: animateOuijaPlanchette, pack: 'halloween' },
     moonrise: { label: i18n.effectMoonrise, run: animateMoonrise, pack: 'halloween' },
     trickortreat: { label: i18n.effectTrickOrTreat, run: animateTrickOrTreat, pack: 'halloween' },
-    possessedtext: { label: i18n.effectPossessedText, run: animatePossessedText, pack: 'halloween' },
     cursedrune: { label: i18n.effectCursedRune, run: animateCursedRune, pack: 'halloween' },
     mummyunwrap: { label: i18n.effectMummyUnwrap, run: animateMummyUnwrap, pack: 'halloween' }
   };
@@ -5504,11 +5502,31 @@
     var FADE_DUR = 300 * durFactor;
     var DUR = FADE_DELAY + FADE_DUR;
 
+    // The jolt reaches the actual word as well as the character. Each zigzag stays
+    // outside match + 6px, including the 4px under-stroke, and shares the two pulse
+    // onsets (including their 350ms floor) rather than introducing extra flashes.
+    var matchSvg = svgEl('svg', { width: vw, height: vh, viewBox: '0 0 ' + vw + ' ' + vh, 'data-rj-match': '' }, reanimateWrap);
+    matchSvg.style.cssText = 'position:absolute;left:0;top:0;overflow:hidden;';
+    var matchArcs = [];
+    var reach = Math.min(7 * beaconScale, 12);
+    var x0 = rect.left - 10, x1 = rect.right + 10;
+    var topY = rect.top - 10, bottomY = rect.bottom + 10;
+    [topY, bottomY].forEach(function (y, side) {
+      var outward = side === 0 ? -1 : 1;
+      var d = 'M ' + x0 + ' ' + (y + outward * reach);
+      for (var j = 0; j <= 8; j++) {
+        d += ' L ' + (x0 + (x1 - x0) * j / 8) + ' ' + (y + (j % 2 ? outward * reach : 0));
+      }
+      d += ' L ' + x1 + ' ' + (y + outward * reach);
+      if (!settings.performanceMode) matchArcs.push(svgEl('path', { d: d, fill: 'none', stroke: ARC_GLOW, 'stroke-width': '4', opacity: '0', style: STROKE }, matchSvg));
+      matchArcs.push(svgEl('path', { d: d, fill: 'none', stroke: ARC_CORE, 'stroke-width': '1.4', opacity: '0', style: STROKE }, matchSvg));
+    });
+
     // Electrodes: fade in with the scene, pulse twice, fade out at the end.
     track(elecWrap.animate([
       { opacity: 0 }, { opacity: 1 }
     ], { duration: APPEAR_DUR, easing: 'ease-out', fill: 'forwards' }));
-    [arcCore].concat(arcGlow ? [arcGlow] : []).forEach(function (el) {
+    [arcCore].concat(arcGlow ? [arcGlow] : [], matchArcs).forEach(function (el) {
       track(el.animate([
         { opacity: 0, offset: 0 },
         { opacity: 1, offset: 0.5 },
@@ -8495,12 +8513,10 @@
     var catW = VB_W * u;
     var markW = MARK_VB_W * u * 0.9, markH = MARK_VB_H * u * 0.9;
     var hop = catW * 0.45;              // how far the cat travels in the pounce
-    var markOverlap = markW * 0.35;     // the claw tip reaches into the mark box by this much
 
     // ---- Placement (viewport space, pre-scroll) ----
-    // Gap between the protected rect edge and the cat box's near edge: the mark box plus
-    // MARK_GAP, minus the overlap the claw tip reaches into.
-    var nearGap = CLEAR + MARK_GAP + markW - markOverlap;
+    // The paw lands beside the word; swipe marks may overlap the cat, not the text.
+    var nearGap = CLEAR + MARK_GAP;
     var leftFits = rect.left - nearGap - catW - hop >= EDGE;
     var rightFits = rect.right + nearGap + catW + hop <= vw - EDGE;
     var roomLeft = rect.left, roomRight = vw - rect.right;
@@ -8515,7 +8531,10 @@
     var minTop = EDGE, maxTop = vh - EDGE - catH;
     if (maxTop >= minTop) boxTop = Math.max(minTop, Math.min(maxTop, boxTop));
     var arc = Math.max(0, Math.min(catH * 0.25, boxTop - EDGE));
-    var landY = -0.35 * arc;
+    // Bring the extended paw down to the match's centre as it lands, instead of
+    // leaving the airborne pose well above the word. Keep the box inside the viewport.
+    var landY = Math.max(EDGE - boxTop, Math.min(vh - EDGE - catH - boxTop,
+      rect.top + rect.height / 2 - boxTop - PAW_Y * u));
 
     var docLeft = boxLeft + window.scrollX, docTop = boxTop + window.scrollY;
 
@@ -11382,220 +11401,6 @@
     }
   }
 
-  // oculist-l0bs.9: Possessed Text, Haunted Hollow pack (pack II). The matched word looks
-  // haunted WITHOUT the effect ever touching a glyph. Spike oculist-l0bs.8 chose candidate b
-  // (a thin possessed-red frame that glitch-offsets around the match, with a shadow-red echo
-  // copy of the frame behind it, a clean jagged slice line and a small spark cluster) over
-  // candidate a (loose echo bars read as an underline) and candidate c (duplicate echo glyphs
-  // over the word, which breaks contract rule 10 and is not shipped). There is no prototype:
-  // the sheet's four states are mapped onto the FRAME instead of the letters:
-  //   rest   -> the frame fades in, straight, broken into dashes
-  //   jitter -> main and echo frames hard-cut between small deterministic offsets
-  //   warp   -> the frame swaps to a wavy-edged version whose sides bulge OUTWARD
-  //   split  -> the frame is cut at mid-height, the top half shifts right, and a clean jagged
-  //             slice line shows in the margin on both sides (never across the letters)
-  //
-  // PROTECTED RECT (contract rule 10, no exceptions): every painted shape keeps a ring of
-  // CLEAR (6px) around the match's glyph box in every frame. The frame sits D px out, where
-  // D budgets the stroke half-width, the worst jitter-plus-wave offset and the split shift,
-  // so no sampled frame paints inside match + 6px. The overlay box itself is transparent and
-  // clipped; the page's text is never recoloured, hidden, blurred or covered.
-  //
-  // There is no placement to fall back from: the frame hugs the match on all sides. The box is
-  // clamped to the viewport's width (pre-scroll) so it can never create a horizontal scrollbar,
-  // and to the document's top-left so it never sits at negative coordinates.
-  //
-  // Fixed identity palette from the sheet brief; the effective beacon colour is not used
-  // because no neighbouring character effect uses it as an accent on a figure.
-  //
-  // LITE MODE drops: the shadow echo frame, the warp state, the split and its slice line, and
-  // the spark cluster. It keeps the red frame and its jitter, on a shorter timeline.
-  function animatePossessedText(rect) {
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-
-    var NS = 'http://www.w3.org/2000/svg';
-    var lite = !!settings.performanceMode;
-
-    var RED = '#C93B2B', SHADOW = '#7E1F18', GHOST = '#BDB4D6', INK = '#17121F';
-    var CLEAR = 6;
-    var u = getBeaconScale();
-    var f = getBeaconDuration(1);
-    var SW = 1.8 * u, JIT = 3 * u, AMP = 1.5 * u, SHIFT = 5 * u, BULGE = 4 * u;
-    var D = CLEAR + SW / 2 + Math.max(JIT + AMP, SHIFT) + 1;   // frame distance from the glyph box
-    var M = D + 18 * u;                                         // overlay margin (bulge, slice, sparks)
-    var W = rect.width, H = rect.height;
-
-    // ---- Box (viewport space, pre-scroll), clamped to the viewport width and the document origin ----
-    var vw = window.innerWidth;
-    var boxL = Math.max(rect.left - M, -window.scrollX, 0);
-    var boxR = Math.min(rect.right + M, vw);
-    var boxT = Math.max(rect.top - M, -window.scrollY);
-    var boxB = rect.bottom + M;
-    var boxW = boxR - boxL, boxH = boxB - boxT;
-    if (boxW <= 0 || boxH <= 0) return;
-
-    // ---- Timeline (base ms, every duration scaled through getBeaconDuration) ----
-    var DUR = lite ? 1000 : 1600;
-    var FADE_IN = 120, FADE_OUT = 240;
-    var J0 = 120, J1 = lite ? 760 : 960;            // jitter window
-    var WARP0 = 560, WARP1 = 960, SPLIT0 = 960;
-    var STEP = 60;
-
-    var x0 = -D, x1 = W + D, y0 = -D, y1 = H + D, ym = H / 2;
-
-    function addShape(tag, attrs, parent) {
-      var el = document.createElementNS(NS, tag);
-      for (var k in attrs) el.setAttribute(k, attrs[k]);
-      parent.appendChild(el);
-      return el;
-    }
-    function stroke(d, color, parent, dash) {
-      var a = { d: d, fill: 'none', stroke: color, 'stroke-width': String(SW), 'stroke-linejoin': 'round' };
-      if (dash) a['stroke-dasharray'] = dash;
-      return addShape('path', a, parent);
-    }
-
-    // ---- DOM ----
-    var wrap = document.createElement('div');
-    wrap.className = 'oc-beacon oc-beacon-transient oc-possessedtext';
-    wrap.setAttribute('data-possessedtext', 'frame');
-    wrap.style.cssText = [
-      'position:absolute',
-      'left:' + (boxL + window.scrollX) + 'px', 'top:' + (boxT + window.scrollY) + 'px',
-      'width:' + boxW + 'px', 'height:' + boxH + 'px',
-      'pointer-events:none',
-      'z-index:2147483642',
-      'opacity:0'
-    ].join(';');
-    mountOverlay(wrap);
-
-    var svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('width', String(boxW));
-    svg.setAttribute('height', String(boxH));
-    svg.setAttribute('viewBox', (boxL - rect.left) + ' ' + (boxT - rect.top) + ' ' + boxW + ' ' + boxH);
-    svg.style.cssText = 'display:block;overflow:hidden;';
-    wrap.appendChild(svg);
-
-    // One frame layer (main or echo): a jitter group holding the straight and the warp variant.
-    function layer(part, color, withWarp) {
-      var j = addShape('g', { 'data-pt-part': part }, svg);
-      var straight = addShape('g', { 'data-pt-state': 'straight' }, j);
-      var dash = (10 * u) + ' ' + (3 * u) + ' ' + (22 * u) + ' ' + (4 * u);
-      var top = addShape('g', { 'data-pt-half': 'top' }, straight);
-      stroke('M ' + x0 + ' ' + ym + ' L ' + x0 + ' ' + y0 + ' L ' + x1 + ' ' + y0 + ' L ' + x1 + ' ' + ym, color, top, dash);
-      var bottom = addShape('g', { 'data-pt-half': 'bottom' }, straight);
-      stroke('M ' + x0 + ' ' + ym + ' L ' + x0 + ' ' + y1 + ' L ' + x1 + ' ' + y1 + ' L ' + x1 + ' ' + ym, color, bottom, dash);
-      var warp = null;
-      if (withWarp) {
-        warp = addShape('g', { 'data-pt-state': 'warp' }, j);
-        warp.style.opacity = '0';
-        var n = 10;
-        var wave = function (y, sign) {
-          var s = '';
-          for (var i = 0; i <= n; i++) s += ' L ' + (x0 + (x1 - x0) * i / n) + ' ' + (y + (i % 2 ? -AMP : AMP) * sign);
-          return s;
-        };
-        var midY0 = (ym + y0) / 2, midY1 = (ym + y1) / 2;
-        stroke('M ' + x0 + ' ' + ym + ' Q ' + (x0 - 2 * BULGE) + ' ' + midY0 + ' ' + x0 + ' ' + y0 + wave(y0, 1) +
-          ' Q ' + (x1 + 2 * BULGE) + ' ' + midY0 + ' ' + x1 + ' ' + ym, color, warp);
-        stroke('M ' + x0 + ' ' + ym + ' Q ' + (x0 - 2 * BULGE) + ' ' + midY1 + ' ' + x0 + ' ' + y1 + wave(y1, -1) +
-          ' Q ' + (x1 + 2 * BULGE) + ' ' + midY1 + ' ' + x1 + ' ' + ym, color, warp);
-      }
-      return { j: j, straight: straight, warp: warp, top: top };
-    }
-    var echo = lite ? null : layer('echo', SHADOW, true);
-    var main = layer('main', RED, !lite);
-
-    // Slice line (clean, jagged, in the margin on both sides) and sparks: full mode only.
-    var slice = null, sparks = [];
-    if (!lite) {
-      slice = addShape('g', { 'data-pt-part': 'slice' }, svg);
-      slice.style.opacity = '0';
-      var zig = function (sign, startX) {
-        var pts = '';
-        for (var i = 0; i <= 5; i++) pts += (i ? ' L ' : 'M ') + (startX + sign * i * 2.6 * u) + ' ' + (ym + (i % 2 ? -2 : 2) * u * (i ? 1 : 0));
-        return pts;
-      };
-      stroke(zig(-1, x0 - 2 * u), RED, slice);
-      stroke(zig(1, x1 + 2 * u), RED, slice);
-      for (var s = 0; s < 5; s++) {
-        var sp = addShape('rect', {
-          'data-pt-part': 'spark', x: x1 + (3 + s * 4) * u, y: y0 - (3 + s * 3.2) * u, width: 3 * u, height: 3 * u,
-          fill: s % 2 ? GHOST : RED, stroke: INK, 'stroke-width': String(0.5 * u)
-        }, svg);
-        sp.style.opacity = '0';
-        sparks.push(sp);
-      }
-    }
-
-    // ---- Animations (all hung off the wrapper, which cancelBeacons() selects) ----
-    var anims = [];
-    wrap.__waapiAnims = anims;
-    function track(a) {
-      anims.push(a);
-      a.finished.then(function () { wrap.remove(); }).catch(function () { wrap.remove(); });
-      return a;
-    }
-    function ms(t) { return t * f; }
-
-    track(wrap.animate([
-      { opacity: 0, offset: 0 },
-      { opacity: 1, offset: FADE_IN / DUR },
-      { opacity: 1, offset: (DUR - FADE_OUT) / DUR },
-      { opacity: 0, offset: 1 }
-    ], { duration: ms(DUR), fill: 'both' }));
-
-    // Hard-cut visibility windows [[a, b], ...] (opacity 1 inside, 0 outside).
-    function visible(node, wins) {
-      var kf = [{ opacity: 0, offset: 0 }];
-      wins.forEach(function (w) {
-        kf.push({ opacity: 0, offset: w[0] / DUR }, { opacity: 1, offset: w[0] / DUR },
-          { opacity: 1, offset: w[1] / DUR }, { opacity: 0, offset: w[1] / DUR });
-      });
-      kf.push({ opacity: 0, offset: 1 });
-      return track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
-    }
-
-    // Jitter: deterministic offsets, each held for STEP ms, never beyond JIT in either axis.
-    var PATTERN = [[1, -0.6], [-0.8, 0.7], [0.6, 0.9], [-1, -0.4], [0.9, 0.3], [-0.5, -0.9], [0.7, -0.7]];
-    function jitter(node, sign, scale) {
-      var kf = [{ transform: 'translate(0px,0px)', offset: 0 }, { transform: 'translate(0px,0px)', offset: J0 / DUR }];
-      var k = 0;
-      for (var t = J0; t < J1; t += STEP, k++) {
-        var p = PATTERN[(k + (sign < 0 ? 3 : 0)) % PATTERN.length];
-        kf.push({ transform: 'translate(' + (sign * p[0] * JIT * scale) + 'px,' + (sign * p[1] * JIT * scale) + 'px)', offset: t / DUR, easing: 'steps(1, end)' });
-      }
-      kf.push({ transform: 'translate(0px,0px)', offset: J1 / DUR }, { transform: 'translate(0px,0px)', offset: 1 });
-      return track(node.animate(kf, { duration: ms(DUR), fill: 'both' }));
-    }
-    jitter(main.j, 1, 1);
-    if (!lite) {
-      jitter(echo.j, -1, 0.9);
-      [main, echo].forEach(function (L) {
-        visible(L.straight, [[0, WARP0], [WARP1, DUR]]);
-        visible(L.warp, [[WARP0, WARP1]]);
-        // Split: the top half shifts right (one clean shove) and stays shifted to the end.
-        track(L.top.animate([
-          { transform: 'translateX(0px)', offset: 0 },
-          { transform: 'translateX(0px)', offset: SPLIT0 / DUR },
-          { transform: 'translateX(' + SHIFT + 'px)', offset: (SPLIT0 + 80) / DUR },
-          { transform: 'translateX(' + SHIFT + 'px)', offset: 1 }
-        ], { duration: ms(DUR), fill: 'both', easing: 'ease-out' }));
-      });
-      visible(slice, [[SPLIT0, DUR]]);
-      // Sparks: each pops in turn from the frame's top-right corner and drifts AWAY from the match.
-      sparks.forEach(function (sp, i) {
-        var st = SPLIT0 - 200 + i * 70;
-        track(sp.animate([
-          { opacity: 0, transform: 'translate(0px,0px)', offset: 0 },
-          { opacity: 1, transform: 'translate(' + (1.5 * u) + 'px,' + (-1.5 * u) + 'px)', offset: 0.25 },
-          { opacity: 1, transform: 'translate(' + (4 * u) + 'px,' + (-4 * u) + 'px)', offset: 0.7 },
-          { opacity: 0, transform: 'translate(' + (6 * u) + 'px,' + (-6 * u) + 'px)', offset: 1 }
-        ], { duration: ms(360), delay: ms(st), fill: 'both' }));
-      });
-    }
-  }
-
   // oculist-l0bs.13: Mummy Unwrap, Haunted Hollow pack (pack II). A short, friendly mummy
   // (wrapped -> unwinding -> collapse) stands beside the match and pulls a bandage strip off
   // its shoulder in a loose spiral. The strip then travels a path that FRAMES the match at
@@ -12261,6 +12066,35 @@
     var D = getBeaconDuration(2000);
     var beat = getBeaconDuration(160);
 
+    // Leave a stationary mist halo as the ghost passes. Four bounded gradient bands
+    // surround a completely empty match + 7px interior: no blur filter can bleed onto
+    // the letters. The viewport clips edge wisps and prevents horizontal overflow.
+    var fog = document.createElement('div');
+    fog.className = 'oc-beacon oc-beacon-transient oc-ghost-fog';
+    fog.setAttribute('data-ghost-fog', '');
+    fog.style.cssText = 'position:absolute;left:' + window.scrollX + 'px;top:' + window.scrollY + 'px;width:' + vw + 'px;height:' + vh + 'px;overflow:hidden;pointer-events:none;z-index:2147483642;opacity:0;';
+    var fogDepth = Math.min(26, 18 * u), fogGap = 7;
+    var mistBoxes = [
+      [rect.left - fogGap - fogDepth, rect.top - fogGap - fogDepth, rect.width + 2 * (fogGap + fogDepth), fogDepth],
+      [rect.left - fogGap - fogDepth, rect.bottom + fogGap, rect.width + 2 * (fogGap + fogDepth), fogDepth],
+      [rect.left - fogGap - fogDepth, rect.top - fogGap, fogDepth, rect.height + 2 * fogGap],
+      [rect.right + fogGap, rect.top - fogGap, fogDepth, rect.height + 2 * fogGap]
+    ];
+    mistBoxes.forEach(function (b, i) {
+      var mist = document.createElement('div');
+      mist.setAttribute('data-fog-band', String(i));
+      mist.style.cssText = 'position:absolute;left:' + b[0] + 'px;top:' + b[1] + 'px;width:' + b[2] + 'px;height:' + b[3] + 'px;' +
+        'background:radial-gradient(ellipse 35% 48% at 35% 50%,rgba(189,180,214,.85),rgba(93,77,125,.4) 40%,transparent 100%),radial-gradient(ellipse 28% 45% at 72% 50%,rgba(242,238,248,.9),rgba(151,135,180,.55) 42%,transparent 100%);';
+      fog.appendChild(mist);
+    });
+    mountOverlay(fog);
+    var fogAnim = fog.animate([
+      { opacity: 0 }, { opacity: lite ? 0.7 : 1, offset: 0.2 },
+      { opacity: lite ? 0.7 : 1, offset: 0.55 }, { opacity: 0 }
+    ], { delay: Math.max(0, (p - WAIL_HALF) * D), duration: getBeaconDuration(1700), fill: 'both', easing: 'ease-in-out' });
+    fog.__waapiAnims = [fogAnim];
+    fogAnim.finished.then(function () { fog.remove(); }).catch(function () { fog.remove(); });
+
     function el(tag, attrs, parent) {
       var n = document.createElementNS(NS, tag);
       for (var k in attrs) n.setAttribute(k, attrs[k]);
@@ -12449,7 +12283,7 @@
   //
   // PLACEMENT: centred on the match. The fit is judged on the PRE-SCROLL viewport rect; if the
   // sigil does not fit, the band, runes and candles shrink step by step to the smallest legal size
-  // (band 8px: inner ring + 8px) and then it is suppressed. The inner ring never shrinks below the
+  // (band 8.4px at scale 1) and then it is suppressed. The inner ring never shrinks below the
   // protected rect. Only the final left/top are converted to document space (rule 2).
   //
   // Fixed identity palette from the sheet brief (no effect paint uses the beacon colour).
@@ -12477,16 +12311,16 @@
     var vh = window.innerHeight;
     var cxv = rect.left + rect.width / 2, cyv = rect.top + rect.height / 2;
 
-    var K_STEPS = [1, 0.85, 0.7, 0.6, 0.5];   // 0.5 -> band of 8px at scale 1: the floor
+    var K_STEPS = [1, 0.85, 0.7, 0.6, 0.5, 0.4, 0.3]; // keep a compact fallback at viewport edges
     var k = 0, X = 0, Y = 0, band = 0, cs = 0, aOut = 0, bOut = 0, i0;
     for (i0 = 0; i0 < K_STEPS.length; i0++) {
       k = K_STEPS[i0];
-      band = 16 * u * k;
-      cs = 0.8 * u * k;                          // candle unit
+      band = 28 * u * k;
+      cs = 1.2 * u * k;                          // candle unit
       aOut = aIn + band;
       bOut = bIn + band;
-      X = (aOut + 4 * cs) * PULSE + 2;
-      Y = (bOut + 15.5 * cs) * PULSE + 2;
+      X = (aOut + 9 * cs) * PULSE + 2;
+      Y = (bOut + 20.5 * cs) * PULSE + 2;
       if (cxv - X >= EDGE && cxv + X <= vw - EDGE && cyv - Y >= EDGE && cyv + Y <= vh - EDGE) break;
     }
     if (i0 === K_STEPS.length) return;           // no legal size: suppress, never cover text
@@ -12566,17 +12400,20 @@
       'M1 5 L5 0 L9 5 L5 10 Z M5 3 L5 7'
     ];
     var am = aIn + band / 2, bm = bIn + band / 2;
-    var rs = (band * 0.5) / 10;
+    var rs = (band * 0.6) / 10;
     RUNES.forEach(function (d, i) {
       var th = (45 + 90 * i) * Math.PI / 180;
       var px = X + am * Math.cos(th), py = Y + bm * Math.sin(th);
       var g = el('g', { 'data-cr-rune': String(i), transform: 'translate(' + rnd(px - 5 * rs) + ' ' + rnd(py - 5 * rs) + ') scale(' + Math.round(rs * 1e3) / 1e3 + ')' }, pulseG);
       var inner = el('g', { opacity: '0' }, g);
       var glyph = el('path', { d: d, fill: 'none', stroke: SIG, 'stroke-width': String(rnd(1.5 / rs)), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, inner);
-      var t0 = tInner + i * (dRunes / 4);
+      var t0 = tInner + i * (dRunes / 6);
+      var drift = 'translate(' + rnd(5 * Math.cos(th)) + 'px,' + rnd(5 * Math.sin(th)) + 'px)';
       anims.push(inner.animate([
-        { offset: 0, opacity: 0 }, { offset: fr(t0), opacity: 0 },
-        { offset: fr(t0 + dRunes / 6), opacity: 1 }, { offset: 1, opacity: 1 }
+        { offset: 0, opacity: 0, transform: drift },
+        { offset: fr(t0), opacity: 0, transform: drift, easing: 'ease-out' },
+        { offset: fr(t0 + dRunes / 2), opacity: 1, transform: 'translate(0px,0px)' },
+        { offset: 1, opacity: 1, transform: 'translate(0px,0px)' }
       ], { duration: total, fill: 'both' }));
       // Pulse: the bright tone moves to the runes.
       anims.push(glyph.animate([
@@ -12624,9 +12461,10 @@
         });
       }
       g.style.transformOrigin = '0px 0px';
+      var candleDrift = 'translate(' + (ci === 1 ? 5 : ci === 3 ? -5 : 0) + 'px,' + (ci === 0 ? -5 : ci === 2 ? 5 : 0) + 'px)';
       anims.push(g.animate([
-        { offset: 0, opacity: 0, transform: 'scale(0)' }, { offset: fr(tRunes), opacity: 0, transform: 'scale(0)', easing: 'ease-out' },
-        { offset: fr(tLight), opacity: 1, transform: 'scale(1)' }, { offset: 1, opacity: 1, transform: 'scale(1)' }
+        { offset: 0, opacity: 0, transform: candleDrift }, { offset: fr(tRunes), opacity: 0, transform: candleDrift, easing: 'ease-out' },
+        { offset: fr(tLight), opacity: 1, transform: 'translate(0px,0px)' }, { offset: 1, opacity: 1, transform: 'translate(0px,0px)' }
       ], { duration: total, fill: 'both' }));
     });
 
