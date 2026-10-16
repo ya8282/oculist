@@ -6,6 +6,7 @@
   "scripts": {
     "test": "OCULIST_TEST_TIMEOUT_SCALE=3 node --test --test-concurrency=2 test/*.test.js",
     "promo": "node scripts/capture-promo.js",
+    "promo:video": "node scripts/capture-promo.js --video",
     "build": "node build.js"
   },
   "repository": {
